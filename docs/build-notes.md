@@ -991,3 +991,112 @@ somebody runs `gcloud auth application-default login`.
 `WORKSPACE_WRITES=google` is written and unrun. Nobody on this project has a
 Workspace domain to delegate from, so that branch is tested for *which clients
 it constructs* and never for whether they authenticate.
+
+---
+
+## Phase 11 — First contact with a real Google project
+
+**Date:** 2026-08-21
+
+Every phase before this one ended with the same sentence: nothing has run
+against a real Google project. That is no longer true. This phase is what the
+emulator removal was for, and it found three things that ten phases of local
+green ticks could not.
+
+### The contract suite, against real Firestore and real Pub/Sub
+
+**80 passed, 0 errors, 4m07s**, project `firstdue-test`. Transactions serialise
+a read-compare-write, `create` on an existing document fails at the database,
+fence counters survive a release, ordered delivery stays ordered — against the
+real thing rather than a reimplementation of it. Cleanup verified afterwards:
+zero leftover root collections, zero topics, zero subscriptions.
+
+### Three defects the first live run found
+
+**1 · Both configured model ids were wrong, in different ways.**
+
+`GEMINI_MODEL=gemini-3.5-flash` is a real model and 404s in `us-central1`. It
+answers on `global`. `gemini-2.5-flash` is the opposite — it resolves regionally
+and not globally — which is the trap: a developer debugging the 404 by trying an
+older model would have found one that worked, and shipped a build that fails the
+submission's Gemini-3.5-or-newer requirement while appearing to work.
+
+`GEMMA_MODEL=gemma-3-4b-it` does not exist on Vertex **at all**. The live
+publisher catalogue lists `gemma`, `gemma2`, `gemma3`, `gemma3n`, `gemma4` and
+`gemma-4-26b-a4b-it-maas`; the first five are deployable Model Garden artifacts
+that are not callable through `generateContent`, and the `-maas` suffix is what
+marks the managed endpoint that is.
+
+Defaults are now `VERTEX_LOCATION=global`, `GEMINI_MODEL=gemini-3.5-flash`,
+`GEMMA_MODEL=gemma-4-26b-a4b-it-maas`, each with the verification recorded
+beside it in `settings.py`.
+
+**2 · The namespace purge could not survive its own teardown.**
+
+`_purge` ran `asyncio.run()` over an `AsyncClient` from inside a fixture
+finaliser — a place where the loop the test ran on is already being torn down.
+Handing a fresh loop a gRPC channel there produced `RuntimeError: Event loop is
+closed` at teardown of every Firestore test: **80 assertions passing and 39
+errors, from cleanup alone**, which is a red job caused entirely by tidying up.
+
+It had never fired before because phase 8 guarded it with `if not
+EMULATOR_HOST`, and no local run had credentials. Removing the emulators is
+what pointed it at a real database for the first time. Rewritten against the
+**synchronous** Firestore client: a blocking client has no loop to lose.
+
+Worth naming precisely: the docstring promised cleanup was best-effort and
+could not fail a passing test. It was wrong. `except Exception` around
+`asyncio.run` does not catch what the loop raises on the way out.
+
+**3 · Gemma accepts a response schema and ignores it.**
+
+The triage verb sends `response_mime_type=application/json` plus a
+`response_schema` requiring `extract` and `reason`. Gemma returns JSON — and
+returns `{"answer": "Yes. The permit explicitly mentions..."}`, its own shape,
+not the requested one. The parse fails, and triage **fails open** exactly as
+phase 8 designed it to, so every document goes to Gemini and nothing is lost.
+
+Tested three ways to be sure it is the model and not the transport: with schema,
+with mime type only, and plain. All three return prose or `{"answer": ...}`;
+only the plain call is honest about what it is doing.
+
+So the system is safe and the **cost saving Gemma exists to provide is not
+being provided** — every triage answers "extract" and the cheap model is a
+round trip that changes nothing. Left open deliberately: the fix is a design
+decision about whether a one-token answer counts as a structured contract, and
+that belongs to whoever owns the model boundary. Recorded in `CONTEXT.md`.
+
+### Verified live, through the application's own adapter
+
+Not curl — `VertexModelClient`, the class the fleet actually runs:
+
+| Verb | Model | Result |
+|---|---|---|
+| `extract` | gemini-3.5-flash | accepted; `structure.stories = "3"` and `structure.floor_system = "Lightweight parallel chord truss floor system"` pulled from raw permit prose |
+| `compose` | gemini-3.5-flash | accepted, prose returned |
+| `compose_stream` | gemini-3.5-flash | 3 chunks, streaming confirmed |
+| `triage` | gemma-4-26b-a4b-it-maas | reached, answered, output rejected → fails open (see defect 3) |
+
+The extraction is the demo's centerpiece fact — the unpermitted third storey and
+the lightweight truss — produced by a real model from real permit text.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `make test-cloud GCP_TEST_PROJECT_ID=firstdue-test` | **80 passed**, 0 errors, against real Firestore + Pub/Sub |
+| Post-run cleanup | 0 collections, 0 topics, 0 subscriptions left behind |
+| `uv run pytest` | 884 passed, 47 skipped |
+| `ruff` / `mypy` strict | clean, 205 files / 151 source files |
+| `npm run test` | 90 console tests |
+| `make infra-check` | clean, 38 infra tests |
+
+### What phase 11 still did **not** do
+
+No Cloud Run service exists, no Terraform has been applied, and no image has
+been built — Docker is still not installed on this machine. Solar and NREL
+remain unreachable without keys. `WORKSPACE_WRITES=google` is still unrun and
+still has no domain to run against.
+
+What changed is narrower than "it is deployed" and larger than it sounds: the
+storage, event, and model layers are no longer written-and-unverified.
