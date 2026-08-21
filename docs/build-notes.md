@@ -1100,3 +1100,131 @@ still has no domain to run against.
 
 What changed is narrower than "it is deployed" and larger than it sounds: the
 storage, event, and model layers are no longer written-and-unverified.
+
+---
+
+## Phase 12 — Model Armor, and four bugs behind one missing package
+
+**Date:** 2026-08-21
+
+Answering "does anything else need configuring for the agents to work?" meant
+building a live container and reading what it refused to start without. It
+refused for a good reason, and behind that reason were four defects stacked on
+top of each other — each one hiding the next.
+
+### What live mode actually demands
+
+Probed by constructing the real container, not by reading the code:
+
+| Missing | Refused at | Note |
+|---|---|---|
+| `INTERNAL_PUSH_AUDIENCE`, `INTERNAL_PUSH_SERVICE_ACCOUNT` | settings validation | only when `EVENT_BACKEND=pubsub`; both are outputs of the deploy |
+| `MODEL_ARMOR_TEMPLATE` | container build | hard blocker — the slow loop screens every ingested document |
+| `CALLBACK_SECRET` | settings validation | operator-generated, no external service |
+
+Nothing else. No third-party key is required by any agent: the only external
+keys in the system are Maps (Solar) and NREL, and a source without its key
+reports `UNCONFIGURED` rather than failing the fleet.
+
+### Four defects, innermost first
+
+**1 · `google-cloud-modelarmor` was never in the `google` extra.** Directly
+beneath a comment reading *"Every package below is named by a
+ConfigurationError that tells the operator to install the 'google' extra.
+Following that instruction has to actually fix the error, so the extra ships
+all of them."* It did not ship this one. The invariant was stated and not held.
+
+**2 · That `ConfigurationError` was being reported as a transient outage.**
+`_service()` raises `ConfigurationError` for the missing package; `inspect()`
+wrapped the call in `except Exception` and re-raised `SourceUnavailableError`.
+So "nobody installed the screen" arrived as "the screen is having an outage" —
+a class a circuit breaker retries forever and an operator waits out. Package
+resolution now happens *outside* that try.
+
+**3 · The client could never reach a regional template.** `ModelArmorClient()`
+defaults to `modelarmor.googleapis.com`, which does not serve regional
+templates, and every Model Armor template is regional. It answers
+`TEMPLATE_NOT_FOUND` — which defect 2 then dressed up as an outage. The
+endpoint is now derived from the template's own name at construction, and a
+template name carrying no region is refused at startup rather than on the first
+ingested document.
+
+**4 · The match state was read inverted, so every document was blocked.** The
+enum is `UNSPECIFIED=0, NO_MATCH_FOUND=1, MATCH_FOUND=2`, and the code did
+`bool(filter_match_state)`. A clean document reports `NO_MATCH_FOUND`, which is
+truthy. **In live mode the slow loop would have blocked every permit, assessor
+row and inspection narrative it ingested, written zero facts, and reported a
+screen working perfectly.** Now compared against `MATCH_FOUND` by name, so an
+SDK renumbering cannot restore it.
+
+A fifth, smaller: `findings` listed every key in `filter_results`, which
+contains an entry per *configured* filter whether or not it fired. An ordinary
+building permit came back carrying a `csam` finding. An audit record naming a
+filter that did not match is a finding that never happened, about a document
+written by a member of the public. Now only filters whose sub-result is
+`MATCH_FOUND` are reported.
+
+Defects 1–3 were invisible because fake mode uses `LocalInjectionDetector` and
+never constructs a response object; defect 4 was invisible for the same reason.
+All five are now pinned by unit tests against a stub shaped like the SDK's, so
+they fail without credentials. Mutation-checked: restoring `bool(state)` fails
+two of them.
+
+### What Model Armor actually does with the red-team fixture
+
+Verified against the real service, template
+`projects/firstdue-dev/locations/us-central1/templates/firstdue-ingest` with
+`pi_and_jailbreak` at `LOW_AND_ABOVE`:
+
+| Document | Blocked | Findings |
+|---|---|---|
+| `malicious-permit.json` | **yes** | `directive-to-assert`, `fenced-directive`, `instruction-override`, `role-reassignment`, `system-prompt-mimicry` |
+| benign permit prose | **no** | none |
+
+**Every one of those findings is the local detector's. Model Armor returned
+`NO_MATCH_FOUND` on the fixture.** That is the two-screen design doing exactly
+what it was built for — *"two screens with different failure modes are what a
+document has to get past"* — and it is also a correction to how this has been
+described. The demo beat is "the poisoned permit is blocked and the block is
+audited", which is true. "Model Armor blocks it" is not; the local detector
+blocks it and Model Armor does not object. Say the former.
+
+Whether the fixture should also trip Model Armor is a fair question to put to
+the fixture rather than to the screen: it is written to read as a system prompt
+inside a permit, which is what the local detector recognises structurally.
+
+### A latent import cycle
+
+`import firstdue.security.armor` as the *first* `firstdue` import raises
+`ImportError` — `security/__init__` → `armor` → `extraction.screening` →
+`extraction/__init__` → `extractor` → `security.armor`, partially initialised.
+Any other entry point primes the package first, which is why nothing has hit
+it. Recorded rather than fixed: untangling it touches four modules for a
+failure no caller currently produces.
+
+### Strict mypy was clean because the SDKs were absent
+
+Installing the `google` extra to get Model Armor surfaced two real type errors
+in files nothing had changed — `CloudTraceSpanExporter` is untyped, and
+`neighbour.distance` on a Vector Search match is `float | None`, where
+`float(None)` raises. The second is a live-path crash waiting on the first
+neighbour returned without a distance; it now sorts last instead. **A strict
+build that never installs its optional dependencies is not checking them.** CI
+should install the extra; it does not yet.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `uv run pytest` | **894 passed**, 47 skipped (884 before; +10 armor tests) |
+| Mutation check | restoring `bool(state)` failed exactly 2 tests |
+| `ruff` / strict `mypy` **with the google extra installed** | clean, 205 files / 151 source files |
+| `make infra-check` | clean, 38 infra tests |
+| `make slow-loop` | unchanged |
+| Live Model Armor | malicious blocked, benign passed, verified against the real service |
+
+### Still not done
+
+Cloud Run remains empty and the Model Armor API is enabled on `firstdue-dev`
+only. `VECTOR_SEARCH_ENABLED` is off, so semantic recall is still the in-memory
+lexical index — no Vector Search index has been created.

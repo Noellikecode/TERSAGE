@@ -15,6 +15,7 @@ and the Terraform module's endpoint is behind the same switch.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from typing import Any, Final
 
@@ -26,6 +27,11 @@ from firstdue.observability.tracing import source_query_span, source_write_span
 from firstdue.ports.vectors import VectorMatch
 
 logger = get_logger(__name__)
+
+#: Sorts last. A neighbour the index returned without a distance is still a
+#: real match; it is only unrankable, and dropping it would hide a hit while
+#: raising on it would lose the whole recall call.
+INF: Final[float] = math.inf
 
 #: The embedding model. Named here so a change is a reviewable diff rather than
 #: a silently different vector space.
@@ -158,7 +164,11 @@ class VertexVectorIndex:
                 payload_id=neighbour.id,
                 address_id=neighbour.id.split(":")[0],
                 canonical_key=neighbour.id.split(":")[-1],
-                distance=float(neighbour.distance),
+                # `distance` is optional on the SDK's neighbour type, and
+                # `float(None)` raises. A match whose distance the index did
+                # not report is still a match -- it just cannot be ranked, so
+                # it sorts last rather than taking the whole recall call down.
+                distance=float(neighbour.distance) if neighbour.distance is not None else INF,
             )
             for group in response
             for neighbour in group

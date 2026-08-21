@@ -160,9 +160,11 @@ class _Tracer:
             if project_id:
                 from opentelemetry.exporter.cloud_trace import CloudTraceSpanExporter
 
-                provider.add_span_processor(
-                    BatchSpanProcessor(CloudTraceSpanExporter(project_id=project_id))
-                )
+                # The exporter ships without type information, so a strict
+                # build sees an untyped call. Narrowed here rather than
+                # globally: the rest of this module stays checked.
+                exporter = CloudTraceSpanExporter(project_id=project_id)  # type: ignore[no-untyped-call]
+                provider.add_span_processor(BatchSpanProcessor(exporter))
             trace.set_tracer_provider(provider)
             self._otel_tracer = trace.get_tracer(service_name)
             logger.info(
