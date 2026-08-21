@@ -195,6 +195,35 @@ gcloud ai model-garden models list --project=firstdue-dev --region=us-central1 \
   | grep -iE "gemini|gemma"
 ```
 
+### Model Armor: enable the API and create a template
+
+Live mode **will not start** without `MODEL_ARMOR_TEMPLATE` — the slow loop
+screens every ingested document, and a screen that is configured but absent is
+not a state this system will run in.
+
+```bash
+gcloud services enable modelarmor.googleapis.com --project=firstdue-dev
+
+# Model Armor is regional, and gcloud needs the regional host told to it.
+gcloud config set api_endpoint_overrides/modelarmor \
+  https://modelarmor.us-central1.rep.googleapis.com/
+
+gcloud model-armor templates create firstdue-ingest \
+  --location=us-central1 --project=firstdue-dev \
+  --pi-and-jailbreak-filter-settings-enforcement=enabled \
+  --pi-and-jailbreak-filter-settings-confidence-level=LOW_AND_ABOVE \
+  --malicious-uri-filter-settings-enforcement=enabled
+```
+
+Then set:
+
+```
+MODEL_ARMOR_TEMPLATE=projects/firstdue-dev/locations/us-central1/templates/firstdue-ingest
+```
+
+The application derives the regional API host from that name, so the region in
+the template path is load-bearing and a name without one is refused at startup.
+
 ### Live source keys
 
 Only two sources need a key, and a source whose key is absent reports

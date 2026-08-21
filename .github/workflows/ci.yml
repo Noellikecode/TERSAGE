@@ -22,7 +22,12 @@ jobs:
         with:
           enable-cache: true
       - run: uv python install 3.12
-      - run: uv sync --frozen || uv sync
+      # WITH the google extra. Strict mypy against absent optional
+      # dependencies is not checking them: installing it locally surfaced two
+      # real type errors in files nothing had touched, one of them a live-path
+      # crash (`float(None)` on a Vector Search neighbour). The tests still run
+      # in fake mode and need no credentials.
+      - run: uv sync --frozen --extra google || uv sync --extra google
       - name: Ruff lint
         run: uv run ruff check .
       - name: Ruff format check

@@ -38,6 +38,7 @@ google = [
   "google-cloud-storage>=2.18,<4",        # pre-incident plan store
   "google-cloud-aiplatform>=1.71,<2",     # Vertex: Gemini and Vector Search
   "google-cloud-secret-manager>=2.20,<3",
+  "google-cloud-modelarmor>=0.2,<1",       # the ingested-document screen
   "opentelemetry-sdk>=1.27,<2",
   "opentelemetry-exporter-gcp-trace>=1.7,<2",
 ]

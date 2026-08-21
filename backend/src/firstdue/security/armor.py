@@ -87,6 +87,75 @@ class LocalInjectionDetector:
         )
 
 
+#: Model Armor serves regional templates from a regional host. The global host
+#: does not know them, so the endpoint has to be derived from the template.
+_ENDPOINT_TEMPLATE: Final[str] = "modelarmor.{location}.rep.googleapis.com"
+
+
+def template_api_endpoint(template: str) -> str:
+    """The host that serves ``template``.
+
+    Templates are named ``projects/{p}/locations/{loc}/templates/{t}``. A name
+    that does not carry a location cannot be resolved anywhere, so this raises
+    at construction rather than letting the first ingested document fail.
+    """
+    parts = template.split("/")
+    if len(parts) < 4 or parts[2] != "locations" or not parts[3]:
+        raise ConfigurationError(
+            "MODEL_ARMOR_TEMPLATE must be "
+            "projects/{project}/locations/{location}/templates/{template}",
+            details={"template": template},
+        )
+    return _ENDPOINT_TEMPLATE.format(location=parts[3])
+
+
+def _matched(module: Any, state: Any) -> bool:
+    """True only for ``MATCH_FOUND``.
+
+    The enum is ``UNSPECIFIED=0, NO_MATCH_FOUND=1, MATCH_FOUND=2``, so the
+    obvious ``bool(state)`` is not merely imprecise -- it is inverted for the
+    common case. A clean document reports ``NO_MATCH_FOUND``, which is truthy,
+    so every ingested document was blocked and the slow loop would have
+    recorded zero facts while reporting a screen working perfectly.
+
+    Compared by name rather than by the literal ``2``, so a renumbering in the
+    SDK cannot quietly restore the bug.
+    """
+    if state is None:
+        return False
+    return bool(state == module.FilterMatchState.MATCH_FOUND)
+
+
+#: The per-filter result attributes Model Armor returns. Each filter key in
+#: ``filter_results`` carries all of them; only the one it owns is populated.
+_FILTER_RESULT_ATTRS: Final[tuple[str, ...]] = (
+    "pi_and_jailbreak_filter_result",
+    "malicious_uri_filter_result",
+    "csam_filter_filter_result",
+    "rai_filter_result",
+    "sdp_filter_result",
+)
+
+
+def _matched_filters(module: Any, result: Any) -> tuple[str, ...]:
+    """The filters that actually matched, not the filters that ran.
+
+    ``filter_results`` has an entry for every configured filter whether or not
+    it fired, so listing its keys reported ``csam`` against an ordinary
+    building permit -- a finding in the audit log that never happened, about a
+    document by a member of the public. An audit record naming a filter that
+    did not match is worse than no record at all.
+    """
+    matched: set[str] = set()
+    for name, entry in (getattr(result, "filter_results", None) or {}).items():
+        for attr in _FILTER_RESULT_ATTRS:
+            sub = getattr(entry, attr, None)
+            if sub is not None and _matched(module, getattr(sub, "match_state", None)):
+                matched.add(name)
+                break
+    return tuple(sorted(matched))
+
+
 class ModelArmorClient:
     """The live boundary.
 
@@ -108,6 +177,7 @@ class ModelArmorClient:
         self._project_id = project_id
         self._local = LocalInjectionDetector()
         self._client: Any | None = None
+        self._api_endpoint = template_api_endpoint(template)
 
     def _service(self) -> Any:  # pragma: no cover - live mode only
         if self._client is None:
@@ -126,9 +196,21 @@ class ModelArmorClient:
         local = self._local.inspect(document_text)
         if not local.safe_text:
             return local
+        # Resolved *outside* the try below on purpose. A missing package is a
+        # configuration error and must stay one: swallowing it into
+        # SourceUnavailableError told an operator the screen was having an
+        # outage, which a circuit breaker retries forever, when the truth was
+        # that nobody installed it and no amount of retrying would help.
+        module = self._service()
         try:
-            module = self._service()
-            client = module.ModelArmorClient()
+            # Regional endpoint, derived from the template's own name. The
+            # default client talks to `modelarmor.googleapis.com`, which does
+            # not host regional templates -- and every Model Armor template is
+            # regional, so the default can never resolve one. It answers
+            # TEMPLATE_NOT_FOUND, which this method then reported as the screen
+            # being unavailable: a permanent misconfiguration wearing the
+            # costume of a transient outage.
+            client = module.ModelArmorClient(client_options={"api_endpoint": self._api_endpoint})
             response = client.sanitize_user_prompt(
                 request={
                     "name": self._template,
@@ -143,10 +225,10 @@ class ModelArmorClient:
             ) from exc
 
         result = getattr(response, "sanitization_result", None)
-        blocked = bool(getattr(result, "filter_match_state", 0)) if result else False
+        blocked = _matched(module, getattr(result, "filter_match_state", None))
         if blocked or local.blocked:
             METRICS.record_injection_block()
-        findings = tuple(sorted(getattr(result, "filter_results", {}).keys())) if result else ()
+        findings = _matched_filters(module, result)
         return ArmorVerdict(
             safe_text="" if blocked else local.safe_text,
             blocked=blocked or local.blocked,

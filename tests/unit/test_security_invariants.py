@@ -9,19 +9,25 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, ClassVar
 
 import pytest
 
 from firstdue.domain.enums import Classification, SourceType
 from firstdue.domain.keys import Keys
 from firstdue.domain.vectors import build_vector_payload
-from firstdue.errors import ClassificationViolationError
+from firstdue.errors import ClassificationViolationError, ConfigurationError
 from firstdue.extraction.coercion import coerce_value
 from firstdue.extraction.screening import screen_document
 from firstdue.gateway.derivation import age_band, derive_ems_life_safety
 from firstdue.gateway.jurisdiction import aid_agreement_for, withhold
 from firstdue.observability.redaction import redact_mapping, redact_text
-from firstdue.security.armor import LocalInjectionDetector
+from firstdue.security.armor import (
+    LocalInjectionDetector,
+    _matched,
+    _matched_filters,
+    template_api_endpoint,
+)
 from firstdue.security.signing import SignatureError, sign_payload, verify_signature
 
 NOW = datetime(2026, 8, 20, 8, 0, tzinfo=UTC)
@@ -323,3 +329,113 @@ def test_source_types_that_carry_prose_are_named() -> None:
 
     assert SourceType.FIRE_INSPECTION in DOCUMENT_SOURCES
     assert SourceType.PERMIT in DOCUMENT_SOURCES
+
+
+class TestModelArmorResponseParsing:
+    """Three defects the first live Model Armor call exposed.
+
+    All three were invisible to a fake-mode suite, because fake mode uses
+    :class:`LocalInjectionDetector` and never constructs a response object at
+    all. They are pinned here against a stub shaped like the real SDK's, so a
+    regression fails without credentials.
+    """
+
+    class _State:
+        """The SDK enum. The values are the whole point of the first test."""
+
+        FILTER_MATCH_STATE_UNSPECIFIED = 0
+        NO_MATCH_FOUND = 1
+        MATCH_FOUND = 2
+
+    class _Module:
+        FilterMatchState = None  # replaced below
+
+    @staticmethod
+    def _module() -> Any:
+        mod = TestModelArmorResponseParsing._Module()
+        mod.FilterMatchState = TestModelArmorResponseParsing._State
+        return mod
+
+    def test_no_match_found_is_not_a_block(self) -> None:
+        """The inverted-truthiness bug, stated as plainly as it can be.
+
+        ``NO_MATCH_FOUND`` is ``1``. The original ``bool(state)`` read a clean
+        document as a blocked one, so live mode would have blocked *every*
+        ingested document and the slow loop would have written zero facts while
+        every dashboard showed a screen working perfectly.
+        """
+        assert _matched(self._module(), self._State.NO_MATCH_FOUND) is False
+
+    def test_match_found_is_a_block(self) -> None:
+        assert _matched(self._module(), self._State.MATCH_FOUND) is True
+
+    def test_unspecified_and_absent_are_not_blocks(self) -> None:
+        assert _matched(self._module(), self._State.FILTER_MATCH_STATE_UNSPECIFIED) is False
+        assert _matched(self._module(), None) is False
+
+    def test_only_filters_that_matched_are_reported(self) -> None:
+        """Listing the filters that *ran* put `csam` on an ordinary permit.
+
+        An audit record naming a filter that did not match is a finding that
+        never happened, about a document written by a member of the public.
+        """
+
+        class _Sub:
+            def __init__(self, state: int) -> None:
+                self.match_state = state
+
+        class _Entry:
+            def __init__(self, **kw: object) -> None:
+                for attr in (
+                    "pi_and_jailbreak_filter_result",
+                    "malicious_uri_filter_result",
+                    "csam_filter_filter_result",
+                    "rai_filter_result",
+                    "sdp_filter_result",
+                ):
+                    setattr(self, attr, kw.get(attr))
+
+        class _Result:
+            filter_results: ClassVar[dict[str, object]] = {
+                "pi_and_jailbreak": _Entry(pi_and_jailbreak_filter_result=_Sub(2)),
+                "csam": _Entry(csam_filter_filter_result=_Sub(1)),
+                "malicious_uris": _Entry(malicious_uri_filter_result=_Sub(1)),
+            }
+
+        assert _matched_filters(self._module(), _Result()) == ("pi_and_jailbreak",)
+
+    def test_a_result_with_no_filters_reports_nothing(self) -> None:
+        class _Empty:
+            filter_results: ClassVar[dict[str, object]] = {}
+
+        assert _matched_filters(self._module(), _Empty()) == ()
+
+
+class TestModelArmorEndpoint:
+    """The template's region decides the host, and a missing region is fatal."""
+
+    def test_the_endpoint_comes_from_the_template_region(self) -> None:
+        """The default global host does not serve regional templates.
+
+        Every Model Armor template is regional, so the SDK default can never
+        resolve one. It answered TEMPLATE_NOT_FOUND, which the screen reported
+        as an outage -- a permanent misconfiguration wearing the costume of a
+        transient one.
+        """
+        assert (
+            template_api_endpoint("projects/p/locations/us-central1/templates/t")
+            == "modelarmor.us-central1.rep.googleapis.com"
+        )
+        assert (
+            template_api_endpoint("projects/p/locations/europe-west4/templates/t")
+            == "modelarmor.europe-west4.rep.googleapis.com"
+        )
+
+    @pytest.mark.parametrize(
+        "template",
+        ["", "projects/p/templates/t", "nonsense", "projects/p/locations//templates/t"],
+    )
+    def test_a_template_without_a_region_is_refused_at_construction(self, template: str) -> None:
+        """Fail at startup, not on the first ingested document."""
+        with pytest.raises(ConfigurationError):
+            template_api_endpoint(template)
