@@ -7,9 +7,12 @@ Two switches, deliberately independent:
 * ``USE_FAKE_AGENTS`` chooses between deterministic adapters and Google-backed
   agent, model, and source adapters.
 * ``STORAGE_BACKEND`` and ``EVENT_BACKEND`` choose durable memory and event
-  transport. These are separate from fake mode on purpose -- the Firestore
-  repositories and the Pub/Sub codec run against local emulators with no
-  credentials at all, which is how they are tested.
+  transport. These are separate from fake mode on purpose, so the Firestore
+  repositories and the Pub/Sub transport can be exercised against real Google
+  services without also turning on live models and live municipal sources.
+* ``WORKSPACE_WRITES`` chooses whether Calendar and Gmail are called for real.
+  Separate again, because those two are the only write targets that need
+  delegated *user* authority rather than the deployment's own identity.
 
 There is no partial mode. A process that quietly fell back to an in-memory
 repository because Firestore was unreachable would lose every write on restart
@@ -95,7 +98,7 @@ from firstdue.ports.vectors import VectorIndex
 from firstdue.ports.writes import ExternalWriteTarget
 from firstdue.reliability.retry import RetryPolicy
 from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient, build_screen
-from firstdue.settings import EventBackend, Settings, StorageBackend
+from firstdue.settings import EventBackend, Settings, StorageBackend, WorkspaceWrites
 from firstdue.sources.catalog import LiveCredentials, build_sources
 
 #: The five systems FIRST DUE writes into.
@@ -165,6 +168,19 @@ class Container:
     @property
     def event_label(self) -> str:
         return str(self.settings.event_backend)
+
+    @property
+    def workspace_label(self) -> str:
+        """Whether the survey calendar and crew mail reach Workspace for real.
+
+        Reported so the console can say so. In fake mode the whole fleet is
+        simulated and the mode label already carries that; what this
+        distinguishes is a *live* deployment in which four integrations are
+        real and these two are not.
+        """
+        if self.settings.use_fake_agents:
+            return str(WorkspaceWrites.FAKE)
+        return str(self.settings.workspace_writes)
 
     @property
     def lock_lease(self) -> timedelta:
@@ -374,8 +390,14 @@ def _build_office(
 ) -> tuple[CalendarClient, MailClient, ObjectStore]:
     """Calendar, mail, and the plan store.
 
-    The live three dedupe through the durable idempotency repository, not a
-    process-local dict -- a restart must not double-book a company.
+    The three are built independently, because they do not authenticate the
+    same way. Cloud Storage answers to the principal itself, so it goes live
+    whenever the rest of the fleet does. Calendar and Gmail act *as a user* and
+    need delegated authority Application Default Credentials do not carry, so
+    they follow ``WORKSPACE_WRITES`` instead -- see :class:`WorkspaceWrites`.
+
+    The live clients dedupe through the durable idempotency repository, not a
+    process-local dict: a restart must not double-book a company.
     """
     if settings.use_fake_agents:
         return (
@@ -386,14 +408,20 @@ def _build_office(
             ),
         )
 
-    from firstdue.adapters.google.office import (
-        GmailClient,
-        GoogleCalendarClient,
-        GoogleObjectStore,
-    )
+    from firstdue.adapters.google.office import GoogleObjectStore
 
     if not settings.gcs_plans_bucket:  # pragma: no cover - settings validate first
         raise ConfigurationError("live mode requires GCS_PLANS_BUCKET")
+    plans = GoogleObjectStore(bucket=settings.gcs_plans_bucket, clock=clock)
+
+    if settings.workspace_writes is WorkspaceWrites.FAKE:
+        # Recorded, audited, and idempotent exactly as the live clients are.
+        # The console labels both actions simulated; a silently skipped crew
+        # notification would be worse than an admitted one.
+        return (FakeCalendar(clock=clock, ids=ids), FakeMailer(clock=clock), plans)
+
+    from firstdue.adapters.google.office import GmailClient, GoogleCalendarClient
+
     return (
         GoogleCalendarClient(clock=clock, idempotency=stores.idempotency),
         GmailClient(
@@ -401,7 +429,7 @@ def _build_office(
             clock=clock,
             idempotency=stores.idempotency,
         ),
-        GoogleObjectStore(bucket=settings.gcs_plans_bucket, clock=clock),
+        plans,
     )
 
 

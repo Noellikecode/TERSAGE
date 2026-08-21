@@ -21,8 +21,13 @@ from firstdue.adapters.clock import (
     SteppingClock,
     SystemClock,
 )
-from firstdue.container import build_container, build_live_clock_and_ids
-from firstdue.settings import AppEnv, Settings
+from firstdue.container import (
+    _build_office,
+    build_container,
+    build_live_clock_and_ids,
+    build_memory_stores,
+)
+from firstdue.settings import AppEnv, Settings, WorkspaceWrites
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -124,3 +129,76 @@ def test_fake_mode_container_imports_no_google_module(settings: Settings) -> Non
         if name.startswith(("google.cloud", "vertexai", "googleapiclient"))
     )
     assert leaked == [], f"fake mode imported cloud SDKs: {leaked}"
+
+
+class TestWorkspaceWritesIsItsOwnSwitch:
+    """Calendar and Gmail do not authenticate the way the rest of live mode does.
+
+    Every other Google integration in the fleet -- Firestore, Pub/Sub, Cloud
+    Storage, Vertex -- authenticates as the deployment's own principal. Calendar
+    and Gmail act *as a user*, which needs domain-wide delegation or an
+    interactive consent. Binding all of them to ``USE_FAKE_AGENTS`` would mean a
+    deployment with good credentials for four of them constructs two clients
+    that raise on their first call, in the middle of a survey dispatch.
+
+    So ``WORKSPACE_WRITES`` is separate, and these tests hold the seam open in
+    both directions.
+    """
+
+    @staticmethod
+    def _settings(tmp_path: Path, workspace: WorkspaceWrites) -> Settings:
+        return _live_settings(tmp_path).model_copy(update={"workspace_writes": workspace})
+
+    def test_it_defaults_to_fake_so_a_personal_account_cannot_be_assumed(
+        self, tmp_path: Path
+    ) -> None:
+        """The safe default: nothing calls Workspace unless somebody said to."""
+        assert _live_settings(tmp_path).workspace_writes is WorkspaceWrites.FAKE
+
+    def test_fake_workspace_still_gets_a_real_plan_store(self, tmp_path: Path) -> None:
+        """The three are built independently, so GCS does not follow Calendar down.
+
+        This is the whole point of the split. A pre-incident plan is written by
+        the deployment's own service account and has no user to act as.
+        """
+        from firstdue.adapters.fake.office import FakeCalendar, FakeMailer
+
+        calendar, mail, plans = _build_office(
+            self._settings(tmp_path, WorkspaceWrites.FAKE),
+            clock=SystemClock(),
+            ids=RandomIdGenerator(),
+            stores=build_memory_stores(),
+        )
+        assert isinstance(calendar, FakeCalendar)
+        assert isinstance(mail, FakeMailer)
+        assert type(plans).__name__ == "GoogleObjectStore"
+
+    def test_google_workspace_builds_the_real_two(self, tmp_path: Path) -> None:
+        """And setting it to ``google`` genuinely reaches for the Google clients."""
+        calendar, mail, plans = _build_office(
+            self._settings(tmp_path, WorkspaceWrites.GOOGLE),
+            clock=SystemClock(),
+            ids=RandomIdGenerator(),
+            stores=build_memory_stores(),
+        )
+        assert type(calendar).__name__ == "GoogleCalendarClient"
+        assert type(mail).__name__ == "GmailClient"
+        assert type(plans).__name__ == "GoogleObjectStore"
+
+    def test_fake_mode_ignores_it_entirely(self, tmp_path: Path) -> None:
+        """``WORKSPACE_WRITES=google`` must not drag a credential-free demo live.
+
+        `make demo` runs with no Google auth of any kind. A stray environment
+        variable in a developer's shell should not change that.
+        """
+        from firstdue.adapters.fake.office import FakeCalendar, FakeMailer, FakeObjectStore
+
+        settings = _live_settings(tmp_path).model_copy(
+            update={"use_fake_agents": True, "workspace_writes": WorkspaceWrites.GOOGLE}
+        )
+        calendar, mail, plans = _build_office(
+            settings, clock=SystemClock(), ids=RandomIdGenerator(), stores=build_memory_stores()
+        )
+        assert isinstance(calendar, FakeCalendar)
+        assert isinstance(mail, FakeMailer)
+        assert isinstance(plans, FakeObjectStore)

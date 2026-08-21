@@ -3,8 +3,8 @@
 Three drifts are possible between an application and its infrastructure, and
 all three are silent until an incident:
 
-* a Firestore collection with no composite index -- the query works locally
-  against the emulator, which needs no index, and fails in staging;
+* a Firestore collection with no composite index -- the query works against a
+  small test database, which does not need one, and fails in staging;
 * an agent whose IAM is wider than its declared scopes -- the gateway denies
   and IAM would have allowed, so the second line of defence is not there;
 * a topic with no subscription -- events publish successfully into nothing.

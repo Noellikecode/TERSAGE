@@ -1,6 +1,6 @@
 # ADR 0006 — In-memory repositories are a second implementation, not a stub
 
-**Status:** accepted (phase 2)
+**Status:** accepted (phase 2); amended by [ADR 0009](0009-no-emulators.md)
 
 ## Context
 
@@ -20,8 +20,13 @@ Both are first-class implementations of one contract, and both are held to one
 test suite.
 
 `tests/contract/` is parametrised over `["memory", "firestore"]`. Every test runs
-twice. The Firestore parametrisation skips only when no emulator is reachable,
+twice. The Firestore parametrisation skips only when no Firestore is reachable,
 and CI fails the job if anything skips — a skipped backend has proved nothing.
+
+> **Amendment (ADR 0009).** *Which* Firestore satisfies the second
+> parametrisation changed: it was an emulator or a real project, and it is now
+> only a real project. The decision recorded here — that both backends are
+> first-class implementations of one contract — is unchanged.
 
 The suite covers what the rest of the system assumes: optimistic concurrency,
 append-only facts and logs, gapless sequences under concurrent writers, stable
@@ -36,6 +41,7 @@ agent-run states.
   `created_at`, so the in-memory one was changed to match.
 - Writing a new repository means writing it twice. Accepted: the second one is
   cheap, and the alternative is a demo that behaves differently from production.
-- `make up && make test-emulator` runs both locally. Both were run for phase 2
-  and both pass — 27 contract tests per backend, plus the Pub/Sub transport
-  tests against the Pub/Sub emulator.
+- `make test-cloud GCP_TEST_PROJECT_ID=…` runs both locally, and CI runs them on
+  every push. Both were run for phase 2 and both passed — 27 contract tests per
+  backend, plus the Pub/Sub transport tests. Phase 2 used the emulators, which
+  ADR 0009 later removed.

@@ -890,3 +890,104 @@ credentials and `gcloud` is not installed. What is proven is that the client is
 constructed with the arguments intended and that the installed SDK accepts
 them. Whether `gemini-3.5-flash` and `gemma-3-4b-it` resolve against a real
 project is still the first thing to check before a live run.
+
+---
+
+## Phase 10 — The emulators come out, and a switch that bundled two auth models
+
+**Date:** 2026-08-21
+
+Two changes that turned out to be the same shape: a switch bundling things that
+do not belong together.
+
+### The emulators
+
+`make up` started Firestore and Pub/Sub emulators in Docker so `make
+test-emulator` could run the contract suite with no credentials. CI had already
+stopped using them for the reasons recorded above. That left them as a
+local-only convenience whose cost nobody was paying attention to: a green local
+run against an emulator looked like the same evidence CI produced and was
+weaker. The livelock in `FirestoreLockRepository.acquire` is the standing proof
+— it survived every emulator run this project ever did and was found by
+hammering a real backend.
+
+Removed from `tests/contract/`, the Makefile, `docker-compose.yml`,
+`.env.example`, and the docs. `docker-compose.yml` now runs only the app, in
+fake mode. Written up as [ADR 0009](adr/0009-no-emulators.md), which amends
+ADR 0006 — the "one contract, two backends" decision is unchanged; what changed
+is which Firestore satisfies the second parametrisation.
+
+**What this costs, stated plainly.** Running the contract suite now needs a
+Google project and `gcloud auth application-default login`. `make demo`,
+`make test`, and the 884-test default suite still need no credentials, and the
+in-memory half of every contract test still runs there — what is lost offline is
+the Firestore parametrisation, not the coverage of the behaviour.
+
+### `WORKSPACE_WRITES`, and why it had to be its own setting
+
+`USE_FAKE_AGENTS=false` built six live integrations at once. Five of them —
+Firestore, Pub/Sub, Cloud Storage, Vertex, and the source fetchers —
+authenticate as the deployment's own principal. Calendar and Gmail do not: both
+act *as a user*, so a service account with no calendar and no mailbox reaches
+neither without domain-wide delegation on a Workspace domain or an interactive
+OAuth consent.
+
+So a deployment holding entirely valid credentials for five integrations could
+not use any of them without also constructing two clients that raise on first
+call — in the middle of a survey dispatch, not at startup where a configuration
+problem belongs.
+
+`WORKSPACE_WRITES` is now separate, `fake` by default, read only when
+`USE_FAKE_AGENTS=false`. Cloud Storage stays with the rest of live mode, because
+a pre-incident plan is written by the deployment itself and has no user to act
+as. `_build_office` builds the three independently.
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Three switches, not one | `USE_FAKE_AGENTS`, `STORAGE_BACKEND`/`EVENT_BACKEND`, and `WORKSPACE_WRITES` gate three genuinely different auth models. One flag over three of them forces a deployment to lie about at least one. |
+| 2 | `fake` is the default | The safe direction. A deployment that has not said it holds Workspace authority should not be assumed to. |
+| 3 | Fake Workspace still gets a **real** plan store | The whole point of the split. GCS does not follow Calendar down. Pinned by a test. |
+| 4 | Fake mode ignores the setting entirely | A stray `WORKSPACE_WRITES=google` in a shell must not drag a credential-free demo live. Pinned by a test. |
+
+### A claim written before it was true
+
+The ADR draft said "the console labels those two actions simulated." It did
+not. Nothing in the frontend or the backend distinguished a recorded calendar
+event from a sent one.
+
+That is precisely the failure this project exists to refuse — a work order, a
+referral, and a pre-plan genuinely execute, and a crew notification sitting
+beside them looking identical asserts a notification nobody received. It is the
+same shape as rendering an absent record as "none present".
+
+Fixed rather than softened: `Container.workspace_label`, a `workspace_writes`
+field on `GET /api/v1/system/status`, and a `disputed`-tone pill reading
+**calendar + mail: simulated**, shown only when the mode is live and the
+authority is absent — in fake mode the mode pill already carries it, and a
+second badge would be noise. Three console tests hold all three cases.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `uv run pytest` | **884 passed**, 47 skipped (880 before; +4 `WorkspaceWrites` tests) |
+| `uv run ruff check . && ruff format --check .` | clean, 205 files |
+| `uv run mypy` (strict) | no issues, 151 source files |
+| `npm run lint && typecheck && test && build` | clean; **90 console tests** (87 before); build succeeds |
+| `make infra-check` | clean; 38 infra tests |
+| `make slow-loop` | unchanged: severity-4 conflict, 450 Hayes rank 1 at 0.871, referral staged, one case number |
+| OpenAPI drift | regenerated; `workspace_writes` is the only addition |
+| Mutation check on the office split | forcing the `WorkspaceWrites.FAKE` branch off failed exactly one test |
+
+### What phase 10 did **not** verify
+
+**Still nothing has run against a real Google project.** `gcloud` on this
+machine remains unauthenticated with no ADC file. The emulator removal makes the
+contract suite *require* credentials it has never had here, so those 78 tests now
+skip locally where they previously could be run — that is a real reduction in
+what this machine can prove, accepted deliberately, and it reverses the moment
+somebody runs `gcloud auth application-default login`.
+
+`WORKSPACE_WRITES=google` is written and unrun. Nobody on this project has a
+Workspace domain to delegate from, so that branch is tested for *which clients
+it constructs* and never for whether they authenticate.

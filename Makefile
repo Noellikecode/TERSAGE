@@ -16,9 +16,6 @@ NPM     ?= npm
 FRONT   := frontend
 API_PORT   ?= 8000
 FRONT_PORT ?= 3000
-# Local emulator endpoints. `make up` starts them; `make test-emulator` uses them.
-FIRESTORE_EMULATOR_HOST ?= 127.0.0.1:8081
-PUBSUB_EMULATOR_HOST    ?= 127.0.0.1:8085
 
 .PHONY: help
 help: ## Show this help
@@ -99,19 +96,14 @@ typecheck: ## Strict mypy
 	$(UV) run mypy
 
 .PHONY: test
-test: ## Backend tests (Firestore/Pub/Sub contract tests skip without emulators)
+test: ## Backend tests (contract tests skip without GCP_TEST_PROJECT_ID)
 	$(UV) run pytest
 
-.PHONY: test-emulator
-test-emulator: ## Contract tests against the Firestore and Pub/Sub emulators
-	FIRESTORE_EMULATOR_HOST=$(FIRESTORE_EMULATOR_HOST) \
-	PUBSUB_EMULATOR_HOST=$(PUBSUB_EMULATOR_HOST) \
-	$(UV) run pytest tests/contract -v
-
+.PHONY: test-cloud
 test-cloud: ## Contract tests against a real Firestore and Pub/Sub. Needs GCP_TEST_PROJECT_ID.
 	@if [ -z "$(GCP_TEST_PROJECT_ID)" ]; then \
 	  echo "GCP_TEST_PROJECT_ID is not set."; \
-	  echo "usage: make test-cloud GCP_TEST_PROJECT_ID=your-project"; \
+	  echo "usage: make test-cloud GCP_TEST_PROJECT_ID=your-test-project"; \
 	  echo "auth:  gcloud auth application-default login"; \
 	  exit 1; \
 	fi
@@ -149,14 +141,6 @@ secret-scan: ## Scan the full history for credentials (same command CI runs)
 	fi
 
 # ---------------------------------------------------------------- containers ---
-
-.PHONY: up
-up: ## Start local dependencies (Firestore + Pub/Sub emulators)
-	docker compose up -d firestore pubsub
-
-.PHONY: down
-down: ## Stop local dependencies
-	docker compose down -v
 
 .PHONY: docker-build
 docker-build: ## Build both container images

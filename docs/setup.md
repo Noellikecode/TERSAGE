@@ -6,10 +6,12 @@
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | ≥ 0.4 | installs and pins Python 3.12 |
 | Node.js | ≥ 20 | console toolchain |
-| Docker | optional | for the emulators and image builds (gcloud + a JVM also works) |
-| gcloud | optional | only for `make deploy-staging` |
+| Docker | optional | only for `make docker-build` and `make deploy-staging` |
+| gcloud | optional | for the contract suite, live mode, and deployment |
 
-No Google credentials are required for anything below.
+No Google credentials are required for `make demo`, `make test`, or
+`make verify`. They are required for the contract suite and live mode; see
+[Real Google credentials](#real-google-credentials).
 
 ## Install
 
@@ -62,17 +64,41 @@ raises a clear `ConfigurationError` rather than pretending.
 
 ### Storage and event backends
 
-These are **independent of fake mode**, because the Firestore repositories and
-the Pub/Sub transport run against local emulators with no credentials at all.
+These are **independent of fake mode**, so the Firestore repositories and the
+Pub/Sub transport can run against real Google services without also turning on
+live models and live municipal sources.
 
 | Setting | Values | Default |
 |---|---|---|
 | `STORAGE_BACKEND` | `memory`, `firestore` | `memory` |
 | `EVENT_BACKEND` | `memory`, `pubsub` | `memory` |
 
-`firestore` requires `GCP_PROJECT_ID` — any value works against the emulator.
-Both backends are held to one contract suite; see
+`firestore` requires `GCP_PROJECT_ID` and Application Default Credentials.
+There is no emulator — see [ADR 0009](adr/0009-no-emulators.md). Both backends
+are held to one contract suite; see
 [ADR 0006](adr/0006-one-contract-two-backends.md).
+
+### Workspace writes
+
+`WORKSPACE_WRITES` is a **third** switch, separate from the other two, and it
+exists because Calendar and Gmail do not authenticate the way everything else
+does.
+
+| Setting | Values | Default |
+|---|---|---|
+| `WORKSPACE_WRITES` | `fake`, `google` | `fake` |
+
+Firestore, Pub/Sub, Cloud Storage, and Vertex all authenticate as the
+deployment's own principal — a Cloud Run service account, or your ADC login.
+Calendar and Gmail act **as a user**: a service account has no calendar and no
+mailbox, so `google` needs domain-wide delegation on a Google Workspace domain
+or an interactive OAuth consent. A personal `@gmail.com` account cannot provide
+either.
+
+`fake` is not a no-op. The calendar event and the crew mail are recorded through
+the same durable idempotency store and emit the same audit events as the live
+clients would, and the console labels both actions simulated. Leave it at `fake`
+unless you administer a Workspace domain.
 
 ## The internal push endpoint
 
@@ -103,72 +129,107 @@ Dead-lettered envelopes are listed at
 Copy `.env.example` to `.env` to change settings. **Never put a secret value in
 either file** — `.env` is gitignored, `.env.example` is scanned by gitleaks.
 
-## Emulators
+## Real Google credentials
+
+Everything above runs with no Google auth at all. Two things need it: the
+contract suite, and live mode. Both authenticate the same way — **Application
+Default Credentials** — and there is no emulator path for either. See
+[ADR 0009](adr/0009-no-emulators.md) for why the emulators were removed.
+
+### One-time: authenticate this machine
 
 ```bash
-make up              # Firestore on :8081, Pub/Sub on :8085 (docker compose)
-make test-emulator   # run the contract suite against both backends
-make down
+gcloud auth login                        # the CLI
+gcloud auth application-default login    # every Google client library
 ```
 
-`make demo` does not need them. They exist so the Firestore repositories and
-the Pub/Sub transport are tested against the real client libraries rather than
-against a hand-written double.
+The second writes `~/.config/gcloud/application_default_credentials.json`. That
+file is what Firestore, Pub/Sub, Cloud Storage, and Vertex read. Having the
+first without the second is the most common way to get a confusing
+`DefaultCredentialsError` from a `gcloud` shell that looks logged in.
 
-Without Docker, the emulators also run from the gcloud SDK directly — this is
-how phase 2 was verified:
+### One-time: two projects
+
+| Project | Holds | Suggested id |
+|---|---|---|
+| dev | the app: Firestore data, Pub/Sub topics, plan bucket, Vertex calls | `firstdue-dev` |
+| test | nothing but throwaway contract-suite documents | `firstdue-test` |
+
+Separate, because the contract suite creates and deletes topics and collection
+namespaces on every run and should never do that next to data anybody cares
+about. Create them at
+<https://console.cloud.google.com/projectcreate>, then:
 
 ```bash
-brew install openjdk                                    # the emulators need a JVM
-gcloud components install cloud-firestore-emulator pubsub-emulator beta
-gcloud emulators firestore start --host-port=127.0.0.1:8081 --project=firstdue-local &
-gcloud beta emulators pubsub start --host-port=127.0.0.1:8085 --project=firstdue-local &
-make test-emulator
+for P in firstdue-dev firstdue-test; do
+  gcloud services enable \
+    firestore.googleapis.com pubsub.googleapis.com storage.googleapis.com \
+    aiplatform.googleapis.com cloudresourcemanager.googleapis.com \
+    --project="$P"
+
+  # Native mode, not Datastore mode. The repositories use transactions, which
+  # Datastore mode exposes differently.
+  gcloud firestore databases create --location=nam5 --type=firestore-native \
+    --project="$P"
+done
 ```
 
-`make test` skips the emulator-backed tests when no emulator is reachable, and
-says so. CI fails the job if they skip there — a skipped backend has proved
-nothing.
+### One-time: a bucket and a callback secret
+
+```bash
+gcloud storage buckets create gs://firstdue-plans-dev \
+  --location=us-west1 --project=firstdue-dev
+
+openssl rand -hex 32     # becomes CALLBACK_SECRET; never commit it
+```
+
+### Verify the two model ids before the first live call
+
+`GEMINI_MODEL` and `GEMMA_MODEL` default to `gemini-3.5-flash` and
+`gemma-3-4b-it`. **Neither has been resolved against a real Vertex endpoint.**
+If either is wrong, every live model call fails at once and nothing else will
+tell you why:
+
+```bash
+gcloud ai model-garden models list --project=firstdue-dev --region=us-central1 \
+  | grep -iE "gemini|gemma"
+```
+
+### Live source keys
+
+Only two sources need a key, and a source whose key is absent reports
+`UNCONFIGURED`. It never falls back to a fixture — a live-mode process serving
+synthetic records would be lying about where its data came from.
+
+| Setting | Where to get it | What it unlocks |
+|---|---|---|
+| `GOOGLE_MAPS_API_KEY` | [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials), then enable the **Solar API** | Roof segments, pitch, and the DSM height that disagrees with the permit |
+| `NREL_API_KEY` | [developer.nrel.gov/signup](https://developer.nrel.gov/signup) — free, instant | The EV charger hazard source |
+| `SOCRATA_APP_TOKEN` | [data.sfgov.org](https://data.sfgov.org) → Developer Settings | Optional. Lifts the anonymous DataSF rate limit; authorizes nothing |
 
 ## The contract suite against a real database
 
-The same suite runs against a real Firestore and real Pub/Sub, and **that is
-what CI does**. The emulators remain the credential-free local path; the real
-project is the stronger evidence, because what this suite asserts is precisely
-what an emulator is most likely to approximate — that a transaction serialises
-a read-compare-write, that `create` on an existing document fails at the
-database, that a fence counter survives a release, that ordered delivery stays
-ordered.
+The suite runs against a real Firestore and real Pub/Sub, and **that is what CI
+does**. It is the only path: what this suite asserts is precisely what an
+emulator is most likely to approximate — that a transaction serialises a
+read-compare-write, that `create` on an existing document fails at the database,
+that a fence counter survives a release, that ordered delivery stays ordered.
 
 ```bash
-gcloud auth application-default login
-make test-cloud GCP_TEST_PROJECT_ID=your-test-project
+make test-cloud GCP_TEST_PROJECT_ID=firstdue-test
 ```
 
 Each test gets its own collection namespace and its own topic prefix, and both
 are deleted afterwards — a real database does not forget when you stop it.
-Emulator variables win when both are set, so an emulator running in your shell
-cannot be bypassed into writing at a real project by accident.
+Cleanup failures warn rather than fail the test, because a cleanup error must
+not turn a passing contract test red; an accumulating namespace is still
+something somebody should notice.
 
-### What the project needs
+`make test` skips these when `GCP_TEST_PROJECT_ID` is unset, and says so. CI
+fails the job if they skip there — a skipped backend has proved nothing.
 
-A **test** project, separate from staging and prod. It holds nothing but
-throwaway documents.
-
-```bash
-PROJECT=your-test-project
-
-gcloud services enable firestore.googleapis.com pubsub.googleapis.com \
-  --project="$PROJECT"
-
-# Native mode. The repositories use transactions, which Datastore mode
-# exposes differently.
-gcloud firestore databases create --location=nam5 --type=firestore-native \
-  --project="$PROJECT"
-```
-
-Nothing else is created ahead of time: the suite makes its own topics and
-subscriptions per test and deletes them.
+Nothing is created ahead of time beyond the database itself: the suite makes its
+own topics and subscriptions per test and deletes them.
 
 ### What CI needs
 

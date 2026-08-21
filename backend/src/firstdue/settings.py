@@ -57,12 +57,40 @@ class ServiceRole(StrEnum):
 class StorageBackend(StrEnum):
     """Where durable memory lives.
 
-    ``firestore`` is selectable in fake mode too -- that is how the emulator
-    suite runs the Firestore repositories without any Google credentials.
+    ``firestore`` is selectable in fake mode too, so the Firestore repositories
+    can be exercised against a real database without turning on live models or
+    live sources. It always reaches a real Firestore: there is no emulator.
     """
 
     MEMORY = "memory"
     FIRESTORE = "firestore"
+
+
+class WorkspaceWrites(StrEnum):
+    """Whether the survey calendar and crew mail reach Google Workspace.
+
+    Calendar and Gmail are the only two write targets in the fleet that a
+    service account cannot reach on its own authority. Both act *as a user*,
+    which needs either domain-wide delegation on a Workspace domain or an
+    interactive OAuth consent -- neither of which a bare
+    ``gcloud auth application-default login`` on a personal account provides.
+
+    Every other live integration -- Firestore, Pub/Sub, Cloud Storage, Vertex
+    -- authenticates as the principal itself and needs none of that. Tying all
+    six to one ``USE_FAKE_AGENTS`` flag would mean a deployment with perfectly
+    good credentials for four of them could not use any, or would construct two
+    clients that raise on first call. So this is its own setting.
+
+    ``FAKE`` records the work in the durable idempotency store and the audit
+    log exactly as the live clients do, and the console labels those two
+    actions as simulated. A silently-skipped notification would be worse than
+    an admitted one.
+    """
+
+    #: Record calendar events and crew mail locally; do not call Workspace.
+    FAKE = "fake"
+    #: Call Calendar and Gmail for real. Requires delegated credentials.
+    GOOGLE = "google"
 
 
 class EventBackend(StrEnum):
@@ -104,11 +132,15 @@ class Settings(BaseSettings):
     #: a push subscription pointed at the wrong service would otherwise be
     #: silently absorbed instead of visibly misrouted.
     firstdue_agent: str = ""
-    #: Durable memory. Independent of fake mode: the emulator suite runs the
-    #: Firestore repositories with no credentials at all.
+    #: Durable memory. Independent of fake mode, so the Firestore repositories
+    #: can run against a real database without live models or live sources.
     storage_backend: StorageBackend = StorageBackend.MEMORY
     #: Event transport. Pub/Sub publishes out and receives via the push endpoint.
     event_backend: EventBackend = EventBackend.MEMORY
+    #: Whether Calendar and Gmail are called for real. Independent of fake mode
+    #: because those two need delegated user authority that Application Default
+    #: Credentials do not carry; see :class:`WorkspaceWrites`.
+    workspace_writes: WorkspaceWrites = WorkspaceWrites.FAKE
 
     # ------------------------------------------------- municipality ---------
     #: Default municipality. City behaviour is isolated behind CityAdapter.
@@ -152,7 +184,8 @@ class Settings(BaseSettings):
     #: NWS asks every caller to identify itself and throttles those that do not.
     source_contact_email: str = "firstdue@example.org"
     #: Prefixes every Firestore collection. Empty in production; set per run by
-    #: the emulator suite so parallel runs cannot see each other's documents.
+    #: the contract suite so parallel runs cannot see each other's documents
+    #: and each run can delete exactly what it wrote.
     firestore_namespace: str = ""
 
     # ------------------------------------------------------ event delivery ---
@@ -219,11 +252,11 @@ class Settings(BaseSettings):
     def _check_live_mode_is_fully_configured(self) -> Self:
         """Live mode requires real configuration; there is no silent fallback."""
         if self.storage_backend is StorageBackend.FIRESTORE and not self.gcp_project_id:
-            # The emulator accepts any project id, but it must be *a* project id:
-            # a Firestore client without one writes nowhere in particular.
+            # A Firestore client without a project id writes nowhere in
+            # particular, and the failure surfaces on the first write rather
+            # than at startup where a missing setting belongs.
             raise ConfigurationError(
-                "STORAGE_BACKEND=firestore requires GCP_PROJECT_ID "
-                "(any value works against the emulator)",
+                "STORAGE_BACKEND=firestore requires GCP_PROJECT_ID",
                 details={"missing": ["GCP_PROJECT_ID"]},
             )
         if self.use_fake_agents:

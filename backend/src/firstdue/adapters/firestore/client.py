@@ -53,8 +53,8 @@ class FirestoreConfig:
     """Where the data lives.
 
     ``namespace`` prefixes every collection name. Production leaves it empty;
-    the emulator suite sets a per-run value so parallel test runs cannot see
-    each other's documents.
+    the contract suite sets a per-run value so parallel test runs cannot see
+    each other's documents, and so a run can delete exactly what it wrote.
     """
 
     project_id: str
@@ -97,8 +97,10 @@ def safe_document_id(raw: str) -> str:
 def build_client(config: FirestoreConfig) -> Any:
     """Construct the async Firestore client.
 
-    Honours ``FIRESTORE_EMULATOR_HOST`` automatically -- the client library
-    checks it -- so the emulator suite and production share this code path.
+    Authenticates through Application Default Credentials, which on Cloud Run
+    is the service's own service account and locally is
+    ``gcloud auth application-default login``. There is no emulator branch:
+    every caller of this function reaches a real Firestore.
 
     Raises:
         ConfigurationError: when ``google-cloud-firestore`` is not installed.

@@ -82,9 +82,12 @@ the live ones.
 | `make slow-loop`      | One complete slow-loop pass over a district, no credentials       |
 | `make infra-check`    | Terraform format, validate, and conformance — no credentials      |
 
-Run `make help` for the full target list. `make up && make test-emulator` runs
-the durable-memory contract suite against the Firestore and Pub/Sub emulators —
-the same tests that run in memory, against the real clients.
+Run `make help` for the full target list. `make test-cloud
+GCP_TEST_PROJECT_ID=your-test-project` runs the durable-memory contract suite
+against a real Firestore and real Pub/Sub — the same tests that run in memory,
+against the real services. There is no emulator: what that suite asserts is
+transaction and ordering semantics, which is exactly what an emulator
+approximates rather than reproduces. See [docs/setup.md](docs/setup.md).
 
 ## Repository layout
 
@@ -132,6 +135,11 @@ A hidden simulation is worse than an admitted one.
 - Permit, assessor, inspection, imagery, hazmat, pipeline, EV, weather, and
   lidar sources are real public data for real addresses.
 - Thermal footage is recorded, not a live flight.
+- The survey **calendar event and crew notification** are recorded and audited
+  but not sent, unless the deployment holds delegated Google Workspace
+  authority (`WORKSPACE_WRITES=google`). The console says so on screen when
+  live mode is running without it. Every other write — work order, pre-incident
+  plan, inter-agency referral, agency notifications — executes for real.
 
 Default municipality: **San Francisco**. City-specific behaviour is isolated
 behind adapter interfaces.

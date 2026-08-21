@@ -278,8 +278,8 @@ Nothing above is needed to run the system.
 
 ```bash
 make demo             # the whole fleet, credential-free
-make up               # Firestore + Pub/Sub emulators
-make test-emulator    # the same contract suite, against real clients
+gcloud auth application-default login
+make test-cloud GCP_TEST_PROJECT_ID=your-test-project   # the contract suite
 make infra-check      # tofu fmt, validate, and the conformance tests
 ```
 

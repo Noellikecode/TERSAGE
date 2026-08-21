@@ -6,27 +6,23 @@ adapters are not stubs standing in for Firestore, they are a second
 implementation of the same contract, and a behavioural difference between them
 is a bug in one of them rather than a property of the backend.
 
-**Which Firestore.** Two targets satisfy this suite, and the tests do not care
-which they got:
+**Which Firestore.** One target: ``FIRESTORE_TEST_PROJECT``, a real Firestore
+database reached through Application Default Credentials. There is no emulator
+path, deliberately. An emulator is a reimplementation of Firestore's semantics,
+and the things this suite actually asserts -- that a transaction serialises a
+read-compare-write, that `create` on an existing document fails at the database
+rather than at a Python guard a concurrent instance could race past, that a
+fence counter survives a release -- are exactly the semantics an emulator is
+most likely to approximate. A suite whose whole purpose is checking semantics
+should not be run against an approximation of them.
 
-* ``FIRESTORE_EMULATOR_HOST`` -- a local emulator, no credentials, what
-  ``make up && make test-emulator`` runs;
-* ``FIRESTORE_TEST_PROJECT`` -- a real Firestore database, reached through
-  Application Default Credentials, which is what CI runs.
-
-The real project is the stronger evidence. An emulator is a reimplementation of
-Firestore's semantics, and the things this suite actually asserts -- that a
-transaction serialises a read-compare-write, that `create` on an existing
-document fails at the database, that a fence counter survives a release -- are
-exactly the semantics an emulator is most likely to approximate.
-
-Neither configured means **skip, loudly**. A skipped backend has proved
-nothing, and CI fails the job if this suite reports one.
+Not configured means **skip, loudly**. A skipped backend has proved nothing,
+and CI fails the job if this suite reports one.
 
 Isolation and cleanup are per test. Every test gets its own collection
-namespace, so parallel runs cannot see each other's documents, and against a
-real project the namespace is deleted afterwards -- an emulator forgets when it
-stops, a real database does not.
+namespace, so parallel runs cannot see each other's documents, and the
+namespace is deleted afterwards -- a real database does not forget when you
+stop it.
 """
 
 from __future__ import annotations
@@ -42,16 +38,11 @@ from firstdue.adapters.firestore.client import COLLECTION_NAMES
 from firstdue.container import Stores, build_firestore_stores, build_memory_stores
 from firstdue.settings import AppEnv, Settings, StorageBackend
 
-EMULATOR_ENV = "FIRESTORE_EMULATOR_HOST"
 PROJECT_ENV = "FIRESTORE_TEST_PROJECT"
-
-#: The emulator accepts any project id; this one names where the data came from.
-EMULATOR_PROJECT = "firstdue-local"
 
 #: Captured at import, because the root ``_clean_env`` fixture strips every
 #: ``FIRESTORE_*`` variable so no test inherits a developer's live environment.
-#: Here they are deliberate, so they are put back for these tests only.
-EMULATOR_HOST = os.environ.get(EMULATOR_ENV)
+#: Here it is deliberate, so it is put back for these tests only.
 REAL_PROJECT = os.environ.get(PROJECT_ENV)
 
 #: Which database `FIRESTORE_TEST_DATABASE` names. Empty means the default one.
@@ -59,15 +50,7 @@ REAL_DATABASE = os.environ.get("FIRESTORE_TEST_DATABASE") or "(default)"
 
 
 def firestore_target() -> tuple[str, str] | None:
-    """``(project_id, database)`` for whichever Firestore is configured.
-
-    The emulator wins when both are set: a developer with live credentials in
-    their shell who starts an emulator meant to use the emulator, and writing
-    a test suite's throwaway documents into a real project by accident is not a
-    mistake that should be possible to make quietly.
-    """
-    if EMULATOR_HOST:
-        return (EMULATOR_PROJECT, "(default)")
+    """``(project_id, database)`` for the configured Firestore, or ``None``."""
     if REAL_PROJECT:
         return (REAL_PROJECT, REAL_DATABASE)
     return None
@@ -75,8 +58,6 @@ def firestore_target() -> tuple[str, str] | None:
 
 @pytest.fixture(autouse=True)
 def _restore_backend_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    if EMULATOR_HOST:
-        monkeypatch.setenv(EMULATOR_ENV, EMULATOR_HOST)
     if REAL_PROJECT:
         monkeypatch.setenv(PROJECT_ENV, REAL_PROJECT)
 
@@ -95,9 +76,9 @@ def _firestore_available() -> bool:
 def backend(request: pytest.FixtureRequest) -> str:
     if request.param == "firestore" and not _firestore_available():
         pytest.skip(
-            f"neither {EMULATOR_ENV} nor {PROJECT_ENV} is set, or "
-            "google-cloud-firestore is missing; run `make up && make test-emulator` "
-            "for the emulator, or set FIRESTORE_TEST_PROJECT for a real database"
+            f"{PROJECT_ENV} is not set, or google-cloud-firestore is missing; "
+            "run `make test-cloud GCP_TEST_PROJECT_ID=your-test-project` after "
+            "`gcloud auth application-default login`"
         )
     param: str = request.param
     return param
@@ -129,11 +110,10 @@ def stores(backend: str) -> Iterator[Stores]:
     try:
         yield build_firestore_stores(settings)
     finally:
-        # An emulator forgets when it stops. A real database does not, and a
-        # suite that left a namespace behind on every run would turn a test
-        # project into a landfill and eventually into a bill.
-        if not EMULATOR_HOST:
-            _purge(project_id, database, namespace)
+        # A real database does not forget when you stop it, and a suite that
+        # left a namespace behind on every run would turn a test project into a
+        # landfill and eventually into a bill.
+        _purge(project_id, database, namespace)
 
 
 def _purge(project_id: str, database: str, namespace: str) -> None:

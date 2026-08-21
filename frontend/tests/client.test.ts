@@ -10,6 +10,7 @@ const STATUS: SystemStatus = {
   mode: 'fake',
   storage_backend: 'memory',
   event_backend: 'memory',
+  workspace_writes: 'fake',
   municipality_id: 'san-francisco-ca',
   districts: ['sffd-district-03'],
   instant_brief_budget_ms: 500,
