@@ -1053,6 +1053,42 @@
         "title": "FailureClass",
         "type": "string"
       },
+      "FrameAnalysisRequest": {
+        "additionalProperties": false,
+        "description": "Raw imagery for the fusion agent to read itself.\n\nNote what is **not** here: a face. The wall is resolved from the footprint\nthe slow loop measured, using the camera bearing. A caller that could name\nthe face could name it wrong, and a temperature on the wrong wall reads to\nan officer as coverage of a side nobody photographed.",
+        "properties": {
+          "camera_bearing_deg": {
+            "exclusiveMaximum": 360.0,
+            "minimum": 0.0,
+            "title": "Camera Bearing Deg",
+            "type": "number"
+          },
+          "image_base64": {
+            "maxLength": 12000000,
+            "minLength": 1,
+            "title": "Image Base64",
+            "type": "string"
+          },
+          "mime_type": {
+            "default": "image/jpeg",
+            "maxLength": 40,
+            "title": "Mime Type",
+            "type": "string"
+          },
+          "source": {
+            "default": "recorded",
+            "maxLength": 60,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "image_base64",
+          "camera_bearing_deg"
+        ],
+        "title": "FrameAnalysisRequest",
+        "type": "object"
+      },
       "GeometrySpec": {
         "additionalProperties": false,
         "description": "The renderable structural picture for one address.",
@@ -3827,6 +3863,61 @@
           }
         },
         "summary": "Close the incident",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/frames": {
+      "post": {
+        "description": "The autonomous imagery path.\n\nThe agent resolves the face from the slow loop's footprint, reads the frame\nwith Gemini, turns the observations into a registered thermal frame, and\namends the brief. It refuses rather than guesses: no pre-incident geometry,\nor a bearing that resolves to no single wall, comes back with a stated\nreason and changes nothing.",
+        "operationId": "analyze_frame_api_v1_incidents__incident_id__frames_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FrameAnalysisRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Analyze Frame Api V1 Incidents  Incident Id  Frames Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Analyse a frame: imagery in, thermal and massing model out",
         "tags": [
           "incident"
         ]

@@ -95,6 +95,7 @@ from firstdue.ports.repositories import (
 from firstdue.ports.runtime import AgentRuntime
 from firstdue.ports.sources import SourceAdapter, SourceRegistry
 from firstdue.ports.vectors import VectorIndex
+from firstdue.ports.vision import VisionClient
 from firstdue.ports.writes import ExternalWriteTarget
 from firstdue.reliability.retry import RetryPolicy
 from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient, build_screen
@@ -142,6 +143,10 @@ class Container:
     audit: AuditSink
     runtime: AgentRuntime
     model: ModelClient
+    #: Imagery. Sensor Fusion's own extraction path -- a frame in, observations
+    #: bound to image regions out. Separate from ``model`` because it is a
+    #: different contract with one verb, not a fifth verb on the text one.
+    vision: VisionClient
     vectors: VectorIndex
     sources: SourceRegistry
     write_targets: dict[str, ExternalWriteTarget]
@@ -433,6 +438,27 @@ def _build_office(
     )
 
 
+def _build_vision(settings: Settings) -> VisionClient:
+    """Gemini multimodal, or the deterministic double.
+
+    Uses ``GEMINI_MODEL`` rather than a separate setting: the frame reader and
+    the document reader are the same model doing the same job on a different
+    medium, and a second knob would be a second thing to get wrong.
+    """
+    if settings.use_fake_agents:
+        from firstdue.adapters.fake.vision import FakeVisionClient
+
+        return FakeVisionClient()
+
+    from firstdue.adapters.vertex.vision import VertexVisionClient
+
+    return VertexVisionClient(
+        project_id=settings.gcp_project_id or "",
+        location=settings.vertex_location,
+        model=settings.gemini_model,
+    )
+
+
 def _build_vectors(settings: Settings) -> VectorIndex:
     """Semantic recall over screened narratives.
 
@@ -574,6 +600,7 @@ def build_container(settings: Settings) -> Container:
         audit=stores.audit,
         runtime=_build_runtime(settings, clock=clock, ids=ids),
         model=model,
+        vision=_build_vision(settings),
         vectors=vectors,
         sources=source_registry,
         write_targets=write_targets,

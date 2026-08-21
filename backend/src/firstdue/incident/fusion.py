@@ -27,15 +27,25 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timedelta
-from typing import Final
+from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from firstdue.domain.enums import FaceLabel
-from firstdue.domain.geometry import Face, GeometrySpec
+from firstdue.domain.enums import AssertionStatus, FaceLabel, SourceType
+from firstdue.domain.geometry import (
+    Face,
+    GeometrySpec,
+    Level,
+    Obstruction,
+    ObstructionType,
+    collapse_zone_radius,
+    resolve_face,
+)
 from firstdue.domain.values import QuantityValue, UnavailableValue, UnscannedValue
+from firstdue.domain.vision import ObservationKind, VisionResult
 from firstdue.errors import ValidationError
 from firstdue.observability.logging import get_logger
+from firstdue.ports.vision import VisionClient
 
 logger = get_logger(__name__)
 
@@ -53,6 +63,22 @@ DEFAULT_COVERAGE_WINDOW: Final[timedelta] = timedelta(minutes=5)
 VOID_DELTA_C: Final[float] = 25.0
 #: Minimum absolute temperature before a delta means anything at all.
 VOID_FLOOR_C: Final[float] = 40.0
+
+#: Words in an obstruction reading that map to a modelled obstruction type.
+#: Matched deterministically. Anything the map does not recognise is kept as an
+#: observation and does **not** become an obstruction on the massing model --
+#: the renderer only ever shows a type this system defines.
+_OBSTRUCTION_WORDS: Final[tuple[tuple[str, ObstructionType], ...]] = (
+    ("solar", ObstructionType.SOLAR_ARRAY),
+    ("photovoltaic", ObstructionType.SOLAR_ARRAY),
+    ("hvac", ObstructionType.HVAC_UNIT),
+    ("air handler", ObstructionType.HVAC_UNIT),
+    ("skylight", ObstructionType.SKYLIGHT),
+    ("parapet", ObstructionType.PARAPET),
+    ("antenna", ObstructionType.ANTENNA),
+    ("satellite", ObstructionType.ANTENNA),
+    ("ev charger", ObstructionType.EV_CHARGER),
+)
 
 
 class ThermalFrame(BaseModel):
@@ -121,12 +147,156 @@ class FaceCoverage(BaseModel):
     render: str = Field(min_length=1, max_length=300)
 
 
+class FrameRejected(BaseModel):
+    """Why a frame produced no reading. Never silently dropped.
+
+    A frame the system could not use is an operational fact an officer needs:
+    it means that wall is still UNSCANNED and somebody should fly it again.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=300)
+    #: True when the cause is that the slow loop never profiled this address.
+    cold_start: bool = False
+
+
+class FrameAnalysis(BaseModel):
+    """What one frame produced, end to end."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    frame: ThermalFrame | None = None
+    #: Structural readings the frame supports, for the profile and the massing
+    #: model. Advisory: the conflict engine decides what they mean.
+    observed_storeys: int | None = Field(default=None, ge=1, le=200)
+    obstructions: tuple[ObstructionType, ...] = ()
+    #: What the model said it could not settle, carried through verbatim.
+    unknowns: tuple[str, ...] = ()
+    rejected: FrameRejected | None = None
+    model_ref: str = Field(default="", max_length=120)
+
+    @property
+    def registered(self) -> bool:
+        return self.frame is not None
+
+
 class SensorFusion:
     """Registers thermal frames to faces and reports coverage honestly."""
 
-    def __init__(self, *, coverage_window: timedelta = DEFAULT_COVERAGE_WINDOW) -> None:
+    def __init__(
+        self,
+        *,
+        coverage_window: timedelta = DEFAULT_COVERAGE_WINDOW,
+        vision: VisionClient | None = None,
+        ids: Any | None = None,
+    ) -> None:
         self._window = coverage_window
         self._frames: dict[tuple[str, FaceLabel], ThermalFrame] = {}
+        #: Optional. Without it the agent still registers pre-extracted frames,
+        #: which is what a ground station that already did the extraction
+        #: sends. With it, the agent does the extraction itself.
+        self._vision = vision
+        self._ids = ids
+
+    async def analyze_frame(
+        self,
+        *,
+        incident_id: str,
+        image: bytes,
+        mime_type: str,
+        camera_bearing_deg: float,
+        observed_at: datetime,
+        spec: GeometrySpec | None,
+        deadline_ms: int = 8_000,
+        source: str = "recorded",
+    ) -> FrameAnalysis:
+        """Imagery in, registered thermal frame out. The autonomous path.
+
+        Four steps, and the order matters:
+
+        1. **Resolve the face from the slow loop's geometry.** The footprint
+           the Geometry Watcher measured decides which wall this camera is
+           pointed at. Nothing else does -- not the caller, not the model.
+        2. **Read the frame.** Gemini returns observations bound to image
+           regions. It is not asked which wall it is looking at.
+        3. **Order the regions bottom to top**, because the void rule compares
+           adjacent regions and "adjacent" has to mean adjacent in the world
+           rather than in whatever order the model happened to emit.
+        4. **Build the frame** the existing deterministic machinery already
+           consumes, so void detection, coverage expiry and UNSCANNED work
+           exactly as they did.
+
+        **Cold start is a refusal, not a guess.** With no profile there is no
+        footprint, no footprint means no face bearings, and a frame that cannot
+        be attributed to a wall is not registered at all. That is the two-loop
+        dependency made load-bearing: this agent cannot do its job unless the
+        slow loop already did its own.
+        """
+        if spec is None:
+            return FrameAnalysis(
+                rejected=FrameRejected(
+                    reason=(
+                        "no pre-incident geometry for this address, so a frame cannot "
+                        "be attributed to a face"
+                    ),
+                    cold_start=True,
+                )
+            )
+
+        face_geometry = resolve_face(camera_bearing_deg, spec.footprint)
+        if face_geometry is None:
+            return FrameAnalysis(
+                rejected=FrameRejected(
+                    reason=(
+                        f"camera bearing {camera_bearing_deg:.0f} does not resolve to a "
+                        "single face of the measured footprint"
+                    )
+                )
+            )
+
+        if self._vision is None:
+            return FrameAnalysis(rejected=FrameRejected(reason="no imagery model is configured"))
+
+        result = await self._vision.observe(
+            image=image, mime_type=mime_type, deadline_ms=deadline_ms
+        )
+        if not result.accepted:
+            return FrameAnalysis(
+                rejected=FrameRejected(reason=result.rejection_reason or "frame rejected"),
+                model_ref=result.model_ref,
+            )
+
+        temps = _temperatures_bottom_up(result)
+        frame: ThermalFrame | None = None
+        if temps:
+            frame = self.register(
+                ThermalFrame(
+                    frame_id=self._new_frame_id(),
+                    incident_id=incident_id,
+                    face=face_geometry.label,
+                    observed_at=observed_at,
+                    region_temps_c=temps,
+                    coverage=_coverage_of(result),
+                    source=source,
+                )
+            )
+
+        return FrameAnalysis(
+            frame=frame,
+            observed_storeys=_observed_storeys(result),
+            obstructions=_obstructions(result),
+            unknowns=result.unknowns,
+            model_ref=result.model_ref,
+        )
+
+    def _new_frame_id(self) -> str:
+        if self._ids is not None:
+            ref: str = self._ids.new_id("frame")
+            return ref
+        # Derived from the frames already held, so a run without an id
+        # generator is still deterministic and replayable.
+        return f"frame_{len(self._frames) + 1:06d}"
 
     def register(self, frame: ThermalFrame) -> ThermalFrame:
         """Register a frame to a face. The newest frame per face wins.
@@ -239,6 +409,60 @@ class SensorFusion:
             )
         return spec.model_copy(update={"faces": tuple(faces)})
 
+    def apply_analysis_to_geometry(
+        self, spec: GeometrySpec, analysis: FrameAnalysis, *, incident_id: str, now: datetime
+    ) -> GeometrySpec:
+        """Fold one frame's structural observations into the massing model.
+
+        Thermal goes on the faces exactly as before. What is new is that an
+        obstruction the frame showed is added to the model, and a storey count
+        the frame supports that **exceeds** what the slow loop filed marks the
+        extra mass ``DISPUTED``.
+
+        Note what does not happen: an observed count *lower* than the filed one
+        removes nothing. Imagery is one viewpoint of one face -- a storey the
+        camera could not see from the street is not a storey that is not there,
+        and a massing model that shrank because of a bad angle would delete
+        exactly the mass a crew needs to know about.
+        """
+        spec = self.apply_to_geometry(spec, incident_id, now=now)
+
+        obstructions = list(spec.obstructions)
+        if spec.roof_segments:
+            known = {o.type for o in obstructions}
+            obstructions.extend(
+                Obstruction(
+                    type=kind,
+                    segment_index=0,
+                    provenance=SourceType.STREET_VIEW,
+                    status=AssertionStatus.CONFIRMED,
+                )
+                for kind in analysis.obstructions
+                if kind not in known
+            )
+
+        levels = list(spec.levels)
+        observed = analysis.observed_storeys
+        if observed is not None and levels and observed > len(levels):
+            storey_height = levels[-1].height_m
+            levels.extend(
+                Level(
+                    height_m=storey_height,
+                    provenance=SourceType.STREET_VIEW,
+                    status=AssertionStatus.DISPUTED,
+                )
+                for _ in range(observed - len(levels))
+            )
+
+        total_height = sum(level.height_m for level in levels)
+        return spec.model_copy(
+            update={
+                "levels": tuple(levels),
+                "obstructions": tuple(obstructions),
+                "collapse_zone_radius_m": collapse_zone_radius(total_height),
+            }
+        )
+
     def unavailable(self, spec: GeometrySpec, *, source_id: str, reason: str) -> GeometrySpec:
         """Mark every face as UNAVAILABLE because the sensor feed is down.
 
@@ -262,6 +486,63 @@ class SensorFusion:
     @property
     def frame_count(self) -> int:
         return len(self._frames)
+
+
+def _temperatures_bottom_up(result: VisionResult) -> tuple[float, ...]:
+    """Region temperatures ordered from the ground up.
+
+    The void rule compares each region with the one before it, so the sequence
+    has to be spatial. A model emitting regions in reading order -- top-left
+    first -- would otherwise make the *roof* the baseline and turn a normal
+    building into a void on every frame.
+
+    Ordered by the bottom edge of each region descending, because image y grows
+    downward: the largest ``y + height`` is closest to the ground.
+    """
+    thermal = [
+        o for o in result.of_kind(ObservationKind.THERMAL_REGION) if o.temperature_c is not None
+    ]
+    thermal.sort(key=lambda o: o.region.y + o.region.height, reverse=True)
+    return tuple(o.temperature_c for o in thermal if o.temperature_c is not None)
+
+
+def _coverage_of(result: VisionResult) -> float:
+    """Fraction of the frame the thermal regions actually span.
+
+    Summed heights rather than area, and capped at one. It is a coverage
+    figure an officer reads next to "UNSCANNED", so overstating it is the one
+    thing it must not do.
+    """
+    heights = sum(o.region.height for o in result.of_kind(ObservationKind.THERMAL_REGION))
+    return round(min(1.0, max(0.0, heights)), 3)
+
+
+def _observed_storeys(result: VisionResult) -> int | None:
+    """Storeys the frame supports, by counting bands. ``None`` when it saw none.
+
+    Counting, not asking. The model reports bands of openings it can point at;
+    how many storeys that implies is arithmetic here, so a model cannot answer
+    "three storeys" without having shown three bands.
+    """
+    bands = result.of_kind(ObservationKind.STOREY_BAND)
+    return len(bands) or None
+
+
+def _obstructions(result: VisionResult) -> tuple[ObstructionType, ...]:
+    """Obstruction readings mapped to modelled types, in a stable order.
+
+    A reading this system has no type for is deliberately dropped rather than
+    rendered: the massing model shows only obstruction types it defines, so a
+    model cannot invent a new thing on the roof.
+    """
+    found: list[ObstructionType] = []
+    for observation in result.of_kind(ObservationKind.OBSTRUCTION):
+        lowered = observation.raw_value.lower()
+        for word, kind in _OBSTRUCTION_WORDS:
+            if word in lowered and kind not in found:
+                found.append(kind)
+                break
+    return tuple(found)
 
 
 def unscanned_faces(coverage: Sequence[FaceCoverage]) -> tuple[FaceLabel, ...]:
