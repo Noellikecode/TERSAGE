@@ -337,3 +337,34 @@ describe('degraded states', () => {
     expect(screen.getByText('No ranked structures yet')).toBeInTheDocument();
   });
 });
+
+describe('a live deployment that cannot reach Workspace says so', () => {
+  /**
+   * Calendar and Gmail act as a *user*, so a live deployment without delegated
+   * Workspace authority records those two write actions and sends neither.
+   *
+   * That is the same shape as rendering an absent record as "none present": the
+   * work order, the referral, and the pre-plan are genuinely executed, and if
+   * the crew notification sits beside them looking identical, the console is
+   * asserting a notification nobody received. So it has to be on screen.
+   */
+  beforeEach(() => {
+    vi.stubGlobal('fetch', stubFetch());
+  });
+
+  it('marks calendar and mail simulated when live mode holds no Workspace authority', () => {
+    renderConsole({ status: { ...STATUS, mode: 'live', workspace_writes: 'fake' } });
+    expect(screen.getByText('calendar + mail: simulated')).toBeInTheDocument();
+  });
+
+  it('says nothing when a live deployment does reach Workspace', () => {
+    renderConsole({ status: { ...STATUS, mode: 'live', workspace_writes: 'google' } });
+    expect(screen.queryByText('calendar + mail: simulated')).not.toBeInTheDocument();
+  });
+
+  it('says nothing in fake mode, where the mode pill already carries it', () => {
+    /** Every adapter is simulated there; a second badge would be noise. */
+    renderConsole({ status: { ...STATUS, mode: 'fake', workspace_writes: 'fake' } });
+    expect(screen.queryByText('calendar + mail: simulated')).not.toBeInTheDocument();
+  });
+});

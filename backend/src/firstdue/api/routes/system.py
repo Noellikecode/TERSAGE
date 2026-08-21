@@ -33,6 +33,11 @@ class SystemStatus(BaseModel):
     storage_backend: str
     #: How events move: "memory" or "pubsub".
     event_backend: str
+    #: "fake" or "google": whether the survey calendar and crew mail reach
+    #: Google Workspace. A live deployment can legitimately be "fake" here --
+    #: Calendar and Gmail need delegated user authority the other integrations
+    #: do not -- so a recorded-but-not-sent notification is stated, not implied.
+    workspace_writes: str
     municipality_id: str
     districts: list[str]
     instant_brief_budget_ms: int
@@ -71,6 +76,7 @@ async def system_status(
         mode=container.mode,
         storage_backend=container.storage_label,
         event_backend=container.event_label,
+        workspace_writes=container.workspace_label,
         municipality_id=container.city.municipality_id,
         districts=list(container.city.list_districts()),
         instant_brief_budget_ms=settings.instant_brief_budget_ms,

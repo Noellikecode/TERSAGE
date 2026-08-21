@@ -334,6 +334,17 @@ export function CommandCenter({
                 />
                 <StatusPill tone="muted" label={`store: ${status.storage_backend}`} />
                 <StatusPill tone="muted" label={`events: ${status.event_backend}`} />
+                {status.mode === 'live' && status.workspace_writes === 'fake' ? (
+                  <StatusPill
+                    tone="disputed"
+                    label="calendar + mail: simulated"
+                    title={
+                      'Calendar and Gmail act as a user, which needs delegated ' +
+                      'Workspace authority this deployment does not hold. Both ' +
+                      'actions are recorded and audited; neither is sent.'
+                    }
+                  />
+                ) : null}
                 <span className="text-micro text-muted">{status.municipality_id}</span>
                 <span className="text-micro text-muted">v{status.version}</span>
               </>

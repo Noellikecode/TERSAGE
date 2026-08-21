@@ -2668,6 +2668,10 @@
           "version": {
             "title": "Version",
             "type": "string"
+          },
+          "workspace_writes": {
+            "title": "Workspace Writes",
+            "type": "string"
           }
         },
         "required": [
@@ -2677,6 +2681,7 @@
           "mode",
           "storage_backend",
           "event_backend",
+          "workspace_writes",
           "municipality_id",
           "districts",
           "instant_brief_budget_ms",

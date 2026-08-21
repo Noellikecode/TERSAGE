@@ -27,6 +27,14 @@ export interface SystemStatus {
   storage_backend: string;
   /** "memory" or "pubsub" -- how events actually move. */
   event_backend: string;
+  /**
+   * "fake" or "google" -- whether the survey calendar and crew mail reach
+   * Google Workspace. A live deployment can legitimately be "fake" here:
+   * Calendar and Gmail act as a *user*, which needs delegated authority the
+   * other integrations do not. Rendered so a recorded-but-not-sent crew
+   * notification is stated rather than implied.
+   */
+  workspace_writes: string;
   municipality_id: string;
   districts: string[];
   instant_brief_budget_ms: number;

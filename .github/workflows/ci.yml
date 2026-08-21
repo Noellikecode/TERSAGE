@@ -50,15 +50,16 @@ jobs:
   durable-memory:
     name: Durable memory and event transport (real Firestore and Pub/Sub)
     runs-on: ubuntu-latest
-    # The emulators used to run here and were replaced. Two reasons, and the
-    # second is the one that matters: they were fragile to start on a hosted
-    # runner, and they are a reimplementation of the semantics this suite
-    # exists to check. What it asserts -- that a transaction serialises a
+    # The emulators used to run here and have been removed from the project
+    # entirely. Two reasons, and the second is the one that matters: they were
+    # fragile to start on a hosted runner, and they are a reimplementation of
+    # the semantics this suite exists to check. What it asserts -- that a
+    # transaction serialises a
     # read-compare-write, that `create` on an existing document fails at the
     # database rather than at a Python guard, that a fence counter survives a
     # release, that ordered delivery stays ordered -- is exactly what an
     # emulator is most likely to approximate. Against a real project, a pass
-    # means the thing it says it means.
+    # means the thing it says it means. This is now the only path.
     permissions:
       contents: read
       # Workload Identity Federation mints a short-lived token from this.

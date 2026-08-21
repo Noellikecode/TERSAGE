@@ -337,7 +337,7 @@ Say this explicitly in the writeup. It reframes observability from hygiene into 
 - Repo: `github.com/Noellikecode/TERSAGE`, public, Apache-2.0
 - 4 commits, single contributor (Noel) so far
 - Languages: Python 85.9%, TypeScript 9.7%, HCL 3.5%
-- Base infrastructure, agent build-out, and emulator tests are in
+- Base infrastructure, agent build-out, and the real-Firestore contract suite are in
 
 ## Layout
 
@@ -377,7 +377,7 @@ tests/                  pytest suite: invariants, API, adapters, contract
 | `make deploy-staging` | Documented staging deployment |
 | `make slow-loop` | One complete slow-loop pass over a district, no credentials |
 | `make infra-check` | Terraform format, validate, conformance |
-| `make up && make test-emulator` | Durable-memory contract suite against Firestore and Pub/Sub emulators |
+| `make test-cloud GCP_TEST_PROJECT_ID=…` | Durable-memory contract suite against real Firestore and Pub/Sub. Needs ADC; there is no emulator (ADR 0009) |
 
 ## Fake mode is the default
 
@@ -467,6 +467,10 @@ These are privileged sources a hackathon team cannot obtain, and **they are exac
 - Fire RMS pre-incident plans (NFPA 1620): synthetic
 - Mutual aid agreements: synthetic, modeled on real reciprocity structures
 - Thermal and optical footage: recorded, not a live flight
+- Google Calendar and Gmail writes: simulated unless `WORKSPACE_WRITES=google`.
+  Not a data-access limit but an *auth* one — both act as a user, which needs
+  domain-wide delegation on a Workspace domain. A personal account cannot
+  provide it. Surfaced on the console rather than left implicit. See ADR 0009.
 
 ## Honest disclosure (state plainly in README, writeup, and video)
 

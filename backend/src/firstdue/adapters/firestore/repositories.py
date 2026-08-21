@@ -79,7 +79,7 @@ TRANSACTION_ATTEMPTS = 5
 #: How many times a contender re-attempts a lock whose transaction could not
 #: commit and whose document nobody holds. This is a tie-break between
 #: instances, not a retry policy for an outage -- but it has to be deep enough
-#: that a realistic fleet resolves. Measured against the emulator: two, four,
+#: that a realistic fleet resolves. Measured when this was written: two, four,
 #: and eight simultaneous contenders always settle on exactly one holder.
 LOCK_ACQUIRE_ATTEMPTS = 7
 
@@ -113,8 +113,8 @@ async def _commit(func: Any, *, store: DocumentStore, entity: str) -> Any:
     :class:`~firstdue.errors.WriteContentionError` (a ``StaleVersionError``,
     HTTP 409) that callers already know how to handle.
 
-    Found by running the concurrency contract tests against the emulator, not by
-    reading the client's source.
+    Found by running the concurrency contract tests, not by reading the
+    client's source.
     """
     from google.api_core.exceptions import Aborted
 
@@ -858,8 +858,8 @@ class FirestoreLockRepository(_Repository):
     won and this contender tries again, after a delay derived from its own
     owner id so two contenders do not retry in lockstep and collide forever.
 
-    Found by the concurrency contract tests failing about one run in three
-    against the emulator, with *both* instances reporting they had not run.
+    Found by the concurrency contract tests failing about one run in three,
+    with *both* instances reporting they had not run.
     """
 
     async def acquire(
