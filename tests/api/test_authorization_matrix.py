@@ -103,6 +103,12 @@ WRITE_ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "POST",
+        f"{PREFIX}/incidents/inc-x/frames",
+        Role.CAPTAIN,
+        {"image_base64": "aGVsbG8=", "camera_bearing_deg": 180.0},
+    ),
+    Endpoint(
+        "POST",
         f"{PREFIX}/incidents/inc-x/resources",
         Role.CAPTAIN,
         {"kind_id": "water-supply"},

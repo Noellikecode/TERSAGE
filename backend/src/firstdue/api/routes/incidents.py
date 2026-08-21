@@ -100,6 +100,25 @@ class ThermalFrameRequest(BaseModel):
     source: str = Field(default="recorded", max_length=60)
 
 
+class FrameAnalysisRequest(BaseModel):
+    """Raw imagery for the fusion agent to read itself.
+
+    Note what is **not** here: a face. The wall is resolved from the footprint
+    the slow loop measured, using the camera bearing. A caller that could name
+    the face could name it wrong, and a temperature on the wrong wall reads to
+    an officer as coverage of a side nobody photographed.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Base64 frame. JPEG, PNG, or WebP.
+    image_base64: str = Field(min_length=1, max_length=12_000_000)
+    mime_type: str = Field(default="image/jpeg", max_length=40)
+    #: Direction the lens points, degrees clockwise from north.
+    camera_bearing_deg: float = Field(ge=0.0, lt=360.0)
+    source: str = Field(default="recorded", max_length=60)
+
+
 class ResourceRequestBody(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -403,6 +422,44 @@ async def register_thermal(
     session = get_session(container)
     return await session.run_thermal_registration(
         incident_id, frame, correlation_id=get_correlation_id() or container.ids.new_id("corr")
+    )
+
+
+@router.post(
+    "/incidents/{incident_id}/frames",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Analyse a frame: imagery in, thermal and massing model out",
+)
+async def analyze_frame(
+    incident_id: str,
+    request: FrameAnalysisRequest,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_profile_write)],
+) -> dict[str, Any]:
+    """The autonomous imagery path.
+
+    The agent resolves the face from the slow loop's footprint, reads the frame
+    with Gemini, turns the observations into a registered thermal frame, and
+    amends the brief. It refuses rather than guesses: no pre-incident geometry,
+    or a bearing that resolves to no single wall, comes back with a stated
+    reason and changes nothing.
+    """
+    import base64
+    import binascii
+
+    try:
+        image = base64.b64decode(request.image_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValidationError("image_base64 is not valid base64") from exc
+
+    session = get_session(container)
+    return await session.run_frame_analysis(
+        incident_id,
+        image=image,
+        mime_type=request.mime_type,
+        camera_bearing_deg=request.camera_bearing_deg,
+        source=request.source,
+        correlation_id=get_correlation_id() or container.ids.new_id("corr"),
     )
 
 

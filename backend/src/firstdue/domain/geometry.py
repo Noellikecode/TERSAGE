@@ -10,6 +10,7 @@ renderer, including the static SVG fallback, shows it as disputed.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Final, Self, TypeAlias
@@ -148,3 +149,148 @@ def collapse_zone_radius(total_height_m: float) -> float:
     if total_height_m < 0:
         raise ValidationError("height cannot be negative")
     return round(total_height_m * COLLAPSE_ZONE_HEIGHT_MULTIPLIER, 2)
+
+
+#: The four labelled faces, in fireground order. ROOF is deliberately absent:
+#: it is not a vertical face and nothing resolves a ground-level bearing to it.
+GROUND_FACES: Final[tuple[FaceLabel, ...]] = (
+    FaceLabel.ALPHA,
+    FaceLabel.BRAVO,
+    FaceLabel.CHARLIE,
+    FaceLabel.DELTA,
+)
+
+#: How far off a face normal a camera bearing may be and still resolve to that
+#: face. Ninety degrees would tile the compass with no gaps, which sounds
+#: desirable and is not -- see the ambiguity margin below. Outside this, the
+#: reading is refused and the face stays UNSCANNED.
+FACE_BEARING_TOLERANCE_DEG: Final[float] = 55.0
+
+#: How much closer the best face must be than the runner-up. A camera on the
+#: corner of a building is equidistant from two walls, and picking one is
+#: picking whichever won a floating-point comparison -- it would paint a
+#: measured temperature onto a wall nobody pointed a camera at, which an
+#: officer then reads as coverage. A corner shot resolves to no face.
+FACE_AMBIGUITY_MARGIN_DEG: Final[float] = 10.0
+
+
+class FaceGeometry(BaseModel):
+    """One face of the footprint, with the compass bearing it looks out along.
+
+    Derived from the parcel footprint the **Geometry Watcher** established
+    during the slow loop. Nothing in the incident loop computes this: if the
+    slow loop never profiled the address, there are no face bearings and an
+    incoming frame cannot be resolved to a face at all.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    label: FaceLabel
+    #: Outward normal, degrees clockwise from north.
+    bearing_deg: float = Field(ge=0.0, lt=360.0)
+    #: Length of the wall, metres. The longest wall becomes Alpha.
+    length_m: float = Field(gt=0.0)
+
+
+def _bearing_of_edge(start: Point2D, end: Point2D) -> float:
+    """Outward normal of an edge, in degrees clockwise from north.
+
+    The footprint is in local ENU metres (x east, y north) and wound
+    counter-clockwise, so the outward normal of an edge running (x0,y0)->(x1,y1)
+    is the edge vector rotated -90 degrees.
+    """
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    # Rotate -90 degrees: (dx, dy) -> (dy, -dx), then convert to a compass
+    # bearing, which measures clockwise from north rather than
+    # counter-clockwise from east.
+    normal_x, normal_y = dy, -dx
+    return math.degrees(math.atan2(normal_x, normal_y)) % 360.0
+
+
+def face_geometries(footprint: tuple[Point2D, ...]) -> tuple[FaceGeometry, ...]:
+    """Resolve a footprint to four labelled faces with compass bearings.
+
+    **Alpha is the longest wall.** The fire service convention is that Alpha is
+    the address side, and a bare polygon does not know where the street is --
+    so this states the rule it actually applies rather than implying knowledge
+    it does not have. On the overwhelming majority of parcels the longest wall
+    is the street frontage; where it is not, the labelling is consistent and
+    wrong in a way an officer can see on the massing model and correct, which
+    is better than a labelling that is inconsistent between runs.
+
+    Bravo, Charlie and Delta follow clockwise from Alpha, which is the
+    convention on every fireground.
+
+    Raises:
+        ValidationError: for a footprint with fewer than three points, which is
+            not a polygon and cannot have faces.
+    """
+    if len(footprint) < 3:
+        raise ValidationError(
+            "a footprint needs at least three points to have faces",
+            details={"points": len(footprint)},
+        )
+
+    edges: list[tuple[float, float]] = []
+    for index, start in enumerate(footprint):
+        end = footprint[(index + 1) % len(footprint)]
+        length = math.hypot(end[0] - start[0], end[1] - start[1])
+        if length <= 0.0:
+            continue
+        edges.append((_bearing_of_edge(start, end), length))
+
+    if not edges:
+        raise ValidationError("a footprint of zero-length edges has no faces")
+
+    # Alpha is the longest wall. Ties break on the lower bearing so a square
+    # footprint labels identically on every run -- a massing model whose Alpha
+    # moved between two renders of the same building would be worse than one
+    # whose Alpha is arguable.
+    alpha_bearing = min(edges, key=lambda e: (-e[1], e[0]))[0]
+    longest = max(length for _, length in edges)
+
+    return tuple(
+        FaceGeometry(
+            label=label,
+            bearing_deg=(alpha_bearing + 90.0 * offset) % 360.0,
+            length_m=longest if offset % 2 == 0 else max(longest / 2.0, 0.1),
+        )
+        for offset, label in enumerate(GROUND_FACES)
+    )
+
+
+def angular_distance_deg(a: float, b: float) -> float:
+    """Smallest angle between two bearings, 0-180."""
+    return abs((a - b + 180.0) % 360.0 - 180.0)
+
+
+def resolve_face(
+    camera_bearing_deg: float,
+    footprint: tuple[Point2D, ...],
+    *,
+    tolerance_deg: float = FACE_BEARING_TOLERANCE_DEG,
+    ambiguity_margin_deg: float = FACE_AMBIGUITY_MARGIN_DEG,
+) -> FaceGeometry | None:
+    """Which face a camera on this bearing is looking at, or ``None``.
+
+    The camera bearing is the direction the lens points. A camera looking at
+    Alpha points roughly *opposite* Alpha's outward normal, so the two are
+    compared after reversing one of them.
+
+    Returns ``None`` rather than a best guess in two cases: nothing is within
+    ``tolerance_deg``, or the two nearest faces are within
+    ``ambiguity_margin_deg`` of each other and the shot is on a corner. A frame
+    attributed to the wrong wall is worse than a frame attributed to no wall --
+    the first paints a measured temperature onto a side nobody pointed a camera
+    at, and the officer reads it as coverage.
+    """
+    faces = face_geometries(footprint)
+    looking_at = (camera_bearing_deg + 180.0) % 360.0
+    ranked = sorted(faces, key=lambda f: angular_distance_deg(looking_at, f.bearing_deg))
+    best_off = angular_distance_deg(looking_at, ranked[0].bearing_deg)
+    if best_off > tolerance_deg:
+        return None
+    runner_up_off = angular_distance_deg(looking_at, ranked[1].bearing_deg)
+    if runner_up_off - best_off < ambiguity_margin_deg:
+        return None
+    return ranked[0]

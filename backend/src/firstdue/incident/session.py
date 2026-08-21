@@ -94,7 +94,7 @@ class IncidentSession:
         self.reconciler = Reconciler(
             clock=container.clock, ids=container.ids, model=container.model
         )
-        self.fusion = SensorFusion()
+        self.fusion = SensorFusion(vision=container.vision, ids=container.ids)
         self.resources = ResourceAgent(
             policy=container.policy,
             approvals=container.approvals,
@@ -111,6 +111,8 @@ class IncidentSession:
         # run that will pick it up. An AgentInput carries identifiers, never
         # payloads, so a thermal frame cannot travel inside one.
         self._pending_frames: dict[str, ThermalFrame] = {}
+        #: Raw imagery staged for the fusion agent's own extraction path.
+        self._pending_imagery: dict[str, dict[str, Any]] = {}
         self._pending_requests: dict[str, dict[str, Any]] = {}
         # Where a handler leaves its typed result for the caller. An
         # AgentOutcome carries identifiers; the route still wants the object.
@@ -157,11 +159,23 @@ class IncidentSession:
         return AgentOutcome(emitted_event_ids=(emission.emission_id,))
 
     async def _fusion_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
-        """Registering a thermal frame amends the brief and appends to the log."""
+        """Registering a thermal frame amends the brief and appends to the log.
+
+        Two entry points converge here: a pre-extracted frame from a ground
+        station, and raw imagery the agent extracts itself. The second is the
+        autonomous path, and it produces the first.
+        """
+        incident_id = _one(payload, "incident_id")
+
+        staged = self._pending_imagery.pop(payload.correlation_id, None)
+        if staged is not None:
+            result = await self.analyze_imagery(incident_id, **staged)
+            self._last_thermal[incident_id] = result
+            return AgentOutcome()
+
         frame = self._pending_frames.pop(payload.correlation_id, None)
         if frame is None:  # pragma: no cover - the caller always stages one
             return AgentOutcome()
-        incident_id = _one(payload, "incident_id")
         result = await self.register_thermal(incident_id, frame)
         self._last_thermal[incident_id] = result
         return AgentOutcome()
@@ -249,6 +263,35 @@ class IncidentSession:
             )
         finally:
             self._pending_frames.pop(correlation_id, None)
+        return self._last_thermal.pop(incident_id, {})
+
+    async def run_frame_analysis(
+        self,
+        incident_id: str,
+        *,
+        image: bytes,
+        mime_type: str,
+        camera_bearing_deg: float,
+        source: str,
+        correlation_id: str,
+    ) -> dict[str, Any]:
+        """Run the imagery path through the runtime, like any other agent work."""
+        grant = await self._require_grant(incident_id)
+        self._pending_imagery[correlation_id] = {
+            "image": image,
+            "mime_type": mime_type,
+            "camera_bearing_deg": camera_bearing_deg,
+            "source": source,
+        }
+        try:
+            await self.fleet.run(
+                "sensor-fusion",
+                correlation_id=correlation_id,
+                ids={"incident_id": incident_id},
+                grant=grant,
+            )
+        finally:
+            self._pending_imagery.pop(correlation_id, None)
         return self._last_thermal.pop(incident_id, {})
 
     async def run_resource_request(
@@ -493,6 +536,61 @@ class IncidentSession:
             "brief_version": emission.version,
             "unscanned_faces": [str(c.face) for c in coverage if not c.scanned],
             "voids": len(voids),
+        }
+
+    async def analyze_imagery(
+        self,
+        incident_id: str,
+        *,
+        image: bytes,
+        mime_type: str,
+        camera_bearing_deg: float,
+        source: str,
+    ) -> dict[str, Any]:
+        """Imagery in, amended brief and massing model out.
+
+        The frame is resolved to a face using the footprint the **Geometry
+        Watcher** measured during the slow loop, read off the profile snapshot
+        this incident opened against. A refusal -- no profile, or a corner shot
+        that resolves to no single wall -- is returned as a stated reason and
+        amends nothing, because a frame on no wall is not coverage of any wall.
+        """
+        incident = await self._require_incident(incident_id)
+        snapshot = await self._container.snapshots.get(incident.profile_snapshot_id)
+        spec = snapshot.geometry if snapshot is not None else None
+        now = self._container.clock.now()
+
+        analysis = await self.fusion.analyze_frame(
+            incident_id=incident_id,
+            image=image,
+            mime_type=mime_type,
+            camera_bearing_deg=camera_bearing_deg,
+            observed_at=now,
+            spec=spec,
+            source=source,
+        )
+        if analysis.rejected is not None:
+            return {
+                "registered": False,
+                "reason": analysis.rejected.reason,
+                "cold_start": analysis.rejected.cold_start,
+                "model_ref": analysis.model_ref,
+            }
+
+        coverage = self.fusion.coverage(incident_id, now=now)
+        voids = self.fusion.voids(incident_id, now=now)
+        emission = await self.emit_amendment(incident_id, thermal=coverage, voids=voids)
+        return {
+            "registered": analysis.registered,
+            "frame_id": analysis.frame.frame_id if analysis.frame else None,
+            "face": str(analysis.frame.face) if analysis.frame else None,
+            "observed_storeys": analysis.observed_storeys,
+            "obstructions": [str(o) for o in analysis.obstructions],
+            "unknowns": list(analysis.unknowns),
+            "brief_version": emission.version,
+            "unscanned_faces": [str(c.face) for c in coverage if not c.scanned],
+            "voids": len(voids),
+            "model_ref": analysis.model_ref,
         }
 
     # ----------------------------------------------------------- resources
