@@ -78,6 +78,48 @@ class Obstruction(BaseModel):
     status: AssertionStatus = AssertionStatus.CONFIRMED
 
 
+class ThermalCell(BaseModel):
+    """One measured patch of a face, in face-plane coordinates.
+
+    This is the heat map, and it is **registered** rather than decorative: a
+    cell names the rectangle of the wall it was measured on, so a renderer maps
+    it onto the extruded face quad at exactly the place the camera saw it.
+
+    Coordinates are fractions of the face itself, which the renderer already
+    knows the real size of -- the width comes from the footprint edge the
+    Geometry Watcher measured, the height from the levels it derived. So the
+    spec stays small and the overlay still lands in metres.
+
+    * ``u`` runs across the face width, 0 at the first corner of the edge.
+    * ``v`` runs **up** the face, 0 at the ground and 1 at the eaves.
+
+    ``v`` is deliberately not image ``y``. Image y grows downward and a renderer
+    handed raw image coordinates would paint the cockloft onto the foundation,
+    which is precisely inverted from the one thing this overlay exists to show.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    u_from: float = Field(ge=0.0, le=1.0)
+    u_to: float = Field(gt=0.0, le=1.0)
+    v_from: float = Field(ge=0.0, le=1.0)
+    v_to: float = Field(gt=0.0, le=1.0)
+    temperature_c: float = Field(ge=-50.0, le=1500.0)
+
+    @model_validator(mode="after")
+    def _extents_are_ordered(self) -> Self:
+        if self.u_to <= self.u_from or self.v_to <= self.v_from:
+            raise ValidationError(
+                "a thermal cell must have positive extent in both directions",
+                details={"u": [self.u_from, self.u_to], "v": [self.v_from, self.v_to]},
+            )
+        return self
+
+    @property
+    def height_fraction(self) -> float:
+        return self.v_to - self.v_from
+
+
 class Face(BaseModel):
     """A labelled exterior face, and what thermal coverage it has."""
 
@@ -86,6 +128,10 @@ class Face(BaseModel):
     label: FaceLabel
     thermal: FaceThermal = UnscannedValue()
     observed_at: datetime | None = None
+    #: The registered heat map. Every cell is a rectangle a camera actually
+    #: measured; there is no cell anywhere that was interpolated, defaulted, or
+    #: predicted, and the gaps between cells are gaps on purpose.
+    thermal_cells: tuple[ThermalCell, ...] = ()
 
     @model_validator(mode="after")
     def _coverage_requires_timestamp(self) -> Self:
@@ -94,7 +140,29 @@ class Face(BaseModel):
                 "a measured face temperature must carry the time it was observed",
                 details={"face": str(self.label)},
             )
+        # The type-level version of "UNSCANNED is not cool". A face nobody
+        # measured cannot carry cells, so no renderer can shade one warm.
+        if self.thermal_cells and not isinstance(self.thermal, QuantityValue):
+            raise ValidationError(
+                "an unscanned or unavailable face cannot carry thermal cells",
+                details={"face": str(self.label)},
+            )
         return self
+
+    @property
+    def peak_cell(self) -> ThermalCell | None:
+        """The hottest measured cell. What the face summary reports."""
+        return max(self.thermal_cells, key=lambda c: c.temperature_c, default=None)
+
+    @property
+    def scanned_fraction(self) -> float:
+        """Fraction of the face area the cells actually cover.
+
+        Summed cell area, capped at one. Rendered next to the heat map so a
+        partly-flown wall cannot read as a fully-measured one.
+        """
+        area = sum((c.u_to - c.u_from) * (c.v_to - c.v_from) for c in self.thermal_cells)
+        return round(min(1.0, max(0.0, area)), 3)
 
 
 class GeometrySpec(BaseModel):

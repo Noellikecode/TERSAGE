@@ -9,8 +9,8 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { GeometryCanvas, describeGeometry, faceLabelFor } from '@/components/GeometryCanvas';
-import { GEOMETRY } from './fixtures';
+import { GeometryCanvas, describeGeometry, faceLabelFor, ThermalLegend, thermalStep } from '@/components/GeometryCanvas';
+import { GEOMETRY, GEOMETRY_SCANNED } from './fixtures';
 
 describe('the geometry view', () => {
   it('falls back to the static SVG when WebGL is unavailable', () => {
@@ -66,5 +66,50 @@ describe('the geometry description', () => {
     expect(description).toMatch(/UNSCANNED/);
     expect(description).not.toMatch(/\bcool\b(?!\.)/i);
     expect(description).not.toMatch(/\bclear\b/i);
+  });
+});
+
+describe('the thermal heat map', () => {
+  it('reads every measured cell as a number, not colour alone', () => {
+    render(<ThermalLegend faces={GEOMETRY_SCANNED.spec.faces} />);
+    // The two darkest ramp steps fall below 3:1 against the surface, so these
+    // labels are what makes the overlay legible at all.
+    expect(screen.getByText('22 C')).toBeInTheDocument();
+    expect(screen.getByText('120 C')).toBeInTheDocument();
+    expect(screen.getByText('340 C')).toBeInTheDocument();
+  });
+
+  it('lists only faces that were actually flown', () => {
+    render(<ThermalLegend faces={GEOMETRY_SCANNED.spec.faces} />);
+    expect(screen.getByText('ALPHA')).toBeInTheDocument();
+    // An unflown face must not appear with a temperature beside it.
+    expect(screen.queryByText('BRAVO')).not.toBeInTheDocument();
+    expect(screen.queryByText('CHARLIE')).not.toBeInTheDocument();
+  });
+
+  it('renders nothing at all when no face has been flown', () => {
+    const { container } = render(<ThermalLegend faces={GEOMETRY.spec.faces} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('says the caveat where the reading is', () => {
+    render(<ThermalLegend faces={GEOMETRY_SCANNED.spec.faces} />);
+    expect(screen.getByText(/cannot see through walls/i)).toBeInTheDocument();
+    expect(screen.getByText(/UNSCANNED, not cool/i)).toBeInTheDocument();
+  });
+
+  it('puts the measured readings in the screen-reader description', () => {
+    const described = describeGeometry(GEOMETRY_SCANNED, 'ALPHA');
+    expect(described).toContain('ALPHA measured ground up: 22 C, 120 C, 340 C');
+    expect(described).toContain('Surface temperature only');
+  });
+
+  it('maps temperature onto a monotonic ramp', () => {
+    // Hotter is never a lower step. That is the whole contract of a sequential
+    // ramp, and it is what lets a reader order two cells without a legend.
+    const steps = [20, 60, 140, 250, 400, 900].map(thermalStep);
+    expect(steps).toEqual([...steps].sort((a, b) => a - b));
+    expect(thermalStep(-40)).toBe(0);
+    expect(thermalStep(9000)).toBe(4);
   });
 });
