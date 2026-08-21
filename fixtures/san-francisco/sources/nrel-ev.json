@@ -1,0 +1,19 @@
+{
+  "note": "Synthetic NREL alternative-fuel station rows.",
+  "records": [
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "level": "DC_FAST",
+        "network": "SYNTHETIC NETWORK",
+        "ports": 4,
+        "station_id": "88213"
+      },
+      "observed_at": "2026-04-22T08:00:00+00:00",
+      "record_ref": "nrel-ev/station-88213"
+    }
+  ],
+  "synthetic": true
+}

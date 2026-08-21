@@ -1,0 +1,408 @@
+"""One running incident, and everything the API needs to drive it.
+
+The session holds the emissions produced so far so the SSE stream can replay
+them in order to a reconnecting tablet. It is not the record -- the incident log
+is -- but it is the ordered, already-persisted view the stream reads from, which
+is what makes a resumed stream show what the original one sent rather than a
+fresh render that might differ.
+
+Late data never delays earlier output. Each stage produces a new emission and
+appends it; nothing here waits on a source before emitting what it already has.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any, Final
+
+from firstdue.container import Container
+from firstdue.domain.briefs import BriefEmission
+from firstdue.domain.conflicts import ConflictResolution, ConflictStatus
+from firstdue.domain.enums import Classification, PolicyAction, SourceType
+from firstdue.domain.facts import StructuralFact, natural_fact_id
+from firstdue.domain.identity import IncidentGrant
+from firstdue.domain.keys import Keys
+from firstdue.domain.profiles import ProfileEvent, ProfileEventType
+from firstdue.domain.values import TextValue
+from firstdue.errors import NotFoundError, StaleVersionError
+from firstdue.extraction.coercion import coerce_value
+from firstdue.incident.controller import IncidentController, OpenIncidentResult
+from firstdue.incident.fusion import SensorFusion, ThermalFrame
+from firstdue.incident.reconciler import Reconciler
+from firstdue.incident.recorder import IncidentRecorder
+from firstdue.incident.resources import ResourceAgent, ResourceOutcome
+from firstdue.incident.timer import truss_time_window
+from firstdue.observability.logging import get_logger
+from firstdue.observability.metrics import METRICS
+from firstdue.services.grants import GrantService
+
+logger = get_logger(__name__)
+
+IC_AGENT: Final[str] = "incident-controller"
+
+
+class IncidentSession:
+    """The incident loop's live state, per process."""
+
+    def __init__(self, container: Container) -> None:
+        self._container = container
+        self.recorder = IncidentRecorder(
+            incident_log=container.incident_log,
+            write_actions=container.write_actions,
+            audit=container.audit,
+            clock=container.clock,
+            ids=container.ids,
+            rms=container.write_targets.get("department-rms"),
+        )
+        self.controller = IncidentController(
+            incidents=container.incidents,
+            profiles=container.profiles,
+            snapshots=container.snapshots,
+            grants=GrantService(
+                grants=container.grants,
+                audit=container.audit,
+                clock=container.clock,
+                ids=container.ids,
+            ),
+            recorder=self.recorder,
+            city=container.city,
+            clock=container.clock,
+            ids=container.ids,
+            bus=container.bus,
+        )
+        self.reconciler = Reconciler(
+            clock=container.clock, ids=container.ids, model=container.model
+        )
+        self.fusion = SensorFusion()
+        self.resources = ResourceAgent(
+            policy=container.policy,
+            approvals=container.approvals,
+            write_actions=container.write_actions,
+            target=container.write_targets["agency-notifications"],
+            audit=container.audit,
+            clock=container.clock,
+            ids=container.ids,
+        )
+        #: Persisted emissions, in order, per incident. What the stream replays.
+        self._emissions: dict[str, list[BriefEmission]] = {}
+        self._grants: dict[str, IncidentGrant] = {}
+
+    # ------------------------------------------------------------ emissions
+
+    async def emit_instant(self, opened: OpenIncidentResult) -> BriefEmission:
+        """Build and persist the instant brief. No model call on this path."""
+        truss = None
+        truss_fact = opened.snapshot.facts.get(Keys.LIGHTWEIGHT_TRUSS)
+        if truss_fact is not None and truss_fact.value.is_known:
+            truss = truss_time_window(
+                dispatched_at=opened.incident.dispatched_at,
+                now=self._container.clock.now(),
+                fact_id=truss_fact.fact_id,
+            )
+
+        emission = self.reconciler.instant(
+            opened.snapshot,
+            incident_id=opened.incident.incident_id,
+            collapse_zone_m=(
+                opened.snapshot.geometry.collapse_zone_radius_m
+                if opened.snapshot.geometry
+                else None
+            ),
+            truss_window=truss,
+        )
+        self._grants[opened.incident.incident_id] = opened.grant
+        return await self._persist(emission)
+
+    async def emit_enriched(self, incident_id: str) -> BriefEmission:
+        previous = self.latest(incident_id)
+        if previous is None:
+            raise NotFoundError("no brief to enrich", details={"incident_id": incident_id})
+        incident = await self._require_incident(incident_id)
+        snapshot = await self._container.snapshots.get(incident.profile_snapshot_id)
+        if snapshot is None:
+            raise NotFoundError("profile snapshot is missing", details={"incident_id": incident_id})
+        emission = await self.reconciler.enriched(previous, snapshot)
+        return await self._persist(emission)
+
+    async def emit_amendment(self, incident_id: str, **kwargs: Any) -> BriefEmission:
+        previous = self.latest(incident_id)
+        if previous is None:
+            raise NotFoundError("no brief to amend", details={"incident_id": incident_id})
+        return await self._persist(self.reconciler.amendment(previous, **kwargs))
+
+    async def _persist(self, emission: BriefEmission) -> BriefEmission:
+        """Write to the log, then hold the persisted copy. Never the reverse."""
+        stored = await self.recorder.record_emission(emission)
+        self._emissions.setdefault(stored.incident_id, []).append(stored)
+        return stored
+
+    def latest(self, incident_id: str) -> BriefEmission | None:
+        versions = self._emissions.get(incident_id)
+        return versions[-1] if versions else None
+
+    def emissions_after(self, incident_id: str, version: int) -> Sequence[BriefEmission]:
+        """Everything after a version, in order. What a reconnect replays."""
+        return [e for e in self._emissions.get(incident_id, []) if e.version > version]
+
+    def forget(self, incident_id: str) -> None:
+        self._emissions.pop(incident_id, None)
+        self._grants.pop(incident_id, None)
+
+    # -------------------------------------------------------------- the 360
+
+    async def resolve(
+        self,
+        incident_id: str,
+        *,
+        conflict_id: str,
+        observed_value: str,
+        resolved_by: str,
+        note: str,
+    ) -> dict[str, Any]:
+        """An IC settled a disagreement by looking at the building.
+
+        Writes a live-observation fact, closes the conflict, bumps
+        ``profile_version``, records it in the log, and emits a marked
+        amendment. All five, because the resolution is worth nothing if the
+        brief still shows the disagreement.
+        """
+        incident = await self._require_incident(incident_id)
+        profile = await self._container.profiles.get(incident.address_id)
+        if profile is None:
+            raise NotFoundError(
+                "no profile for this incident", details={"incident_id": incident_id}
+            )
+
+        conflict = next((c for c in profile.conflicts if c.conflict_id == conflict_id), None)
+        if conflict is None:
+            raise NotFoundError("conflict not found", details={"conflict_id": conflict_id})
+        if conflict.status is not ConflictStatus.OPEN:
+            raise NotFoundError(
+                "conflict is already resolved", details={"conflict_id": conflict_id}
+            )
+
+        now = self._container.clock.now()
+        value = coerce_value(conflict.canonical_key, observed_value) or TextValue(
+            text=observed_value[:2000]
+        )
+        fact = StructuralFact(
+            fact_id=natural_fact_id(
+                address_id=profile.address_id,
+                canonical_key=conflict.canonical_key,
+                source_ref=f"ic-resolution/{incident_id}/{conflict_id}",
+                observed_at=now,
+                rendered_value=value.render(),
+            ),
+            address_id=profile.address_id,
+            canonical_key=conflict.canonical_key,
+            value=value,
+            # A live observation outranks every filed record, by tier.
+            source_type=SourceType.IC_RESOLUTION,
+            source_ref=f"ic-resolution/{incident_id}/{conflict_id}",
+            source_snapshot_id=f"ic:{incident_id}:{conflict_id}",
+            observed_at=now,
+            ingested_at=now,
+            confidence=0.97,
+            classification=Classification.PUBLIC,
+            produced_by_agent=IC_AGENT,
+        )
+        await self._container.facts.append(fact)
+
+        resolution = ConflictResolution(
+            resolved_at=now,
+            resolving_record_id=incident_id,
+            resolving_fact_id=fact.fact_id,
+            resolved_by=resolved_by,
+            note=note or f"Settled on scene during the 360 at incident {incident_id}.",
+        )
+        await self._container.conflicts.resolve(conflict_id, resolution)
+
+        updated = profile.with_fact(
+            fact,
+            event=ProfileEvent(
+                event_id=f"pevt_ic_{conflict_id.removeprefix('conflict_')}",
+                sequence=profile.next_sequence,
+                occurred_at=now,
+                type=ProfileEventType.CONFLICT_RESOLVED,
+                actor=resolved_by,
+                summary=f"IC resolution: {conflict.canonical_key} observed as {value.render()}",
+                canonical_keys=(conflict.canonical_key,),
+                fact_ids=(fact.fact_id,),
+                conflict_id=conflict_id,
+            ),
+        )
+        updated = updated.model_copy(
+            update={
+                "conflicts": tuple(
+                    c.resolve(resolution) if c.conflict_id == conflict_id else c
+                    for c in updated.conflicts
+                )
+            }
+        )
+        try:
+            saved = await self._container.profiles.save(
+                updated, expected_version=profile.profile_version
+            )
+        except StaleVersionError:
+            logger.info("ic_resolution_contended", extra={"incident_id": incident_id})
+            saved = updated
+
+        await self.recorder.record_resolution(
+            incident_id,
+            conflict_id=conflict_id,
+            resolved_by=resolved_by,
+            note=note,
+            fact_id=fact.fact_id,
+        )
+        await self.recorder.record_observed_fact(
+            incident_id,
+            fact_id=fact.fact_id,
+            canonical_key=conflict.canonical_key,
+            source=str(SourceType.IC_RESOLUTION),
+        )
+
+        emission = await self.emit_amendment(
+            incident_id,
+            resolutions=(
+                f"{conflict.canonical_key} observed as {value.render()} by {resolved_by}. "
+                f"Both original records are retained.",
+            ),
+        )
+        return {
+            "conflict_id": conflict_id,
+            "fact_id": fact.fact_id,
+            "profile_version": saved.profile_version,
+            "brief_version": emission.version,
+            "resolved_by": resolved_by,
+        }
+
+    async def register_thermal(self, incident_id: str, frame: ThermalFrame) -> dict[str, Any]:
+        """Register a frame and amend the brief with current coverage."""
+        self.fusion.register(frame)
+        now = self._container.clock.now()
+        coverage = self.fusion.coverage(incident_id, now=now)
+        voids = self.fusion.voids(incident_id, now=now)
+        emission = await self.emit_amendment(incident_id, thermal=coverage, voids=voids)
+        return {
+            "frame_id": frame.frame_id,
+            "face": str(frame.face),
+            "brief_version": emission.version,
+            "unscanned_faces": [str(c.face) for c in coverage if not c.scanned],
+            "voids": len(voids),
+        }
+
+    # ----------------------------------------------------------- resources
+
+    async def request_resource(
+        self, incident_id: str, *, kind_id: str, detail: str, approval_id: str | None
+    ) -> ResourceOutcome:
+        grant = await self._require_grant(incident_id)
+        incident = await self._require_incident(incident_id)
+        outcome = await self.resources.request(
+            kind_id,
+            grant=grant,
+            incident_id=incident_id,
+            address_id=incident.address_id,
+            detail=detail,
+            approval_id=approval_id,
+        )
+        # Delivery rate, counted at the point of truth: a request the gateway
+        # allowed either reached its target or did not. A commitment awaiting
+        # approval is neither -- it was never sent, so it is not a delivery
+        # failure and is not counted as one.
+        if outcome.action is not PolicyAction.REQUIRE_APPROVAL:
+            METRICS.record_notification(delivered=bool(outcome.sent and outcome.external_ref))
+
+        if outcome.sent and outcome.external_ref:
+            await self.recorder.record_notification(
+                incident_id,
+                target=kind_id,
+                external_ref=outcome.external_ref,
+                autonomous=approval_id is None,
+            )
+        return outcome
+
+    async def approve(
+        self, incident_id: str, approval_id: str, *, decided_by: str
+    ) -> dict[str, Any]:
+        """Grant a staged approval and execute the request it was holding."""
+        from firstdue.domain.work import ApprovalStatus
+
+        approval = await self._container.approvals.get(approval_id)
+        if approval is None:
+            raise NotFoundError("approval not found", details={"approval_id": approval_id})
+        now = self._container.clock.now()
+        granted = await self._container.approvals.save(
+            approval.model_copy(
+                update={
+                    "status": ApprovalStatus.GRANTED,
+                    "decided_at": now,
+                    "decided_by": decided_by,
+                }
+            )
+        )
+        await self.recorder.record_approval(
+            incident_id,
+            approval_id=approval_id,
+            decided_by=decided_by,
+            threshold=str(approval.threshold),
+        )
+
+        kind_id = approval_id.rsplit("_", 1)[-1]
+        outcome = await self.request_resource(
+            incident_id, kind_id=kind_id, detail="", approval_id=approval_id
+        )
+        return {
+            "approval_id": granted.approval_id,
+            "decided_by": decided_by,
+            "executed": outcome.sent,
+            "external_ref": outcome.external_ref,
+            "action": str(outcome.action),
+        }
+
+    # ------------------------------------------------------------ internals
+
+    async def _require_incident(self, incident_id: str) -> Any:
+        incident = await self._container.incidents.get(incident_id)
+        if incident is None:
+            raise NotFoundError("incident not found", details={"incident_id": incident_id})
+        return incident
+
+    async def _require_grant(self, incident_id: str) -> IncidentGrant:
+        grant = self._grants.get(incident_id)
+        if grant is not None:
+            return grant
+        incident = await self._require_incident(incident_id)
+        stored = await self._container.grants.get_incident_grant(incident.grant_id)
+        if stored is None:
+            raise NotFoundError("incident grant not found", details={"incident_id": incident_id})
+        self._grants[incident_id] = stored
+        return stored
+
+
+class SessionRegistry:
+    """One session per process. Held on the app, not in a module global."""
+
+    def __init__(self) -> None:
+        self._session: IncidentSession | None = None
+
+    def for_container(self, container: Container) -> IncidentSession:
+        if self._session is None:
+            self._session = IncidentSession(container)
+        return self._session
+
+    def forget(self, incident_id: str) -> None:
+        if self._session is not None:
+            self._session.forget(incident_id)
+
+
+_REGISTRIES: dict[int, SessionRegistry] = {}
+
+
+def sessions(container: Container) -> SessionRegistry:
+    """The registry for this container. Keyed by identity, not by a global."""
+    return _REGISTRIES.setdefault(id(container), SessionRegistry())
+
+
+def get_session(container: Container) -> IncidentSession:
+    return sessions(container).for_container(container)

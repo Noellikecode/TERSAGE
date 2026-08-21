@@ -1,0 +1,21 @@
+{
+  "_comment": "Source of truth: Topic in backend/src/firstdue/domain/events.py.",
+  "topics": [
+    "agent.published",
+    "approval.staged",
+    "brief.emitted",
+    "conflict.detected",
+    "fact.observed",
+    "fact.written",
+    "geometry.stale",
+    "incident.closed",
+    "incident.opened",
+    "notification.sent",
+    "profile.materialized",
+    "queue.ranked",
+    "record.written",
+    "referral.staged",
+    "source.poll",
+    "thermal.frame.received"
+  ]
+}

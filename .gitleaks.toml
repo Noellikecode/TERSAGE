@@ -1,0 +1,28 @@
+title = "FIRST DUE secret scan"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "gcp-service-account-json"
+description = "Google service account private key material"
+regex = '''"type"\s*:\s*"service_account"'''
+tags = ["gcp", "credentials"]
+
+[[rules]]
+id = "google-api-key"
+description = "Google API key"
+regex = '''AIza[0-9A-Za-z\-_]{35}'''
+tags = ["gcp", "key"]
+
+[allowlist]
+description = "Synthetic fixtures and documentation placeholders only"
+paths = [
+  '''fixtures/.*''',
+  '''\.env\.example''',
+  '''docs/.*\.md''',
+]
+regexes = [
+  '''REPLACE_ME''',
+  '''your-project-id''',
+]

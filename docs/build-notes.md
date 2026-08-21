@@ -1,0 +1,580 @@
+# Build notes
+
+Running record of decisions, deviations, commands, and risks. Newest phase last.
+
+---
+
+## Phase 1 — Repository foundation and executable domain contracts
+
+**Date:** 2026-08-20
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Python source lives in `backend/src/firstdue`, tests in root `tests/`, one root `pyproject.toml` | Matches the PRD tree and the required monorepo layout while keeping a single toolchain config and one `uv` environment. Hatchling builds the package from `backend/src`. |
+| 2 | `is_known` is a read-only property, not a field | As a field it could be forged past `extra="forbid"` — `UnknownValue(is_known=True)` would have been constructible. A property cannot be. |
+| 3 | `BuildingProfile.fact_sets` holds every fact; `facts` is a computed resolved view | The PRD types both `BuildingProfile.facts` and `ProfileSnapshot.facts` as one fact per key, but "conflicting facts both remain stored" needs a set per key. `fact_sets` stores; `facts` resolves. `ProfileSnapshot.facts` keeps the PRD shape exactly. **Deviation, deliberate.** |
+| 4 | Merge order: live observation → known-beats-absent → tier → recency → confidence → `fact_id` | "Memory never outranks live observation, always" is absolute, so tier is compared first. An *absent* live reading is handled separately: within the live tier strict recency wins, so lapsed thermal coverage shows as `UNSCANNED` rather than reverting to a stale hot reading. `fact_id` is the final tie-break purely for determinism across replays. |
+| 5 | Events are validated to contain identifier tokens only | Makes "events carry IDs, never payloads" checkable rather than a convention. A validator rejects any value with whitespace. |
+| 6 | `PolicyDecision.decided_by` is a `Literal` constant | Makes "no model participates in an authorization decision" auditable in the record itself, not just in a README. |
+| 7 | `ports/` package added (not in the PRD tree) | Protocols span layers; putting them in `domain/` would make the domain import I/O concerns. |
+| 8 | Live mode raises `ConfigurationError` instead of falling back to fakes | A process that silently downgraded would lie about where its data came from. Live adapters land in a later phase; today the failure is loud and explicit. |
+| 9 | `capabilities.py` drives the console's built/planned split | Keeps the shell honest: it renders what exists and labels what does not, instead of buttons that do nothing. |
+| 10 | Deterministic seed writes `.demo-state/seed.json` with a content hash | Makes "deterministic reset" verifiable — `firstdue verify-seed` rebuilds and compares. |
+| 11 | Fake adapters do real work | `FakeModelClient` extracts against real character offsets; `FakeSourceAdapter` runs a real circuit breaker with cooldown and half-open probe; `FakeWriteTarget` really dedupes. No pass-only stubs. |
+| 12 | Ruff: `ANN101`/`ANN102` disabled (deprecated), `UP040` disabled | The first two are noise; PEP 695 aliases interact badly with pydantic discriminated unions. |
+
+### Deviations from the PRD
+
+- **`BuildingProfile.facts` shape** — see decision 3. `ProfileSnapshot` matches the PRD exactly.
+- **`ports/` package** — see decision 7. The PRD tree was prefixed "incl.", so this is an addition, not a contradiction.
+- **Live adapters not wired** — Phase 1 delivers the credential-free path and the seams. Documented in the container and in `docs/setup.md`.
+
+### Commands run
+
+```bash
+uv python install 3.12
+uv sync
+uv run ruff check . && uv run ruff format --check .
+uv run mypy                                   # strict, 65 files
+uv run pytest                                 # 206 tests
+uv run firstdue seed && uv run firstdue verify-seed
+uv run firstdue schema --out docs/openapi.json
+cd frontend && npm install && npm run typecheck && npm run test && npm run build
+```
+
+### Verification evidence
+
+- Backend: **206 passed**, Ruff clean, `mypy` strict clean across 65 files.
+- Console: **10 passed** (vitest), `tsc --noEmit` clean, `next build` succeeded.
+- OpenAPI generates: 3 paths (`/healthz`, `/readyz`, `/api/v1/system/status`).
+- Seed determinism: rebuild produces an identical content hash.
+- Smoke test: API served on :8000, console on :3000, console rendered live
+  backend state (see phase report).
+
+### Risks carried into phase 2
+
+| Risk | Mitigation |
+|---|---|
+| Docker and Terraform are not installed on this machine, so `make docker-build` and the Terraform work are **unverified locally** | CI builds both images and asserts non-root + `PORT` + `/healthz`. Do not claim a green container smoke test until CI has run. |
+| gitleaks is not installed locally; `make secret-scan` prints an install hint instead of scanning | CI runs `gitleaks-action` on every push. Install locally with `brew install gitleaks`. |
+| The `local_status` heuristic on `FactSet` overlaps with the conflict engine landing in phase 2 | Documented on the property. The engine's `Conflict` records are authoritative; `local_status` is the fallback view when no conflict record exists. |
+| `_DOCUMENT_SOURCES` (which sources require an extraction span) is a small hand-maintained set | Extend it as watchers land in phase 2. |
+| No live adapters means fake/live parity is asserted by design, not yet by a shared test suite | Phase where live adapters land should run the same behavioural tests against both. |
+
+---
+
+## Phase 2 — Durable memory, registry, event infrastructure, deterministic engines
+
+**Date:** 2026-08-20
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Derived identifiers for everything the system re-derives — conflicts, snapshots, materializer timeline events, idempotency documents, seeded subscriptions | Idempotency becomes a property of the arithmetic rather than a flag somebody remembers to check. Re-running the conflict engine over unchanged facts produces the same conflict id, so "already recorded" is an exact test. See [ADR 0005](adr/0005-derived-identifiers.md). |
+| 2 | The in-memory repositories are a second implementation, not a stub, and both backends run one contract suite | Fake mode is what `make demo` runs and what a judge evaluates, so it cannot behave differently from production. See [ADR 0006](adr/0006-one-contract-two-backends.md). |
+| 3 | Failures are classified into `TRANSIENT` / `CONTENDED` / `PERMANENT` / `POISON` before any retry decision | Retrying a poison message forever is how a queue stops moving; retrying a correct refusal is asking the authorization system to change its mind. See [ADR 0007](adr/0007-failure-classification.md). |
+| 4 | Backoff jitter is **derived** from the event id and attempt number, not drawn from a PRNG | A replay must reproduce the timing it recorded, and a test should assert the schedule rather than tolerate it. Nothing in `reliability/` reads a clock or a random number generator. |
+| 5 | One `EventDispatcher` behind both the in-memory bus and the Pub/Sub push endpoint | A delivery policy that lives in one adapter is a delivery policy the other adapter gets wrong. What fake mode proves is now literally what the deployed path does. |
+| 6 | Firestore documents store the model as one canonical JSON string plus lifted index fields | Round-trip fidelity (tuples, frozensets, discriminated unions, aware datetimes) and byte-identical replay. Also the only way to store a building footprint at all: Firestore rejects nested arrays, and a footprint is a tuple of coordinate pairs. **Deviation from a "native map" encoding, deliberate.** |
+| 7 | `STORAGE_BACKEND` and `EVENT_BACKEND` are independent of `USE_FAKE_AGENTS` | The Firestore repositories and the Pub/Sub transport run against local emulators with no credentials, which is how they are tested. Fake mode is about agents, models, and sources; it is not about where bytes are stored. |
+| 8 | The internal push endpoint fails **closed** — no verifier configured means every request is refused | This endpoint injects events into the fleet. An unauthenticated one lets anyone publish a `fact.written` for any address and have the fleet act on it. |
+| 9 | The fake-mode push token is derived from `DEMO_SEED` and printed by `firstdue status` | The demo can exercise an authenticated endpoint without a secret existing in any file. Live mode ignores it entirely and verifies a Google-issued OIDC token. |
+| 10 | `Capability.WRITE` means writing *outside* the department's own store | An agent that only appends facts to a profile declares the `write:profile` scope and no write targets. Reading it the other way would have forced every watcher to declare a fictional external target. |
+| 11 | Descriptor publication requires an explicit `published_at` | Republishing an identical descriptor must be a true no-op. Stamping the server clock would have made every republish differ by a timestamp and trip the immutability check. |
+| 12 | The demo seed builds its conflict by calling the production conflict engine | The seeded disagreement is now produced by the same code path that runs in production. If a rule changes, the demo changes with it. The seed asserts the engine produced exactly one storey conflict rather than trusting it. |
+| 13 | Google client libraries are dev dependencies as well as an optional extra | The Firestore and Pub/Sub adapters are type-checked against the real client API instead of an `ignore_missing_imports` hole. No credentials are needed to install them, and fake mode still never imports them. |
+| 14 | Pub/Sub attributes use `event_topic`, not `topic` | The publisher client takes attributes as keyword arguments, so an attribute named `topic` is swallowed as the client's own parameter. `RESERVED_ATTRIBUTE_NAMES` now makes that a validation error at encode time. Found by the Pub/Sub emulator test, not by review. |
+
+### Deviations from the PRD
+
+- **`ports/` gains six repositories** the PRD did not name — snapshots, locks,
+  idempotency, agent runs, compensations — because the phase's own requirements
+  (stable snapshot ids, distributed locks, duplicate-event protection, terminal
+  run states, compensating-action records) need somewhere durable to live.
+- **Firestore document encoding** — see decision 6.
+- **`reliability/` and `eventing/` packages** — new top-level packages, for the
+  reason in decision 5. Documented in `docs/architecture.md`.
+
+### Commands run
+
+```bash
+uv sync
+uv run ruff check . && uv run ruff format --check .
+uv run mypy                                        # strict, 91 files
+uv run pytest                                      # 368 passed, 29 skipped (no emulators)
+
+brew install openjdk
+gcloud components install cloud-firestore-emulator pubsub-emulator beta
+gcloud emulators firestore start --host-port=127.0.0.1:8081 --project=firstdue-local &
+gcloud beta emulators pubsub start --host-port=127.0.0.1:8085 --project=firstdue-local &
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8081 PUBSUB_EMULATOR_HOST=127.0.0.1:8085 uv run pytest
+                                                   # 397 passed, 0 skipped
+
+uv run firstdue seed && uv run firstdue verify-seed
+uv run firstdue schema --out docs/openapi.json     # 9 paths
+```
+
+### Verification evidence
+
+- **397 passed, 0 skipped** with both emulators running; 368 passed, 29 skipped
+  without them (the skips are the two emulator-backed suites, and CI fails the
+  job if they skip there).
+- The 27-test contract suite passes **twice**: once in-memory, once against
+  Firestore. Same tests, same assertions, no backend-specific branches.
+- Pub/Sub transport verified against the emulator: an envelope published through
+  `PubSubEventBus` comes back decoding to the same object, with the ordering key
+  and attributes intact, and three events about one building arrive in order.
+- Ruff clean, `mypy --strict` clean across 91 source files.
+- Seed determinism: `2769d3aac450f0…` on rebuild, and the seeded conflict is now
+  the engine's output (`permit-vs-lidar-story-count`, severity 4).
+- OpenAPI: 9 paths, up from 3.
+
+### What phase 2 did **not** build
+
+Stated plainly so the console's capability list and this document agree:
+
+- **No slow-loop watchers.** Nothing polls a source on a schedule yet. The
+  descriptors, the locks, the checkpoints, and the run records exist; the agents
+  that use them are phase 3.
+- **No delta ranker.** `SurveyQueueEntry` and its repository exist and are
+  tested; nothing computes a ranking.
+- **No gateway.** `PolicyDecision` is a contract with no engine behind it.
+- **No live-mode agent, model, or source adapters.** `build_container` still
+  raises `ConfigurationError` for `USE_FAKE_AGENTS=false`. Storage and event
+  backends are separately selectable and both are exercised.
+- **The OIDC branch of the push authenticator is unexercised**, because live mode
+  cannot start. It is written and type-checked; it has never verified a real
+  token.
+
+### Risks carried into phase 3
+
+| Risk | Mitigation |
+|---|---|
+| A `BuildingProfile` is one Firestore document and Firestore caps a document at 1 MiB. A structure with thousands of facts would eventually fail to save | `codec.encode` raises a `ValidationError` at the limit rather than truncating, so the failure is loud. Phase 3 should move `fact_sets` into a subcollection. |
+| Firestore queries are equality-only and are sorted and limited in Python | Avoids requiring a composite index for every filter/order pair, but it reads the whole matching set. Fine at demo scale; the audit-event listing is the first place that will hurt. Needs ordered queries plus index definitions in Terraform. |
+| `QueueRepository.replace_district_queue` is not transactional in Firestore — it deletes and writes entry by entry | A crash mid-replace leaves a partial ranking. The ranker is phase 3; do this in a batched write when it lands. |
+| A dead letter that arrives at a process with no local subscriber is recorded as `NO_SUBSCRIBER` | Correct for a single-process demo. In a fleet where each Cloud Run service subscribes to different topics, the push subscription must name the right service, which is Terraform's job and not yet written. |
+| Dead letters live in memory in both bus implementations | They survive a request but not a restart. A durable dead-letter collection is a small addition once there is an operator surface that reads it. |
+| The internal push endpoint has no rate limit | It authenticates, but a valid caller can flood it. Cloud Run concurrency limits are the current backstop. |
+| Docker and Terraform still unverified locally | Unchanged from phase 1. CI builds both images. |
+
+---
+
+## Phase 3 — The San Francisco slow-loop vertical slice
+
+**Date:** 2026-08-20
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | One `ManagedSource` wrapping one small `PageFetcher` per source, rather than eleven adapters | Caching, rate limiting, breaking, snapshotting, and health reporting are identical for every source; only "get me a page" differs. Swapping a source from its fixture to its live feed changes the fetcher and nothing else. |
+| 2 | Fact ids are derived from the observation's natural key — address, attribute, document, observation time, value | This is what makes "run the demo twice, get no duplicates" arithmetic rather than a check. Re-polling an unchanged source re-derives ids the append-only store already holds. Extends [ADR 0005](adr/0005-derived-identifiers.md) to facts. |
+| 3 | `extracted_by_model` replaces source-type inference for the span requirement | A filed dataset column is not a model extraction and has no line to cite. See [ADR 0008](adr/0008-negation-and-column-vs-prose.md). |
+| 4 | A negated phrase drops the candidate instead of inverting it | "No sprinkler system on file" is a statement about the file. Writing `false` claims somebody looked; writing `true` inverts the document. Writing nothing is true. See [ADR 0008](adr/0008-negation-and-column-vs-prose.md). |
+| 5 | Triage (the Gemma stand-in) can only ever *skip* work | A false negative costs one extraction and a false positive costs one model call. Neither can put a wrong fact in front of an officer, which is the only property that matters for a component whose job is to save money. |
+| 6 | Storey count from measured height is `round(height / 3.2)`, floored at one, stated in one function | The product's central disagreement rests on this arithmetic, so it is one named function an officer can check, not a heuristic spread across a watcher. |
+| 7 | A source that is down produces an explicit `UNAVAILABLE` fact per address, not an empty result | "The Tier II registry is unreachable" and "no hazardous materials present" are different statements, and only one of them is safe to act on. |
+| 8 | `hazard-watcher` is published by **county emergency management**, making nine agents | Tier II filings are confidential and the county holds them. The pinned subscription is the authorization boundary. **Deviation from phase 2's "eight descriptors", deliberate** — phase 3 explicitly requires the county subscription, which requires a county-published agent. |
+| 9 | The pre-incident plan is stamped with the profile's last timeline event, not the wall clock | The artifact describes one exact profile version, so it must be a pure function of that version. Stamping `now` made rewriting the same plan produce different bytes, which the store correctly rejected as a key collision. Found by the console API tests. |
+| 10 | The NFPA 1620 plan prints unknowns as a section | A plan listing five confirmed facts and silently omitting six unchecked attributes reads as a complete picture of a simple building. |
+| 11 | `POST /districts/{id}/poll` exposes one slow-loop pass over HTTP | A scheduler drives this in production, but exposing it makes the demo a single request and lets the console show the loop running. It is idempotent, so it is safe to expose. |
+| 12 | Live mode never falls back to a fixture | A live-mode process serving synthetic records would be lying about where its data came from. Sources with no reachable public endpoint report `UNCONFIGURED` and raise, so the fact becomes `UNAVAILABLE`. |
+
+### What the demo does
+
+`make slow-loop` (or `uv run firstdue slow-loop`), no credentials:
+
+```
+  facts written     43
+  conflicts found   1  (permit-vs-lidar-story-count, severity 4)
+  screened          directive-to-assert, instruction-override
+  survey queue      4 structures ranked
+  top of queue      sf-0450-hayes  score 0.871
+                    - Severity 4 conflict open: Permit records 2 storeys; lidar DSM measures 3.
+                    - Confidence in structure.height_m has decayed to 0.20 of its filed value
+                    - 13 source changes recorded since the last survey
+                    - No company survey on record for this structure
+  autonomous        work order WO-00001 · calendar CAL-00001 · crew MSG-00001 · pre-plan written
+  referral          AWAITING APPROVAL (a captain files this, not an agent)
+  approved by human case REF-00001
+```
+
+Running it again writes nothing: 0 facts, 0 conflicts, the same work order, the
+same case number, `replayed: true`.
+
+### Verification evidence
+
+- **489 passed** with both emulators running; 449 passed + 40 skipped without.
+- Ruff clean, `mypy --strict` clean across 117 source files.
+- OpenAPI: 19 paths, up from 9.
+- The end-to-end demo suite (`tests/integration/test_slow_loop_demo.py`) asserts
+  every clause of the acceptance criteria, including that the second run
+  produces no duplicate actions.
+- Backfill interruption and resume are tested against real page cursors
+  (`tests/integration/test_backfill_resume.py`).
+
+### What phase 3 did **not** build
+
+- **No scheduler.** `poll` runs when something calls it. Cloud Scheduler wiring
+  is not written.
+- **No gateway.** These agents call repositories directly. Every write they make
+  would route through the policy engine once it exists; today the approval gate
+  on referrals is enforced in the action flow rather than by a gateway.
+- **One live feed.** Only SF building permits has a real `HttpFetcher` mapping.
+  The other ten report `UNCONFIGURED` in live mode rather than pretending.
+- **Gemini and Gemma are seams, not integrations.** `FakeModelClient` does the
+  extraction; `RecordedModelClient` pins the responses. No Vertex client exists,
+  and there is no emulator for one.
+- **Calendar, Gmail, and GCS live adapters are unexercised.** Written, typed, and
+  never run against Google.
+
+### Risks carried into phase 4
+
+| Risk | Mitigation |
+|---|---|
+| Watchers call repositories directly, so the authorization model is designed but not enforced on their writes | Phase 4 routes them through the gateway. The scopes are already declared on every descriptor. |
+| Negation detection is a word list and a 40-character window | It will miss constructions it has not seen. The architectural guarantee is unchanged: a model cannot fill an UNKNOWN, and only a survey settles an attribute. |
+| `RecordsWatcher._resolve` drops a record whose address will not normalise | Correct — a permit filed against the wrong building is worse than one nobody saw — but the drop is currently invisible. It should be counted and surfaced. |
+| The action flow's approval gate lives in the flow, not in a policy engine | An agent that skipped `ActionFlow` could file a referral. Phase 4's gateway is what closes this. |
+| Live `HttpFetcher` mappings are unverified against the real SF open-data schema | The mapper is written from the published column names; nothing has run against the endpoint. Verify before claiming live mode works. |
+
+---
+
+## Phase 4 — Identity, gateway policy, security controls, replayable auditing
+
+**Date:** 2026-08-20
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | The gateway is an ordered list of small named functions, each returning an outcome or abstaining | The whole policy is readable top to bottom in one screen, and every decision cites the function that made it. A rule nobody can find is a rule nobody can review. |
+| 2 | An unmatched request is denied by `policy.default-deny`, not allowed by omission | A rule someone forgets to write costs a refusal rather than a leak. Tested with an engine that has *no* rules at all. |
+| 3 | `READ_SCOPES` is derived as `set(Scope) - WRITE_SCOPES` rather than hand-listed | A new scope cannot end up in neither set, which is how a scope ends up unchecked. |
+| 4 | There is no `ALLOW` for a PHI target anywhere in the policy | The most permissive outcome is `DERIVE`. Making "release the record" inexpressible is stronger than making it forbidden. |
+| 5 | `DerivedFact` has a fixed field set with no field a record could occupy | Combined with "no function returns a record", the PHI boundary is structural rather than procedural. Age is a band, location is a floor. |
+| 6 | `WITHHOLD_JURISDICTION` renders a row with the agreement, the authority, and a reason | Silently filtering under mutual aid is more dangerous than refusing: the officer cannot tell "not shown to you" from "nothing there". |
+| 7 | The emergency exception is its own rule id and audit event, and reaches jurisdiction only | An override that could promote an expired grant or a missing scope would be an override of the whole model. Tested that it cannot. |
+| 8 | Authorization is declared on the route, not checked in the handler | "Which endpoints are protected" is answerable by reading the router. A completeness test walks the route table and fails on any endpoint without a caller dependency. |
+| 9 | Health probes stay public | A load balancer cannot hold a credential, and an unauthenticated liveness probe leaks nothing an attacker could not learn from the open port. |
+| 10 | Console credentials are derived per role from `DEMO_SEED` | The demo authenticates against real checks without a secret existing in any file. Live mode verifies OIDC and never derives a secret from a seed that ships in the repo. |
+| 11 | Callbacks are signed over method, path, timestamp, and a body hash, with the timestamp *inside* the signed material | A signature that never goes stale is a replay waiting to happen. |
+| 12 | Replay reports both a per-entry hash check and an ordered digest | They catch different tampering: editing content under its own hash fails the per-entry check; editing content *and* rehashing changes the digest. |
+| 13 | Rate limiting and body caps are outermost, and exempt health probes | Rate-limiting readiness pulls a healthy instance out of rotation during exactly the spike the limit exists to survive. |
+
+### A bug the tests found
+
+`coerce_value` detected negation only in the text *preceding* a match, so the
+malicious permit's "no hazardous materials present" coerced to
+`hazard.tier_ii.present = true` -- the exact inversion the phase-3 fix was meant
+to prevent, in a phrase that carries its own negation. Fixed by checking the
+matched text for a leading negation as well.
+
+Two more were found by the authorization completeness test: `/internal/events/dead-letters`
+was missing from the matrix, and `/internal/callbacks/write` had no caller
+dependency (it authenticates by signature). Both are now explicit entries rather
+than gaps.
+
+### Verification evidence
+
+- **615 passed** with both emulators running; the full suite is green without
+  them too, with the emulator-backed suites skipped.
+- Ruff clean, `mypy --strict` clean across 128 source files. 22 API paths.
+- All five gateway outcomes are produced by one engine at one policy version.
+- Every guarded endpoint refuses an anonymous caller and a forged token; every
+  read scope in the system is tried as a write and refused.
+- The malicious permit from the threat model is screened on four patterns and
+  cannot assert a fact through prose or through a structured column.
+- Replay reconstructs the same ordered output and the same digest twice, and
+  detects both tampering shapes.
+
+### What phase 4 did **not** build
+
+- **The watchers still call repositories directly.** The engine, the grants, and
+  the scopes exist and are tested; routing agent writes through `decide()` is
+  the remaining work. Until then the approval gate lives in `ActionFlow`.
+- **The OIDC branches have never verified a real token.** Live mode cannot start.
+- **Rate limiting is per-instance.** A distributed limit needs shared state.
+- **Model Armor is a boundary, not an integration.** The local detector runs in
+  fake mode and would run alongside Armor in live mode; the Armor call itself is
+  unexercised.
+
+### Risks carried into phase 5
+
+| Risk | Mitigation |
+|---|---|
+| Agent writes bypass the gateway | Phase 5 should route `ActionFlow` and the watchers through `PolicyEngine.decide` and record every decision. The scopes are already on every descriptor. |
+| The console role model is three fixed roles | Real departments have more. The mapping is one dict; the enforcement does not change. |
+| `DerivedFact` guards against the obvious identifying shapes only | A subtly identifying note would pass. Derivation functions are a closed, reviewable set for exactly this reason. |
+| Audit events live wherever the audit sink lives | In-memory by default. The Firestore sink exists and is contract-tested; production must select it. |
+
+---
+
+## Phase 5 — The incident loop
+
+**Date:** 2026-08-20
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Opening does authority, then the snapshot, then the record, then the event, then the clock -- in that order | Nothing is read before there is a grant to read under, and the snapshot id is on the incident before anything is emitted about it. |
+| 2 | The elapsed clock runs from CAD dispatch, not from when this process received the message | The difference is queue time the commander already spent. |
+| 3 | A cold profile opens the incident anyway, marked `cold_start` | New construction is not an error condition. The brief says the structural attributes are unknown, which is the honest output. |
+| 4 | The SSE frame id is the brief version | `Last-Event-ID` then gives resume for free, and "version 3" is a thing an operator can reason about. |
+| 5 | The stream replays stored emissions rather than re-rendering | A resumed stream must show what the original one sent. Re-rendering could differ, and the difference would be invisible. |
+| 6 | A malformed `Last-Event-ID` replays the whole stream instead of erroring | Showing the brief again is always safe; refusing to show it is not. |
+| 7 | Registering a thermal frame requires a **write** scope | It amends the brief and appends to the log. Found by the authorization matrix test, which refused to let a viewer do it. |
+| 8 | An incident grant *carries* the commitment scopes; the gateway returns `REQUIRE_APPROVAL` for them | Without the scope the answer is `DENY` and a chief could never approve a shutoff -- the agent would have no authority to ask. The scope makes it stageable; policy makes it approved. |
+| 9 | The NERIS artifact is a **draft** with the disclaimer on the model | It is assembled from the log for a human to complete. Nothing here files a report. |
+| 10 | The truss window builds its rendering in a property, disclaimer included | A template cannot show the numbers without the caveat, because the string is not assembled in a template. |
+| 11 | Thermal coverage lapses rather than holding the last reading | Yesterday's warm wall is not today's warm wall, and a stale reading presented as current is worse than no reading. |
+| 12 | The RMS flush is best-effort and never blocks the close | An incident blocked by a logging failure is a worse failure than the logging one. Entries stay buffered and a recovery flush drains them. |
+
+### A gap in the fake that this phase exposed
+
+`FakeModelClient(reject_output=True)` only rejected *extractions*, so the
+enriched brief's rejection path -- "the model returned something the contract
+refuses, keep the deterministic brief" -- could not be exercised at all. The fake
+now rejects compositions too, and the test that needed it passes for the right
+reason.
+
+### Verification evidence
+
+- **707 passed** with both emulators running; 667 passed + 40 skipped without.
+- Ruff clean, `mypy --strict` clean across 137 source files. 33 API paths.
+- The instant brief lands inside the 500 ms budget with `model_invoked=False`,
+  and the emission is in the log with its content hash before it is returned or
+  streamed.
+- SSE ordering, reconnect by `Last-Event-ID`, and replay-equivalence are tested
+  through the real transport.
+- Model unavailable, model output rejected, and RMS unreachable each still
+  produce a brief that says what is missing.
+- A full incident is driven end to end and every rendered string is scanned for
+  tactical language; none appears.
+
+### What phase 5 did **not** build
+
+- **No live EMS, NWS, or thermal feeds.** The amendment path takes derived
+  facts, weather items, and thermal frames and is tested with all three; the
+  adapters that would fetch them live are not written. Thermal footage is
+  recorded or synthetic and is never presented as a live flight.
+- **The watchers still bypass the gateway.** Unchanged from phase 4. The
+  incident loop's resource requests *do* route through `PolicyEngine.decide`;
+  the slow loop's writes do not yet.
+- **One session per process.** The incident loop holds its emissions in memory
+  for the stream. A second instance would not serve a resume for an incident it
+  did not open; the log is durable, the in-memory index is not.
+
+### Risks carried forward
+
+| Risk | Mitigation |
+|---|---|
+| SSE resume is served from an in-memory index | The emissions are in the durable log; rebuilding the index from it on demand is a small addition, and would make resume work across instances. |
+| The gateway is not on the slow loop's write path | Highest-value remaining work. The scopes and the engine both exist. |
+| Void detection is a fixed threshold over adjacent regions | Stated with its threshold so an officer can disagree with it. It is an observation about a surface and says so. |
+| `sse-starlette` binds a shutdown event to the first loop it sees | A test-harness artifact; the conftest clears it between tests. A long-lived server has one loop. |
+
+---
+
+## Phase 6 — The command-center frontend
+
+**Date:** 2026-08-20
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | The browser never calls the backend directly. Every request goes through the console's own `/api/gateway` route | The backend credential is read from the server environment and attached there, so it never reaches the browser. `FIRSTDUE_CONSOLE_TOKEN` is deliberately **not** a `NEXT_PUBLIC_` variable -- Next.js inlines those into the client bundle. |
+| 2 | The dispatch transition does not navigate | Losing district context at the moment a fire starts is when losing it costs most, and a page transition is a moment where a tablet on a bad connection shows nothing at all. Standby compresses; incident surfaces expand in place. |
+| 3 | The slow-loop rail compresses rather than disappearing during an incident | The slow loop does not stop when a fire starts. A rail that vanished would imply it had. |
+| 4 | The SSE frame id is the brief version, and the hook drops any frame without `persisted_at` | The backend gates on this too. Two independent checks, because rendering a brief the record does not contain is the failure the whole persist-before-transmit design exists to prevent. |
+| 5 | Three.js is imported dynamically, and the SVG fallback is the backend's own | A tablet without WebGL never downloads the renderer, and the fallback marks the *same* disputed mass -- because the conflict is in the data, not in the renderer. |
+| 6 | Every state is a glyph, a word, and a colour | On a washed-out tablet in daylight the word is what survives. Asserted by a test that counts the glyphs and reads the words. |
+| 7 | `aria-live="polite"` announces each new brief version once | An officer who cannot see the version tick still hears that the brief changed, and hears whether the narrative is unavailable. |
+| 8 | Queue rows carry their ranking reasons inline, expandable | A chief who disagrees with row three has to see which rule put it there. A score alone asks them to trust arithmetic they cannot check. |
+| 9 | The console's types are hand-written and checked against `docs/openapi.json` by a test | A renamed backend field becomes a failing test rather than an `undefined` on a fireground. |
+
+### Three bugs the tests and the running server found
+
+- **`BackendStatus` crashed on a readiness payload without `checks`.** A malformed
+  response blanked the console. Now it degrades the badge instead.
+- **The SSE guard checked for the `EventSource` *key*, not a usable constructor.**
+  A browser exposing the name without an implementation would have thrown inside
+  a React effect and blanked the page at exactly the moment it is needed.
+- **The server-rendered page was not authenticating.** Every endpoint requires a
+  caller since phase 4, so the first paint silently lost its status header. Found
+  by curling the running console, not by a test -- and now the shared client
+  attaches the server-side token.
+
+### Verification evidence
+
+- **87 console tests pass** (vitest + Testing Library), covering standby, the
+  profile, the full dispatch → resolve → close transition, SSE ordering and
+  persistence, the geometry fallback, the audit console, the OpenAPI contract,
+  and accessibility.
+- `next lint` clean, `tsc --noEmit` clean, `next build` succeeds.
+- The running console server-renders authenticated state: mode, both backends,
+  municipality, the skip link, and the disclosure.
+- The gateway proxies real data: the queue ranks 450 Hayes first at 0.877 with
+  four cited reasons, and the backend refuses the same call without a token.
+
+### What phase 6 did **not** build
+
+- **No Playwright.** The acceptance criteria asks for browser tests; the Chrome
+  extension was not connected in this environment and adding a browser runner
+  that cannot download its binaries would have broken `make verify`. The flows
+  are covered by jsdom component tests plus HTTP verification against the
+  running server. **The WebGL path itself has never rendered in a real browser**
+  -- jsdom exercises the fallback, which is the honest state of it.
+- **No responsive testing in a real viewport.** The layout uses Tailwind's
+  `sm:`/`lg:` breakpoints and collapses to one column below 1024 px, but that
+  has been read rather than seen.
+- **Agent activity and throughput are structural, not live.** The rail renders
+  whatever activity map it is given; nothing streams per-agent run counts yet.
+
+### Risks carried forward
+
+| Risk | Mitigation |
+|---|---|
+| No real-browser test coverage | Add Playwright where browsers can be installed. The components are already driven end to end in jsdom, so the E2E would be a thin layer. |
+| WebGL rendering unverified | The fallback is verified and is what a locked-down tablet gets. Verify the canvas path before demoing on hardware. |
+| The gateway route is unauthenticated from the browser's side | It relies on the console being served to trusted users. A real deployment puts IAP in front of it; the backend credential never being in the browser is what limits the blast radius. |
+
+---
+
+## Phase 7 — Live Google integrations, observability, infrastructure, deployment
+
+**Date:** 2026-08-20
+
+### The four defects phase 7 found before it built anything
+
+Exploration of the "live" paths turned up code that would have failed on a real
+deploy. Each violated a rule the system already states about itself, and each is
+now fixed and tested.
+
+| Defect | Why it mattered | Fix |
+|---|---|---|
+| `build_live_clock_and_ids()` existed with **no callers**; live mode would have run on `SteppingClock` + `DeterministicIdGenerator` | Two Cloud Run instances sharing a seeded counter mint `fact_000001` for different facts. With derived identifiers (ADR 0005), that is silent data loss, not a visible error | The live branch calls it. `tests/test_live_mode_wiring.py` asserts a live container never holds a deterministic generator, and that two containers do not repeat ids |
+| `CALLBACK_SECRET` was optional in live mode | The signed-callback endpoint would fail at **request time on a fireground**, not at startup — the "no partial live mode" the container docstring forbids | Added to the live-mode validator. Deriving it from the repo's demo seed would have been worse than having none |
+| Calendar and Gmail deduped in a process-local dict | A restart or a second instance double-books a company and double-sends a crew notification. The idempotency guarantee held only for the fakes | `DurableArtifactDedupe` over the same `IdempotencyRepository` the Pub/Sub dedupe uses |
+| The `google` extra shipped 3 packages; the code's own errors named 6 more | Following the error message did not fix the error | The extra now ships every package any `ConfigurationError` tells an operator to install |
+
+### What was built
+
+**Vertex.** `VertexModelClient` implements the existing three-verb `ModelClient`
+with no signature change and slots *inside* `RecordedModelClient`, so cassettes
+keep working and a miss reaches Gemini. Structured output uses a response schema
+derived from `ExtractionResult` with `unknowns` required. Retries happen inside
+the caller's deadline rather than per attempt.
+
+The deterministic fallback is **not** "fall back to the fake extractor" — that
+would put synthetic values behind a live label. It returns `accepted=False`, so
+the facts that never needed a model stand and `model_output_rejected` is
+audited. `ADKRuntime` enforces refusals in the same order as `FakeRuntime`
+(expired grant → `DENIED`, missing scope → `DENIED`, elapsed deadline →
+`TIMED_OUT`) and additionally propagates cancellation.
+
+**Observability.** `observability/tracing.py` and `metrics.py`. Six span names,
+nine metrics, no-op unless `OTEL_ENABLED=true` — so the suite needs no collector
+and the demo needs no credentials. Every span attribute passes through
+`safe_attribute()`. The `model.invoke` span carries model id, verb, schema ref,
+token counts, latency, and retries; never the prompt, the completion, the
+document, or a field value.
+
+Spans and metrics were added where the matching audit event already fires:
+`gateway.policy_decision` in `PolicyEngine.evaluate`, `model.invoke` around a
+cassette miss only (a replay made no call, and a span claiming one would put
+invented latency in the trace), `source.query` in the source framework,
+`incident` around `IncidentController.open`.
+
+**Correlation.** `POST /incidents` did not thread the caller's
+`X-Correlation-ID` into the incident, so the request that opened it could not be
+joined to the audit trail. It does now, and `/internal/audit/events` gained a
+`correlation_id` filter — a field you can read but not search by is not a
+correlation id.
+
+**Infrastructure.** `infra/terraform/`: 12 modules, `envs/staging` and
+`envs/prod`. Both validate under OpenTofu 1.12.6 against the real Google
+provider schema.
+
+Three things Terraform must agree with the code about are **data files**, not
+HCL: `policy/firestore.json` (all 23 collections, each with indexes or a stated
+reason), `policy/topics.json` (16 topics), and `policy/agents.json` (agent
+scopes, and the scope → role map). `tests/infra/` fails if any drifts from
+`COLLECTION_NAMES`, the `Topic` enum, or `registry/descriptors.py`.
+
+**Scheduler.** Phase 3 built `poll` and left it to be called by something. That
+something is now `POST /internal/scheduler/tick`, authenticated as a service the
+same way the Pub/Sub push endpoint is, driven by a Cloud Scheduler job.
+
+### The IAM claim, and how it is checked without a cloud project
+
+"IAM prevents one agent from assuming another agent's permissions" is an
+acceptance criterion that normally needs a project to verify. Three tests
+establish it from the checked-in configuration:
+
+- an agent's roles are the union of what its **own** scopes map to, and no agent
+  receives a role that only another agent's scopes imply;
+- exactly two `google_project_iam_member` resources exist in the IAM module, both
+  driven by the derived binding map — a hand-written third would pass a
+  data comparison while widening an identity, so it is asserted absent;
+- no `serviceAccountTokenCreator`, `serviceAccountUser`, `owner`, or `editor`
+  appears anywhere in the module or the policy. Impersonation is the one route
+  by which correct roles still let an SA act as another agent.
+
+`read:ems-derived` maps to **no IAM role at all**. PHI is reachable only through
+the gateway's `DERIVE` path, at runtime, under a grant that expires; a standing
+role would make that grant decorative.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `uv run pytest` | 719 passed, 46 skipped (40 emulator, 6 staging) |
+| `uv run ruff check . && uv run ruff format --check .` | clean |
+| `uv run mypy` (strict) | no issues, 145 source files |
+| `tofu fmt -check -recursive` | clean |
+| `tofu validate` (staging and prod, real provider schemas) | valid |
+| `tests/infra` | 29 passed |
+| `FIRESTORE_EMULATOR_HOST=… PUBSUB_EMULATOR_HOST=… uv run pytest` | 743 passed, 6 skipped |
+| `npm run lint && typecheck && test && build` | clean; 87 console tests pass; production build succeeds |
+| `firstdue slow-loop` and one incident through the running API | unchanged: conflict at severity 4, rank 1 at 0.871, instant brief 0.319 ms with `model_invoked=false`, one correlation id joining response and audit trail |
+| `tests/staging/test_smoke.py` **against a locally running server** | 6 passed |
+
+The smoke suite was pointed at `http://127.0.0.1:8077` running in fake mode. That
+does not prove staging works — but it caught five wrong assumptions about the
+API contract (`opened["incident"]["incident_id"]` vs `opened["incident_id"]`,
+`disposition` vs `closed_by`, a dispatch body that is required, an audit list
+that is a bare array, and a district id that had no fixtures), every one of which
+would otherwise have surfaced as a red herring during a real deployment.
+
+### What phase 7 did **not** verify
+
+**No cloud resource was created and no cloud test was run.** `gcloud` is
+unauthenticated in this environment and there is no ADC file. Every cloud-facing
+path — `VertexModelClient`, `ADKRuntime`, `VertexVectorIndex`, the Secret
+Manager resolver, the Pub/Sub dead-letter store, the Cloud Trace exporter, and
+all of Terraform — is **written and unvalidated against a real project**. The
+Terraform validates against the provider's schema, which catches a misspelled
+argument but not a quota, an org policy, or an API that is not enabled.
+
+Nothing in `docs/deploy.md` has been applied. The cost table is arithmetic on
+published list prices, not a bill.
+
+Docker is still absent here, so container builds remain CI-only, unchanged since
+phase 1.
+
+### Risks carried forward
+
+| Risk | Mitigation |
+|---|---|
+| The entire live path is unexercised | The fake and live adapters implement the same ports and the same contract suite covers both. The first real deploy will still surface something; the smoke test is written and ready to say what |
+| CI's staging key is a long-lived SA JSON key in a GitHub secret | Scoped to an SA with **no project roles** — its only power is invoking the staging service, which is what an unauthenticated fireground console can already do. Workload Identity Federation is the better shape and is a drop-in replacement for that one job |
+| The gateway is only consulted on incident commitment paths | Slow-loop reads do not produce a `PolicyDecision`. That predates phase 7 and is unchanged by it; widening it is a policy-coverage phase, not an infrastructure one |
+| `terraform.tfvars` and `backend.hcl` are operator-managed | Both gitignored, both with `.example` files. `tests/infra` asserts no `google_secret_manager_secret_version` resource exists anywhere, so a value cannot be added to Terraform by habit |
+| Firestore index builds are not instant | `docs/deploy.md` says to apply an index before deploying the code that queries it. Nothing enforces the ordering |

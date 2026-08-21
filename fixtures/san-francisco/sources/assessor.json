@@ -1,0 +1,104 @@
+{
+  "note": "Synthetic assessor roll rows for real parcels.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 240,
+        "parcel": "0808-021",
+        "use_code": "residential",
+        "year_built": 1908
+      },
+      "observed_at": "2022-08-21T08:00:00+00:00",
+      "record_ref": "assessor/0808-021"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 258,
+        "parcel": "1203-014",
+        "use_code": "residential",
+        "year_built": 1909
+      },
+      "observed_at": "2022-08-28T08:00:00+00:00",
+      "record_ref": "assessor/1203-014"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 276,
+        "parcel": "3617-032",
+        "use_code": "residential",
+        "year_built": 1910
+      },
+      "observed_at": "2022-09-04T08:00:00+00:00",
+      "record_ref": "assessor/3617-032"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 294,
+        "parcel": "3574-011",
+        "use_code": "residential",
+        "year_built": 1911
+      },
+      "observed_at": "2022-09-11T08:00:00+00:00",
+      "record_ref": "assessor/3574-011"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 312,
+        "parcel": "3958-002",
+        "use_code": "residential",
+        "year_built": 1912
+      },
+      "observed_at": "2022-09-18T08:00:00+00:00",
+      "record_ref": "assessor/3958-002"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 330,
+        "parcel": "3999-018",
+        "use_code": "residential",
+        "year_built": 1913
+      },
+      "observed_at": "2022-09-25T08:00:00+00:00",
+      "record_ref": "assessor/3999-018"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "wood-frame",
+        "footprint_area_m2": 348,
+        "parcel": "1440-025",
+        "use_code": "residential",
+        "year_built": 1914
+      },
+      "observed_at": "2022-10-02T08:00:00+00:00",
+      "record_ref": "assessor/1440-025"
+    }
+  ],
+  "synthetic": true
+}

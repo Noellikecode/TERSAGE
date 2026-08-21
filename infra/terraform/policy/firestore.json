@@ -1,0 +1,347 @@
+{
+  "_comment": "Source of truth: COLLECTION_NAMES in backend/src/firstdue/adapters/firestore/client.py. tests/infra/test_firestore_terraform_covers_collections.py fails if a collection is missing.",
+  "collections": {
+    "agent_runs": {
+      "indexes": [
+        {
+          "fields": [
+            "agent_id",
+            "status",
+            "started_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "approvals": {
+      "indexes": [
+        {
+          "fields": [
+            "status",
+            "staged_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "audit_events": {
+      "indexes": [
+        {
+          "fields": [
+            "correlation_id",
+            "recorded_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        },
+        {
+          "fields": [
+            "agent_id",
+            "recorded_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "compensations": {
+      "indexes": [
+        {
+          "fields": [
+            "receipt_id",
+            "created_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "conflicts": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "status",
+            "severity"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        },
+        {
+          "fields": [
+            "district_id",
+            "status",
+            "detected_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "facts": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "canonical_key",
+            "observed_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        },
+        {
+          "fields": [
+            "address_id",
+            "source_type",
+            "ingested_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "idempotency": {
+      "indexes": [],
+      "reason": "read by document id only; the single-field indexes Firestore creates are enough"
+    },
+    "incident_grants": {
+      "indexes": [
+        {
+          "fields": [
+            "incident_id",
+            "expires_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "incident_log_entries": {
+      "indexes": [
+        {
+          "fields": [
+            "incident_id",
+            "sequence"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "incident_logs": {
+      "indexes": [],
+      "reason": "read by document id only; the single-field indexes Firestore creates are enough"
+    },
+    "incidents": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "status",
+            "opened_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "locks": {
+      "indexes": [],
+      "reason": "read by document id only; the single-field indexes Firestore creates are enough"
+    },
+    "policy_decisions": {
+      "indexes": [
+        {
+          "fields": [
+            "agent_id",
+            "decided_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        },
+        {
+          "fields": [
+            "correlation_id",
+            "decided_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "profiles": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "profile_version"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "queue_entries": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "status",
+            "rank"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "referrals": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "status",
+            "staged_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "registry_agents": {
+      "indexes": [],
+      "reason": "read by document id only; the single-field indexes Firestore creates are enough"
+    },
+    "registry_subscriptions": {
+      "indexes": [
+        {
+          "fields": [
+            "agent_id",
+            "topic"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "snapshots": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "read_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "standing_grants": {
+      "indexes": [
+        {
+          "fields": [
+            "agent_id",
+            "expires_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "surveys": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "status",
+            "scheduled_for"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "write_actions": {
+      "indexes": [
+        {
+          "fields": [
+            "target_id",
+            "status",
+            "created_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "write_receipts": {
+      "indexes": [
+        {
+          "fields": [
+            "target_id",
+            "executed_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "note": "Synthetic USGS 3DEP digital surface model extracts.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 9.5,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-0450-hayes"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 6.6,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-1215-fell"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 6.6,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-0899-valencia"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 6.6,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-2130-mission"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 6.6,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-0350-rhode-island"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 6.6,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-1550-bryant"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "collection": "2025-q2",
+        "dsm_height_m": 6.6,
+        "dtm_height_m": 0.0,
+        "vertical_accuracy_m": 0.3
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "usgs-3dep/dsm/2025-q2/sf-0621-clement"
+    }
+  ],
+  "synthetic": true
+}

@@ -1,0 +1,25 @@
+{
+  "note": "Synthetic EPA FRS/TRI/RMP rows for a real address.",
+  "records": [
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": "Facility registered under TRI and RMP. Reported storage of sulfuric acid and an ammonia refrigeration process.",
+      "fields": {
+        "facility_name": "SYNTHETIC INDUSTRIAL TENANT",
+        "programs": [
+          "TRI",
+          "RMP"
+        ],
+        "registry_id": "110071234567",
+        "rmp_process": "ammonia refrigeration",
+        "tri_chemicals": [
+          "SULFURIC ACID"
+        ]
+      },
+      "observed_at": "2026-01-12T08:00:00+00:00",
+      "record_ref": "epa-frs/110071234567"
+    }
+  ],
+  "synthetic": true
+}

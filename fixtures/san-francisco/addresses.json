@@ -1,0 +1,72 @@
+{
+  "municipality_id": "san-francisco-ca",
+  "jurisdiction_id": "sf-city-county",
+  "note": "Street addresses and coordinates are real public reference data. All records attached to them elsewhere in fixtures/ are synthetic.",
+  "districts": ["sffd-district-03", "sffd-district-05"],
+  "addresses": [
+    {
+      "address_id": "sf-0450-hayes",
+      "display": "450 Hayes St, San Francisco, CA 94102",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7768,
+      "longitude": -122.4247,
+      "parcel_ref": "0808-021"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "display": "1215 Fell St, San Francisco, CA 94117",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7745,
+      "longitude": -122.4383,
+      "parcel_ref": "1203-014"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "display": "899 Valencia St, San Francisco, CA 94110",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7592,
+      "longitude": -122.4212,
+      "parcel_ref": "3617-032"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "display": "2130 Mission St, San Francisco, CA 94110",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7627,
+      "longitude": -122.4194,
+      "parcel_ref": "3574-011"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "display": "350 Rhode Island St, San Francisco, CA 94103",
+      "district_id": "sffd-district-05",
+      "latitude": 37.7660,
+      "longitude": -122.4030,
+      "parcel_ref": "3958-002"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "display": "1550 Bryant St, San Francisco, CA 94103",
+      "district_id": "sffd-district-05",
+      "latitude": 37.7676,
+      "longitude": -122.4108,
+      "parcel_ref": "3999-018"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "display": "621 Clement St, San Francisco, CA 94118",
+      "district_id": "sffd-district-05",
+      "latitude": 37.7828,
+      "longitude": -122.4652,
+      "parcel_ref": "1440-025"
+    },
+    {
+      "address_id": "sf-3120-24th",
+      "display": "3120 24th St, San Francisco, CA 94110",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7526,
+      "longitude": -122.4155,
+      "parcel_ref": "6520-009"
+    }
+  ]
+}

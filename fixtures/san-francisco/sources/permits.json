@@ -1,0 +1,110 @@
+{
+  "note": "Synthetic permit records attached to real public street addresses.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04871 for 450 Hayes St, San Francisco, CA 94102. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04871",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-10-11T08:00:00+00:00",
+      "record_ref": "permit/sf-0450-hayes/2018-04871"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04872 for 1215 Fell St, San Francisco, CA 94117. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04872",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-10-24T08:00:00+00:00",
+      "record_ref": "permit/sf-1215-fell/2018-04872"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04873 for 899 Valencia St, San Francisco, CA 94110. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04873",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-11-06T08:00:00+00:00",
+      "record_ref": "permit/sf-0899-valencia/2018-04873"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04874 for 2130 Mission St, San Francisco, CA 94110. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04874",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-11-19T08:00:00+00:00",
+      "record_ref": "permit/sf-2130-mission/2018-04874"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04875 for 350 Rhode Island St, San Francisco, CA 94103. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04875",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-12-02T08:00:00+00:00",
+      "record_ref": "permit/sf-0350-rhode-island/2018-04875"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04876 for 1550 Bryant St, San Francisco, CA 94103. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04876",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-12-15T08:00:00+00:00",
+      "record_ref": "permit/sf-1550-bryant/2018-04876"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2018-04877 for 621 Clement St, San Francisco, CA 94118. Alteration to an existing 2-storey wood-frame dwelling. Scope: interior partitions, egress stair repair. No change to building height or storey count approved.",
+      "fields": {
+        "permit_number": "2018-04877",
+        "permit_type": "alteration",
+        "status": "COMPLETE",
+        "stories_filed": 2
+      },
+      "observed_at": "2018-12-28T08:00:00+00:00",
+      "record_ref": "permit/sf-0621-clement/2018-04877"
+    },
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": "Permit 2024-11902. Reroof over existing 2-storey structure. Solar array retained. No vertical addition permitted under this filing.",
+      "fields": {
+        "permit_number": "2024-11902",
+        "permit_type": "reroof",
+        "status": "ISSUED",
+        "stories_filed": 2
+      },
+      "observed_at": "2025-06-16T08:00:00+00:00",
+      "record_ref": "permit/sf-0450-hayes/2024-11902"
+    }
+  ],
+  "synthetic": true
+}

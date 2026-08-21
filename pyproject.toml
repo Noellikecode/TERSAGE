@@ -1,0 +1,152 @@
+[project]
+name = "firstdue"
+version = "0.1.0"
+description = "FIRST DUE -- municipal structural intelligence as an institutional agent fleet"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+  "fastapi>=0.115,<0.116",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.5,<3",
+  "uvicorn[standard]>=0.30,<0.31",
+  "sse-starlette>=2.1,<3",
+  "httpx>=0.27,<0.28",
+  "tenacity>=9.0,<10",
+]
+
+[project.optional-dependencies]
+# Live-mode Google clients. Fake mode -- the default, and the whole test suite --
+# needs none of them, which is why they are an extra rather than a dependency.
+google = [
+  "google-cloud-firestore>=2.19,<3",
+  "google-cloud-pubsub>=2.23,<3",
+  "google-auth>=2.35,<3",
+  # Every package below is named by a ConfigurationError that tells the operator
+  # to "install the 'google' extra". Following that instruction has to actually
+  # fix the error, so the extra ships all of them.
+  "google-api-python-client>=2.140,<3",   # Calendar, Gmail
+  "google-cloud-storage>=2.18,<4",        # pre-incident plan store
+  "google-cloud-aiplatform>=1.71,<2",     # Vertex: Gemini and Vector Search
+  "google-cloud-secret-manager>=2.20,<3",
+  "opentelemetry-sdk>=1.27,<2",
+  "opentelemetry-exporter-gcp-trace>=1.7,<2",
+]
+
+[project.scripts]
+firstdue = "firstdue.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<0.25",
+  "pytest-cov>=5.0,<6",
+  "ruff>=0.6,<0.7",
+  "mypy>=1.11,<2",
+  # The Google clients are dev dependencies as well as an optional extra, so the
+  # Firestore and Pub/Sub adapters are type-checked against the real client API
+  # rather than against an `ignore_missing_imports` hole. No credentials needed
+  # to install them, and fake mode still never imports them.
+  "google-cloud-firestore>=2.19,<3",
+  "google-cloud-pubsub>=2.23,<3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/src/firstdue"]
+
+[tool.uv]
+package = true
+
+# ---------------------------------------------------------------- pytest ----
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["backend/src"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers --strict-config"
+markers = [
+  "invariant: domain invariant that must never regress",
+  "authorization: authorization / grant-scope behaviour",
+  "concurrency: optimistic concurrency behaviour",
+  "idempotency: idempotency-key behaviour",
+  "degraded: degraded-service / failure-mode behaviour",
+]
+filterwarnings = ["error"]
+
+# ------------------------------------------------------------------ ruff ----
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["backend/src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "W",    # pycodestyle
+  "F",         # pyflakes
+  "I",         # isort
+  "N",         # pep8-naming
+  "UP",        # pyupgrade
+  "B",         # bugbear
+  "A",         # builtins shadowing
+  "C4",        # comprehensions
+  "DTZ",       # timezone-aware datetimes (safety-critical here)
+  "T20",       # no print in library code
+  "SIM",       # simplify
+  "PTH",       # pathlib
+  "RUF",
+  "S",         # bandit
+  "ANN",       # annotations
+]
+ignore = [
+  "ANN401",  # Any is required in a few protocol payload positions
+  "A003",    # pydantic models legitimately carry fields named `type`, `id`
+  "ANN101",  # deprecated: annotating `self` adds nothing
+  "ANN102",  # deprecated: annotating `cls` adds nothing
+  "UP040",   # PEP 695 aliases interact badly with pydantic discriminated unions
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ANN201", "ANN001", "ANN003", "ANN202"]  # asserts, loose test signatures
+"backend/src/firstdue/cli.py" = ["T20"]             # the CLI is allowed to print
+
+[tool.ruff.lint.isort]
+known-first-party = ["firstdue"]
+
+# ------------------------------------------------------------------ mypy ----
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "backend/src"
+packages = ["firstdue"]
+strict = true
+warn_unreachable = true
+warn_return_any = true
+disallow_any_generics = true
+disallow_untyped_decorators = true
+no_implicit_reexport = true
+show_error_codes = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+# The Google clients are an optional extra. The adapters import them lazily and
+# fail loudly when they are absent, so type-checking a fake-mode checkout must
+# not require them to be installed.
+[[tool.mypy.overrides]]
+module = [
+  "google.*",
+  "google.cloud.*",
+  "vertexai.*",
+  "googleapiclient.*",
+  "opentelemetry.exporter.*",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["backend/src/firstdue"]
+branch = true

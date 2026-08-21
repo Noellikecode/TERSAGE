@@ -1,0 +1,23 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored: it names
+# a project and a billing account, and neither belongs in a public repository.
+
+project_id      = "your-project-id"
+billing_account = "000000-AAAAAA-BBBBBB"
+
+# Prefer a digest over a tag. A rollback has to name the exact image that was
+# running, and ":latest" cannot.
+backend_image = "us-central1-docker.pkg.dev/your-project-id/firstdue-staging/backend@sha256:..."
+console_image = "us-central1-docker.pkg.dev/your-project-id/firstdue-staging/console@sha256:..."
+
+# Globally unique.
+plans_bucket = "your-project-id-firstdue-plans-staging"
+
+alert_emails = ["you@example.com"]
+budget_usd   = 50
+
+# Leave empty if Model Armor is not allowlisted for your project. The local
+# deterministic detector remains, and the console reports which screen ran.
+model_armor_template = ""
+
+# A running index endpoint is several hundred USD a month.
+vector_search_enabled = false

@@ -1,0 +1,2 @@
+# tofu init -backend-config=backend.hcl
+bucket = "your-project-id-firstdue-tfstate"

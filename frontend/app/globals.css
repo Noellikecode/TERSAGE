@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  @apply bg-ground text-ink antialiased;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Visible focus everywhere. A monitoring surface gets driven by keyboard. */
+:where(a, button, [tabindex]):focus-visible {
+  outline: 2px solid theme('colors.live');
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

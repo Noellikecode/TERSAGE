@@ -1,0 +1,4721 @@
+{
+  "components": {
+    "schemas": {
+      "AgentDescriptor": {
+        "additionalProperties": false,
+        "description": "The catalog entry for one agent, at one version.",
+        "properties": {
+          "agent_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "approval_threshold": {
+            "$ref": "#/components/schemas/ApprovalThreshold",
+            "default": "NONE"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            },
+            "minItems": 1,
+            "title": "Capabilities",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "classifications_accessed": {
+            "items": {
+              "$ref": "#/components/schemas/Classification"
+            },
+            "minItems": 1,
+            "title": "Classifications Accessed",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "deprecated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deprecated At"
+          },
+          "input_schema_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Input Schema Ref",
+            "type": "string"
+          },
+          "latency_target_ms": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 600000.0,
+            "title": "Latency Target Ms",
+            "type": "integer"
+          },
+          "loop": {
+            "$ref": "#/components/schemas/Loop"
+          },
+          "output_schema_ref": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Output Schema Ref",
+            "type": "string"
+          },
+          "published_at": {
+            "format": "date-time",
+            "title": "Published At",
+            "type": "string"
+          },
+          "publisher_department": {
+            "$ref": "#/components/schemas/Department"
+          },
+          "required_scopes": {
+            "items": {
+              "$ref": "#/components/schemas/Scope"
+            },
+            "minItems": 1,
+            "title": "Required Scopes",
+            "type": "array",
+            "uniqueItems": true
+          },
+          "role_summary": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Role Summary",
+            "type": "string"
+          },
+          "version": {
+            "maxLength": 32,
+            "minLength": 5,
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "title": "Version",
+            "type": "string"
+          },
+          "write_targets": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Write Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent_id",
+          "version",
+          "publisher_department",
+          "loop",
+          "role_summary",
+          "capabilities",
+          "required_scopes",
+          "classifications_accessed",
+          "input_schema_ref",
+          "output_schema_ref",
+          "latency_target_ms",
+          "published_at"
+        ],
+        "title": "AgentDescriptor",
+        "type": "object"
+      },
+      "AgentDescriptorView": {
+        "additionalProperties": false,
+        "description": "A catalog entry, with every set serialised in sorted order.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "approval_threshold": {
+            "$ref": "#/components/schemas/ApprovalThreshold"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/Capability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "classifications_accessed": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Classifications Accessed",
+            "type": "array"
+          },
+          "deprecated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deprecated At"
+          },
+          "input_schema_ref": {
+            "title": "Input Schema Ref",
+            "type": "string"
+          },
+          "latency_target_ms": {
+            "title": "Latency Target Ms",
+            "type": "integer"
+          },
+          "loop": {
+            "$ref": "#/components/schemas/Loop"
+          },
+          "output_schema_ref": {
+            "title": "Output Schema Ref",
+            "type": "string"
+          },
+          "published_at": {
+            "title": "Published At",
+            "type": "string"
+          },
+          "publisher_department": {
+            "$ref": "#/components/schemas/Department"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "required_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Scopes",
+            "type": "array"
+          },
+          "role_summary": {
+            "title": "Role Summary",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "write_targets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Write Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent_id",
+          "version",
+          "ref",
+          "publisher_department",
+          "loop",
+          "role_summary",
+          "capabilities",
+          "required_scopes",
+          "classifications_accessed",
+          "write_targets",
+          "approval_threshold",
+          "input_schema_ref",
+          "output_schema_ref",
+          "latency_target_ms",
+          "published_at"
+        ],
+        "title": "AgentDescriptorView",
+        "type": "object"
+      },
+      "AgentListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/AgentDescriptorView"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "agents",
+          "count"
+        ],
+        "title": "AgentListResponse",
+        "type": "object"
+      },
+      "ApprovalRequestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "approved_by": {
+            "description": "the human approving",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Approved By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "approved_by"
+        ],
+        "title": "ApprovalRequestBody",
+        "type": "object"
+      },
+      "ApprovalThreshold": {
+        "enum": [
+          "NONE",
+          "SUPERVISOR",
+          "CHIEF"
+        ],
+        "title": "ApprovalThreshold",
+        "type": "string"
+      },
+      "AssertionStatus": {
+        "description": "How the system regards an attribute, rendered distinctly in every surface.",
+        "enum": [
+          "CONFIRMED",
+          "DISPUTED",
+          "UNKNOWN"
+        ],
+        "title": "AssertionStatus",
+        "type": "string"
+      },
+      "AuditEventKind": {
+        "enum": [
+          "grant_minted",
+          "grant_revoked",
+          "emergency_exception",
+          "injection_blocked",
+          "model_output_rejected",
+          "write_executed",
+          "write_replayed",
+          "write_compensated",
+          "notification_sent",
+          "approval_granted",
+          "circuit_opened",
+          "circuit_closed",
+          "rms_flushed",
+          "dead_lettered"
+        ],
+        "title": "AuditEventKind",
+        "type": "string"
+      },
+      "AuditEventView": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "detail": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Detail",
+            "type": "object"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AuditEventKind"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          }
+        },
+        "required": [
+          "audit_id",
+          "kind",
+          "occurred_at",
+          "actor",
+          "correlation_id",
+          "detail"
+        ],
+        "title": "AuditEventView",
+        "type": "object"
+      },
+      "BenchmarkType": {
+        "description": "Operational benchmarks timestamped as they occur. Clerical, not tactical.",
+        "enum": [
+          "DISPATCH",
+          "ARRIVAL",
+          "WATER_ON_FIRE",
+          "PRIMARY_SEARCH_COMPLETE",
+          "PAR",
+          "INCIDENT_CLOSED"
+        ],
+        "title": "BenchmarkType",
+        "type": "string"
+      },
+      "BooleanValue": {
+        "additionalProperties": false,
+        "description": "A *checked* boolean.\n\n``BooleanValue(boolean=False)`` means \"we looked and it is not so\".\n\"We did not look\" is :class:`UnknownValue` and is a different type.",
+        "properties": {
+          "boolean": {
+            "title": "Boolean",
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "BOOLEAN",
+            "default": "BOOLEAN",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "boolean"
+        ],
+        "title": "BooleanValue",
+        "type": "object"
+      },
+      "BuildingProfileView": {
+        "additionalProperties": false,
+        "properties": {
+          "address_id": {
+            "title": "Address Id",
+            "type": "string"
+          },
+          "conflicts": {
+            "items": {
+              "$ref": "#/components/schemas/ConflictView"
+            },
+            "title": "Conflicts",
+            "type": "array"
+          },
+          "district_id": {
+            "title": "District Id",
+            "type": "string"
+          },
+          "facts": {
+            "items": {
+              "$ref": "#/components/schemas/FactView"
+            },
+            "title": "Facts",
+            "type": "array"
+          },
+          "has_geometry": {
+            "default": false,
+            "title": "Has Geometry",
+            "type": "boolean"
+          },
+          "hydrant_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Hydrant Ids",
+            "type": "array"
+          },
+          "last_human_survey": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Human Survey"
+          },
+          "open_referrals": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Open Referrals",
+            "type": "array"
+          },
+          "profile_version": {
+            "title": "Profile Version",
+            "type": "integer"
+          },
+          "unknown_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unknown Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "address_id",
+          "district_id",
+          "profile_version",
+          "facts",
+          "conflicts",
+          "unknown_keys"
+        ],
+        "title": "BuildingProfileView",
+        "type": "object"
+      },
+      "Capability": {
+        "enum": [
+          "READ",
+          "WRITE",
+          "RANK",
+          "NOTIFY"
+        ],
+        "title": "Capability",
+        "type": "string"
+      },
+      "CapabilityInfo": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "phase": {
+            "title": "Phase",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CapabilityStatus"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "status",
+          "phase"
+        ],
+        "title": "CapabilityInfo",
+        "type": "object"
+      },
+      "CapabilityStatus": {
+        "enum": [
+          "AVAILABLE",
+          "PLANNED"
+        ],
+        "title": "CapabilityStatus",
+        "type": "string"
+      },
+      "Classification": {
+        "description": "Statutory handling class for a fact.\n\n``PHI`` and ``TIER_II_CONFIDENTIAL`` are the two classes that can never be\nserialized into a vector payload (see :mod:`firstdue.domain.vectors`).",
+        "enum": [
+          "PUBLIC",
+          "RESTRICTED",
+          "PHI",
+          "TIER_II_CONFIDENTIAL"
+        ],
+        "title": "Classification",
+        "type": "string"
+      },
+      "CloseIncidentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "closed_by": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Closed By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "closed_by"
+        ],
+        "title": "CloseIncidentRequest",
+        "type": "object"
+      },
+      "ComponentCheck": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "ok": {
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "ok",
+          "detail"
+        ],
+        "title": "ComponentCheck",
+        "type": "object"
+      },
+      "ConflictStatus": {
+        "enum": [
+          "OPEN",
+          "RESOLVED"
+        ],
+        "title": "ConflictStatus",
+        "type": "string"
+      },
+      "ConflictView": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_key": {
+            "maxLength": 120,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_]*)+$",
+            "title": "Canonical Key",
+            "type": "string"
+          },
+          "conflict_id": {
+            "title": "Conflict Id",
+            "type": "string"
+          },
+          "detected_at": {
+            "format": "date-time",
+            "title": "Detected At",
+            "type": "string"
+          },
+          "fact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "resolved_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Resolved By"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ConflictStatus"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conflict_id",
+          "canonical_key",
+          "rule_id",
+          "severity",
+          "summary",
+          "fact_ids",
+          "status",
+          "detected_at"
+        ],
+        "title": "ConflictView",
+        "type": "object"
+      },
+      "DeadLetterListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "dead_letters": {
+            "items": {
+              "$ref": "#/components/schemas/DeadLetterView"
+            },
+            "title": "Dead Letters",
+            "type": "array"
+          }
+        },
+        "required": [
+          "dead_letters",
+          "count"
+        ],
+        "title": "DeadLetterListResponse",
+        "type": "object"
+      },
+      "DeadLetterView": {
+        "additionalProperties": false,
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "dead_lettered_at": {
+            "title": "Dead Lettered At",
+            "type": "string"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "failure_class": {
+            "$ref": "#/components/schemas/FailureClass"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "subscriber": {
+            "title": "Subscriber",
+            "type": "string"
+          },
+          "topic": {
+            "$ref": "#/components/schemas/Topic"
+          }
+        },
+        "required": [
+          "event_id",
+          "topic",
+          "subscriber",
+          "attempts",
+          "reason",
+          "failure_class",
+          "dead_lettered_at",
+          "correlation_id"
+        ],
+        "title": "DeadLetterView",
+        "type": "object"
+      },
+      "DeliveryReport": {
+        "additionalProperties": false,
+        "description": "What happened to one delivery, per subscriber.",
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "backoffs_ms": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Backoffs Ms",
+            "type": "array"
+          },
+          "error_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Code"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DeliveryStatus"
+          },
+          "subscriber": {
+            "title": "Subscriber",
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber",
+          "status",
+          "attempts"
+        ],
+        "title": "DeliveryReport",
+        "type": "object"
+      },
+      "DeliveryStatus": {
+        "description": "What became of one (envelope, subscriber) pair.",
+        "enum": [
+          "DELIVERED",
+          "DEDUPED",
+          "IN_PROGRESS",
+          "DEAD_LETTERED",
+          "CIRCUIT_OPEN"
+        ],
+        "title": "DeliveryStatus",
+        "type": "string"
+      },
+      "Department": {
+        "description": "Municipal departments that publish agents or receive writes.",
+        "enum": [
+          "fire",
+          "building",
+          "planning",
+          "county-oem",
+          "water",
+          "public-works",
+          "police",
+          "utility",
+          "ems"
+        ],
+        "title": "Department",
+        "type": "string"
+      },
+      "DispatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "company": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Company",
+            "type": "string"
+          },
+          "crew_email": {
+            "maxLength": 200,
+            "minLength": 3,
+            "title": "Crew Email",
+            "type": "string"
+          }
+        },
+        "required": [
+          "company",
+          "crew_email"
+        ],
+        "title": "DispatchRequest",
+        "type": "object"
+      },
+      "DistrictStatsView": {
+        "additionalProperties": false,
+        "description": "What a battalion chief sees before opening anything.",
+        "properties": {
+          "dispatched": {
+            "title": "Dispatched",
+            "type": "integer"
+          },
+          "district_id": {
+            "title": "District Id",
+            "type": "string"
+          },
+          "facts": {
+            "title": "Facts",
+            "type": "integer"
+          },
+          "high_severity_conflicts": {
+            "title": "High Severity Conflicts",
+            "type": "integer"
+          },
+          "open_conflicts": {
+            "title": "Open Conflicts",
+            "type": "integer"
+          },
+          "open_referrals": {
+            "title": "Open Referrals",
+            "type": "integer"
+          },
+          "profiles": {
+            "title": "Profiles",
+            "type": "integer"
+          },
+          "profiles_never_surveyed": {
+            "title": "Profiles Never Surveyed",
+            "type": "integer"
+          },
+          "queued_for_survey": {
+            "title": "Queued For Survey",
+            "type": "integer"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourceHealthView"
+            },
+            "title": "Sources",
+            "type": "array"
+          },
+          "surveyed": {
+            "title": "Surveyed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "district_id",
+          "profiles",
+          "facts",
+          "open_conflicts",
+          "high_severity_conflicts",
+          "queued_for_survey",
+          "dispatched",
+          "surveyed",
+          "profiles_never_surveyed",
+          "open_referrals",
+          "sources"
+        ],
+        "title": "DistrictStatsView",
+        "type": "object"
+      },
+      "EnumValue": {
+        "additionalProperties": false,
+        "description": "A term drawn from a named vocabulary (e.g. ISO construction types).",
+        "properties": {
+          "kind": {
+            "const": "ENUM",
+            "default": "ENUM",
+            "title": "Kind",
+            "type": "string"
+          },
+          "term": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Term",
+            "type": "string"
+          },
+          "vocabulary": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Vocabulary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "term",
+          "vocabulary"
+        ],
+        "title": "EnumValue",
+        "type": "object"
+      },
+      "Face": {
+        "additionalProperties": false,
+        "description": "A labelled exterior face, and what thermal coverage it has.",
+        "properties": {
+          "label": {
+            "$ref": "#/components/schemas/FaceLabel"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "thermal": {
+            "default": {
+              "kind": "UNSCANNED"
+            },
+            "discriminator": {
+              "mapping": {
+                "QUANTITY": "#/components/schemas/QuantityValue",
+                "UNAVAILABLE": "#/components/schemas/UnavailableValue",
+                "UNSCANNED": "#/components/schemas/UnscannedValue"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QuantityValue"
+              },
+              {
+                "$ref": "#/components/schemas/UnscannedValue"
+              },
+              {
+                "$ref": "#/components/schemas/UnavailableValue"
+              }
+            ],
+            "title": "Thermal"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "Face",
+        "type": "object"
+      },
+      "FaceLabel": {
+        "description": "Fireground face labelling.",
+        "enum": [
+          "ALPHA",
+          "BRAVO",
+          "CHARLIE",
+          "DELTA",
+          "ROOF"
+        ],
+        "title": "FaceLabel",
+        "type": "string"
+      },
+      "FactView": {
+        "additionalProperties": false,
+        "description": "One attribute as the console renders it.",
+        "properties": {
+          "all_fact_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "All Fact Ids",
+            "type": "array"
+          },
+          "canonical_key": {
+            "maxLength": 120,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_]*)+$",
+            "title": "Canonical Key",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "decayed_confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decayed Confidence"
+          },
+          "human_verified": {
+            "default": false,
+            "title": "Human Verified",
+            "type": "boolean"
+          },
+          "known": {
+            "title": "Known",
+            "type": "boolean"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/SourceType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AssertionStatus"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "canonical_key",
+          "value",
+          "status",
+          "known",
+          "source_type",
+          "source_ref",
+          "observed_at",
+          "confidence"
+        ],
+        "title": "FactView",
+        "type": "object"
+      },
+      "FailureClass": {
+        "description": "What kind of failure a handler raised, and therefore what to do next.",
+        "enum": [
+          "TRANSIENT",
+          "CONTENDED",
+          "PERMANENT",
+          "POISON"
+        ],
+        "title": "FailureClass",
+        "type": "string"
+      },
+      "GeometrySpec": {
+        "additionalProperties": false,
+        "description": "The renderable structural picture for one address.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "collapse_zone_radius_m": {
+            "minimum": 0.0,
+            "title": "Collapse Zone Radius M",
+            "type": "number"
+          },
+          "faces": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Face"
+            },
+            "title": "Faces",
+            "type": "array"
+          },
+          "footprint": {
+            "description": "metres, local ENU",
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            "minItems": 3,
+            "title": "Footprint",
+            "type": "array"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "levels": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Level"
+            },
+            "title": "Levels",
+            "type": "array"
+          },
+          "obstructions": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Obstruction"
+            },
+            "title": "Obstructions",
+            "type": "array"
+          },
+          "roof_segments": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RoofSegment"
+            },
+            "title": "Roof Segments",
+            "type": "array"
+          },
+          "spec_version": {
+            "default": 1,
+            "title": "Spec Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "address_id",
+          "generated_at",
+          "footprint",
+          "collapse_zone_radius_m"
+        ],
+        "title": "GeometrySpec",
+        "type": "object"
+      },
+      "GeometryView": {
+        "additionalProperties": false,
+        "properties": {
+          "has_disputed_mass": {
+            "title": "Has Disputed Mass",
+            "type": "boolean"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/GeometrySpec"
+          },
+          "svg": {
+            "title": "Svg",
+            "type": "string"
+          },
+          "total_height_m": {
+            "title": "Total Height M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "spec",
+          "svg",
+          "has_disputed_mass",
+          "total_height_m"
+        ],
+        "title": "GeometryView",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "IntegerValue": {
+        "additionalProperties": false,
+        "properties": {
+          "integer": {
+            "title": "Integer",
+            "type": "integer"
+          },
+          "kind": {
+            "const": "INTEGER",
+            "default": "INTEGER",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "integer"
+        ],
+        "title": "IntegerValue",
+        "type": "object"
+      },
+      "Level": {
+        "additionalProperties": false,
+        "description": "One storey of extruded mass.",
+        "properties": {
+          "fact_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fact Id"
+          },
+          "height_m": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 200.0,
+            "title": "Height M",
+            "type": "number"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SourceType"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AssertionStatus"
+          }
+        },
+        "required": [
+          "height_m",
+          "provenance",
+          "status"
+        ],
+        "title": "Level",
+        "type": "object"
+      },
+      "LivenessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "app",
+          "version"
+        ],
+        "title": "LivenessResponse",
+        "type": "object"
+      },
+      "Loop": {
+        "description": "Which tempo an agent runs at.",
+        "enum": [
+          "SLOW",
+          "INCIDENT"
+        ],
+        "title": "Loop",
+        "type": "string"
+      },
+      "MetricsView": {
+        "additionalProperties": false,
+        "description": "The nine metrics, as a snapshot.",
+        "properties": {
+          "conflicts_per_1000_structures": {
+            "title": "Conflicts Per 1000 Structures",
+            "type": "number"
+          },
+          "enriched_brief_latency_p50_ms": {
+            "title": "Enriched Brief Latency P50 Ms",
+            "type": "number"
+          },
+          "enriched_brief_latency_p95_ms": {
+            "title": "Enriched Brief Latency P95 Ms",
+            "type": "number"
+          },
+          "injection_blocks": {
+            "title": "Injection Blocks",
+            "type": "integer"
+          },
+          "model_output_rejections": {
+            "title": "Model Output Rejections",
+            "type": "integer"
+          },
+          "notification_delivery": {
+            "title": "Notification Delivery",
+            "type": "number"
+          },
+          "policy_denials": {
+            "title": "Policy Denials",
+            "type": "integer"
+          },
+          "queue_precision": {
+            "title": "Queue Precision",
+            "type": "number"
+          },
+          "referral_acceptance": {
+            "title": "Referral Acceptance",
+            "type": "number"
+          },
+          "samples": {
+            "title": "Samples",
+            "type": "integer"
+          },
+          "time_to_first_line_p50_ms": {
+            "title": "Time To First Line P50 Ms",
+            "type": "number"
+          },
+          "time_to_first_line_p95_ms": {
+            "title": "Time To First Line P95 Ms",
+            "type": "number"
+          }
+        },
+        "required": [
+          "time_to_first_line_p50_ms",
+          "time_to_first_line_p95_ms",
+          "enriched_brief_latency_p50_ms",
+          "enriched_brief_latency_p95_ms",
+          "conflicts_per_1000_structures",
+          "queue_precision",
+          "referral_acceptance",
+          "notification_delivery",
+          "policy_denials",
+          "injection_blocks",
+          "model_output_rejections",
+          "samples"
+        ],
+        "title": "MetricsView",
+        "type": "object"
+      },
+      "Obstruction": {
+        "additionalProperties": false,
+        "description": "Something on the roof a crew cannot cut through.",
+        "properties": {
+          "provenance": {
+            "$ref": "#/components/schemas/SourceType"
+          },
+          "segment_index": {
+            "minimum": 0.0,
+            "title": "Segment Index",
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AssertionStatus",
+            "default": "CONFIRMED"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ObstructionType"
+          }
+        },
+        "required": [
+          "type",
+          "segment_index",
+          "provenance"
+        ],
+        "title": "Obstruction",
+        "type": "object"
+      },
+      "ObstructionType": {
+        "enum": [
+          "SOLAR_ARRAY",
+          "HVAC_UNIT",
+          "SKYLIGHT",
+          "PARAPET",
+          "ANTENNA",
+          "EV_CHARGER"
+        ],
+        "title": "ObstructionType",
+        "type": "string"
+      },
+      "OpenIncidentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Address",
+            "type": "string"
+          },
+          "alarm_level": {
+            "default": 1,
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Alarm Level",
+            "type": "integer"
+          },
+          "cad_ref": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Cad Ref",
+            "type": "string"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatched At"
+          },
+          "mutual_aid_agreement_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mutual Aid Agreement Id"
+          },
+          "responding_agency_id": {
+            "default": "sffd",
+            "maxLength": 120,
+            "title": "Responding Agency Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address",
+          "cad_ref"
+        ],
+        "title": "OpenIncidentRequest",
+        "type": "object"
+      },
+      "OpenIncidentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "address_id": {
+            "title": "Address Id",
+            "type": "string"
+          },
+          "brief": {
+            "additionalProperties": true,
+            "title": "Brief",
+            "type": "object"
+          },
+          "cold_start": {
+            "title": "Cold Start",
+            "type": "boolean"
+          },
+          "dispatched_at": {
+            "format": "date-time",
+            "title": "Dispatched At",
+            "type": "string"
+          },
+          "elapsed_seconds": {
+            "title": "Elapsed Seconds",
+            "type": "number"
+          },
+          "event_id": {
+            "title": "Event Id",
+            "type": "string"
+          },
+          "grant_id": {
+            "title": "Grant Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "instant_brief_ms": {
+            "title": "Instant Brief Ms",
+            "type": "number"
+          },
+          "profile_snapshot_id": {
+            "title": "Profile Snapshot Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "address_id",
+          "profile_snapshot_id",
+          "grant_id",
+          "cold_start",
+          "dispatched_at",
+          "elapsed_seconds",
+          "brief",
+          "instant_brief_ms",
+          "event_id"
+        ],
+        "title": "OpenIncidentResponse",
+        "type": "object"
+      },
+      "PolicyDecisionView": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "classification": {
+            "title": "Classification",
+            "type": "string"
+          },
+          "decided_at": {
+            "title": "Decided At",
+            "type": "string"
+          },
+          "decided_by": {
+            "title": "Decided By",
+            "type": "string"
+          },
+          "decision_id": {
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "justification": {
+            "title": "Justification",
+            "type": "string"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "policy_version": {
+            "title": "Policy Version",
+            "type": "string"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "agent_id",
+          "target",
+          "operation",
+          "classification",
+          "action",
+          "rule_id",
+          "justification",
+          "policy_version",
+          "decided_at",
+          "decided_by"
+        ],
+        "title": "PolicyDecisionView",
+        "type": "object"
+      },
+      "PushResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "deliveries": {
+            "items": {
+              "$ref": "#/components/schemas/DeliveryReport"
+            },
+            "title": "Deliveries",
+            "type": "array"
+          },
+          "event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "poison_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poison Reason"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Topic"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "title": "PushResponse",
+        "type": "object"
+      },
+      "QuantityValue": {
+        "additionalProperties": false,
+        "description": "A magnitude that is meaningless without its unit, so the unit is required.",
+        "properties": {
+          "kind": {
+            "const": "QUANTITY",
+            "default": "QUANTITY",
+            "title": "Kind",
+            "type": "string"
+          },
+          "magnitude": {
+            "title": "Magnitude",
+            "type": "number"
+          },
+          "unit": {
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "magnitude",
+          "unit"
+        ],
+        "title": "QuantityValue",
+        "type": "object"
+      },
+      "QueueEntryView": {
+        "additionalProperties": false,
+        "properties": {
+          "address_id": {
+            "title": "Address Id",
+            "type": "string"
+          },
+          "assigned_company": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned Company"
+          },
+          "calendar_event_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Calendar Event Ref"
+          },
+          "dispatched_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispatched At"
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "reasons": {
+            "items": {
+              "$ref": "#/components/schemas/RankReasonView"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "survey_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Survey Id"
+          }
+        },
+        "required": [
+          "entry_id",
+          "address_id",
+          "rank",
+          "score",
+          "status",
+          "reasons"
+        ],
+        "title": "QueueEntryView",
+        "type": "object"
+      },
+      "QueueView": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "district_id": {
+            "title": "District Id",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/QueueEntryView"
+            },
+            "title": "Entries",
+            "type": "array"
+          }
+        },
+        "required": [
+          "district_id",
+          "entries",
+          "count"
+        ],
+        "title": "QueueView",
+        "type": "object"
+      },
+      "RankReasonView": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Canonical Key"
+          },
+          "conflict_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflict Id"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "rule_id": {
+            "title": "Rule Id",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rule_id",
+          "detail",
+          "weight"
+        ],
+        "title": "RankReasonView",
+        "type": "object"
+      },
+      "ReadinessResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/ComponentCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "ready",
+          "mode",
+          "checks"
+        ],
+        "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "ResolutionRequest": {
+        "additionalProperties": false,
+        "description": "What an IC saw during the 360.",
+        "properties": {
+          "conflict_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Conflict Id",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Note",
+            "type": "string"
+          },
+          "observed_value": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Observed Value",
+            "type": "string"
+          },
+          "resolved_by": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Resolved By",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conflict_id",
+          "observed_value",
+          "resolved_by"
+        ],
+        "title": "ResolutionRequest",
+        "type": "object"
+      },
+      "ResourceRequestBody": {
+        "additionalProperties": false,
+        "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
+          "detail": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Detail",
+            "type": "string"
+          },
+          "kind_id": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Kind Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind_id"
+        ],
+        "title": "ResourceRequestBody",
+        "type": "object"
+      },
+      "RoofSegment": {
+        "additionalProperties": false,
+        "properties": {
+          "area_m2": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Area M2"
+          },
+          "azimuth_deg": {
+            "exclusiveMaximum": 360.0,
+            "minimum": 0.0,
+            "title": "Azimuth Deg",
+            "type": "number"
+          },
+          "pitch_deg": {
+            "maximum": 90.0,
+            "minimum": 0.0,
+            "title": "Pitch Deg",
+            "type": "number"
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/SourceType",
+            "default": "SOLAR_API"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AssertionStatus",
+            "default": "CONFIRMED"
+          }
+        },
+        "required": [
+          "pitch_deg",
+          "azimuth_deg"
+        ],
+        "title": "RoofSegment",
+        "type": "object"
+      },
+      "SchedulerTickRequest": {
+        "additionalProperties": false,
+        "description": "What Cloud Scheduler sends on each tick.",
+        "properties": {
+          "district_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "District Id"
+          },
+          "reason": {
+            "default": "scheduled",
+            "maxLength": 60,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "SchedulerTickRequest",
+        "type": "object"
+      },
+      "Scope": {
+        "description": "Grant scopes. Read scopes and write scopes are deliberately separate:\nan agent authorized to read the permit system is not thereby authorized to\nfile with it.",
+        "enum": [
+          "read:public-records",
+          "read:tier-ii-metadata",
+          "read:ems-derived",
+          "read:profile",
+          "read:geometry",
+          "read:audit",
+          "write:profile",
+          "write:referral",
+          "write:work-order",
+          "write:preincident-plan",
+          "write:rms",
+          "notify:agency",
+          "write:utility-shutoff",
+          "write:road-closure"
+        ],
+        "title": "Scope",
+        "type": "string"
+      },
+      "SourceHealthView": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "cache_hits": {
+            "title": "Cache Hits",
+            "type": "integer"
+          },
+          "circuit_state": {
+            "title": "Circuit State",
+            "type": "string"
+          },
+          "last_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Snapshot Id"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          },
+          "upstream_calls": {
+            "title": "Upstream Calls",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "source_id",
+          "mode",
+          "circuit_state",
+          "available",
+          "cache_hits",
+          "upstream_calls"
+        ],
+        "title": "SourceHealthView",
+        "type": "object"
+      },
+      "SourceType": {
+        "description": "Where a fact came from. Drives :class:`SourceTier` and therefore merge order.",
+        "enum": [
+          "PERMIT",
+          "ASSESSOR",
+          "FIRE_INSPECTION",
+          "VIOLATION",
+          "PARCEL",
+          "HYDRANT",
+          "EPA_RMP",
+          "EPA_TRI",
+          "EPA_FRS",
+          "PHMSA_PIPELINE",
+          "NREL_EV",
+          "TIER_II",
+          "SOLAR_API",
+          "LIDAR_DSM",
+          "STREET_VIEW",
+          "THERMAL_SENSOR",
+          "IC_RESOLUTION",
+          "NWS_OBSERVATION",
+          "HUMAN_SURVEY",
+          "CAD",
+          "RMS",
+          "EMS_DERIVED",
+          "DERIVED"
+        ],
+        "title": "SourceType",
+        "type": "string"
+      },
+      "SubscribeRequest": {
+        "additionalProperties": false,
+        "description": "Bind a department to one exact version of an agent.",
+        "properties": {
+          "agent_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "pinned_version": {
+            "maxLength": 32,
+            "minLength": 5,
+            "pattern": "^\\d+\\.\\d+\\.\\d+$",
+            "title": "Pinned Version",
+            "type": "string"
+          },
+          "subscriber_department": {
+            "$ref": "#/components/schemas/Department"
+          },
+          "subscription_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription Id"
+          }
+        },
+        "required": [
+          "subscriber_department",
+          "agent_id",
+          "pinned_version"
+        ],
+        "title": "SubscribeRequest",
+        "type": "object"
+      },
+      "SubscriptionListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "subscriptions": {
+            "items": {
+              "$ref": "#/components/schemas/SubscriptionView"
+            },
+            "title": "Subscriptions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "subscriptions",
+          "count"
+        ],
+        "title": "SubscriptionListResponse",
+        "type": "object"
+      },
+      "SubscriptionView": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "pinned_version": {
+            "title": "Pinned Version",
+            "type": "string"
+          },
+          "ref": {
+            "title": "Ref",
+            "type": "string"
+          },
+          "subscribed_at": {
+            "title": "Subscribed At",
+            "type": "string"
+          },
+          "subscriber_department": {
+            "$ref": "#/components/schemas/Department"
+          },
+          "subscription_id": {
+            "title": "Subscription Id",
+            "type": "string"
+          },
+          "unsubscribed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unsubscribed At"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "subscriber_department",
+          "agent_id",
+          "pinned_version",
+          "ref",
+          "subscribed_at"
+        ],
+        "title": "SubscriptionView",
+        "type": "object"
+      },
+      "SurveyObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_key": {
+            "maxLength": 120,
+            "minLength": 3,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_]*)+$",
+            "title": "Canonical Key",
+            "type": "string"
+          },
+          "value": {
+            "discriminator": {
+              "mapping": {
+                "BOOLEAN": "#/components/schemas/BooleanValue",
+                "ENUM": "#/components/schemas/EnumValue",
+                "INTEGER": "#/components/schemas/IntegerValue",
+                "QUANTITY": "#/components/schemas/QuantityValue",
+                "TEXT": "#/components/schemas/TextValue",
+                "UNAVAILABLE": "#/components/schemas/UnavailableValue",
+                "UNKNOWN": "#/components/schemas/UnknownValue",
+                "UNSCANNED": "#/components/schemas/UnscannedValue",
+                "WITHHELD": "#/components/schemas/WithheldValue"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TextValue"
+              },
+              {
+                "$ref": "#/components/schemas/IntegerValue"
+              },
+              {
+                "$ref": "#/components/schemas/QuantityValue"
+              },
+              {
+                "$ref": "#/components/schemas/BooleanValue"
+              },
+              {
+                "$ref": "#/components/schemas/EnumValue"
+              },
+              {
+                "$ref": "#/components/schemas/UnknownValue"
+              },
+              {
+                "$ref": "#/components/schemas/UnavailableValue"
+              },
+              {
+                "$ref": "#/components/schemas/WithheldValue"
+              },
+              {
+                "$ref": "#/components/schemas/UnscannedValue"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "canonical_key",
+          "value"
+        ],
+        "title": "SurveyObservation",
+        "type": "object"
+      },
+      "SurveyOutcome": {
+        "enum": [
+          "COMPLETED",
+          "NO_ACCESS",
+          "PARTIAL"
+        ],
+        "title": "SurveyOutcome",
+        "type": "string"
+      },
+      "SurveyRecord": {
+        "additionalProperties": false,
+        "description": "A human company survey. The only thing that can set ``human_verified``.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "company": {
+            "description": "e.g. E-05",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Company",
+            "type": "string"
+          },
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SurveyOutcome"
+          },
+          "queue_entry_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Entry Id"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "survey_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Survey Id",
+            "type": "string"
+          },
+          "surveyor": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Surveyor",
+            "type": "string"
+          },
+          "verified_keys": {
+            "default": [],
+            "items": {
+              "maxLength": 120,
+              "minLength": 3,
+              "pattern": "^[a-z][a-z0-9_]*(\\.[a-z0-9][a-z0-9_]*)+$",
+              "type": "string"
+            },
+            "title": "Verified Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "survey_id",
+          "address_id",
+          "company",
+          "surveyor",
+          "started_at",
+          "completed_at",
+          "outcome"
+        ],
+        "title": "SurveyRecord",
+        "type": "object"
+      },
+      "SurveySubmission": {
+        "additionalProperties": false,
+        "properties": {
+          "company": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Company",
+            "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 8000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "observations": {
+            "items": {
+              "$ref": "#/components/schemas/SurveyObservation"
+            },
+            "title": "Observations",
+            "type": "array"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/SurveyOutcome",
+            "default": "COMPLETED"
+          },
+          "queue_entry_id": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Entry Id"
+          },
+          "surveyor": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Surveyor",
+            "type": "string"
+          }
+        },
+        "required": [
+          "company",
+          "surveyor"
+        ],
+        "title": "SurveySubmission",
+        "type": "object"
+      },
+      "SystemStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "title": "App",
+            "type": "string"
+          },
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/CapabilityInfo"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "disclosure": {
+            "title": "Disclosure",
+            "type": "string"
+          },
+          "districts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Districts",
+            "type": "array"
+          },
+          "environment": {
+            "title": "Environment",
+            "type": "string"
+          },
+          "event_backend": {
+            "title": "Event Backend",
+            "type": "string"
+          },
+          "instant_brief_budget_ms": {
+            "title": "Instant Brief Budget Ms",
+            "type": "integer"
+          },
+          "mode": {
+            "title": "Mode",
+            "type": "string"
+          },
+          "municipality_id": {
+            "title": "Municipality Id",
+            "type": "string"
+          },
+          "published_agents": {
+            "title": "Published Agents",
+            "type": "integer"
+          },
+          "seeded_profiles": {
+            "title": "Seeded Profiles",
+            "type": "integer"
+          },
+          "storage_backend": {
+            "title": "Storage Backend",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "app",
+          "version",
+          "environment",
+          "mode",
+          "storage_backend",
+          "event_backend",
+          "municipality_id",
+          "districts",
+          "instant_brief_budget_ms",
+          "seeded_profiles",
+          "published_agents",
+          "capabilities",
+          "disclosure"
+        ],
+        "title": "SystemStatus",
+        "type": "object"
+      },
+      "TextValue": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "const": "TEXT",
+            "default": "TEXT",
+            "title": "Kind",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "TextValue",
+        "type": "object"
+      },
+      "ThermalFrameRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "coverage": {
+            "default": 1.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Coverage",
+            "type": "number"
+          },
+          "face": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Face",
+            "type": "string"
+          },
+          "region_temps_c": {
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Region Temps C",
+            "type": "array"
+          },
+          "source": {
+            "default": "recorded",
+            "maxLength": 60,
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "face",
+          "region_temps_c"
+        ],
+        "title": "ThermalFrameRequest",
+        "type": "object"
+      },
+      "TimelineEventView": {
+        "additionalProperties": false,
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "actor_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor Version"
+          },
+          "conflict_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conflict Id"
+          },
+          "fact_ids": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Fact Ids",
+            "type": "array"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "type": {
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sequence",
+          "occurred_at",
+          "type",
+          "actor",
+          "summary"
+        ],
+        "title": "TimelineEventView",
+        "type": "object"
+      },
+      "Topic": {
+        "description": "Pub/Sub topics. One per handoff in the fleet.",
+        "enum": [
+          "source.poll",
+          "fact.written",
+          "geometry.stale",
+          "conflict.detected",
+          "queue.ranked",
+          "referral.staged",
+          "incident.opened",
+          "brief.emitted",
+          "notification.sent",
+          "approval.staged",
+          "thermal.frame.received",
+          "fact.observed",
+          "record.written",
+          "incident.closed",
+          "profile.materialized",
+          "agent.published"
+        ],
+        "title": "Topic",
+        "type": "string"
+      },
+      "UnavailableValue": {
+        "additionalProperties": false,
+        "description": "A source could not be reached, or its circuit breaker is open.\n\nNever collapses to :class:`UnknownValue`: \"the hazmat database is down\" and\n\"the hazmat database has no filing\" are different operational facts.",
+        "properties": {
+          "kind": {
+            "const": "UNAVAILABLE",
+            "default": "UNAVAILABLE",
+            "title": "Kind",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "source_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "reason"
+        ],
+        "title": "UnavailableValue",
+        "type": "object"
+      },
+      "UnknownValue": {
+        "additionalProperties": false,
+        "description": "No record found. Distinct from \"nothing is there\".",
+        "properties": {
+          "checked_sources": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Checked Sources",
+            "type": "array"
+          },
+          "kind": {
+            "const": "UNKNOWN",
+            "default": "UNKNOWN",
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "title": "UnknownValue",
+        "type": "object"
+      },
+      "UnscannedValue": {
+        "additionalProperties": false,
+        "description": "A surface exists but has no sensor coverage. Never rendered as cool.",
+        "properties": {
+          "kind": {
+            "const": "UNSCANNED",
+            "default": "UNSCANNED",
+            "title": "Kind",
+            "type": "string"
+          },
+          "surface": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Surface"
+          }
+        },
+        "title": "UnscannedValue",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "WithheldValue": {
+        "additionalProperties": false,
+        "description": "Statutorily or jurisdictionally withheld. The requester learns it exists.",
+        "properties": {
+          "authority": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Authority",
+            "type": "string"
+          },
+          "kind": {
+            "const": "WITHHELD",
+            "default": "WITHHELD",
+            "title": "Kind",
+            "type": "string"
+          },
+          "rule_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Rule Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule_id",
+          "authority"
+        ],
+        "title": "WithheldValue",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "Municipal structural intelligence as an institutional agent fleet.\n\nA decision-support prototype. It delivers information and performs clerical\nexecution. It never issues tactical recommendations, evacuation orders, crew\nassignments, or fire-behaviour predictions.",
+    "title": "FIRST DUE",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/buildings/{address_id}": {
+      "get": {
+        "operationId": "building_profile_api_v1_buildings__address_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildingProfileView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One building profile",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/buildings/{address_id}/geometry": {
+      "get": {
+        "description": "The spec plus its static fallback.\n\nDisputed mass is marked in the data, so the fallback shows it as disputed\ntoo -- the conflict is not a property of the renderer.",
+        "operationId": "building_geometry_api_v1_buildings__address_id__geometry_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeometryView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Renderable geometry, with an SVG fallback",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/buildings/{address_id}/surveys": {
+      "get": {
+        "operationId": "building_surveys_api_v1_buildings__address_id__surveys_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SurveyRecord"
+                  },
+                  "title": "Response Building Surveys Api V1 Buildings  Address Id  Surveys Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Company surveys recorded for this building",
+        "tags": [
+          "console"
+        ]
+      },
+      "post": {
+        "description": "Record what a crew saw.\n\nThis is the only input that can set ``human_verified`` and the only one that\ncan close a conflict. Attributes the crew did not observe stay open.",
+        "operationId": "record_survey_api_v1_buildings__address_id__surveys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SurveySubmission"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Record Survey Api V1 Buildings  Address Id  Surveys Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record a completed company survey",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/buildings/{address_id}/timeline": {
+      "get": {
+        "description": "Everything that ever happened to this profile, in order. Never edited.",
+        "operationId": "building_timeline_api_v1_buildings__address_id__timeline_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TimelineEventView"
+                  },
+                  "title": "Response Building Timeline Api V1 Buildings  Address Id  Timeline Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The building's append-only timeline",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/conflicts/{conflict_id}/referral": {
+      "post": {
+        "description": "Stage, never file.\n\nReturns ``202``: the referral exists and is waiting for a human. Filing it\naccuses a property owner of unpermitted construction, which is a captain's\ndecision and not an agent's.",
+        "operationId": "stage_referral_api_v1_conflicts__conflict_id__referral_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conflict_id",
+            "required": true,
+            "schema": {
+              "title": "Conflict Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Stage Referral Api V1 Conflicts  Conflict Id  Referral Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage a building-department referral for a conflict",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/districts/{district_id}/poll": {
+      "post": {
+        "description": "Poll every source, materialize, and re-rank.\n\nIn production a scheduler drives this; exposing it lets the console show the\nloop running and lets the demo be a single request. It is idempotent: a\nsecond call re-derives what exists and writes none of it again.\n\n``approve`` defaults to false, which leaves any staged referral waiting for\na human -- the honest default.",
+        "operationId": "poll_district_api_v1_districts__district_id__poll_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "district_id",
+            "required": true,
+            "schema": {
+              "title": "District Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "approve",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Approve",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Poll District Api V1 Districts  District Id  Poll Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run one slow-loop pass over a district",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/districts/{district_id}/queue": {
+      "get": {
+        "description": "The queue as ranked. Every row carries the reasons that produced it.",
+        "operationId": "district_queue_api_v1_districts__district_id__queue_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "district_id",
+            "required": true,
+            "schema": {
+              "title": "District Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The district's ranked survey queue",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/districts/{district_id}/stats": {
+      "get": {
+        "operationId": "district_stats_api_v1_districts__district_id__stats_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "district_id",
+            "required": true,
+            "schema": {
+              "title": "District Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DistrictStatsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "District readiness statistics",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/incidents": {
+      "post": {
+        "description": "Open an incident and return the instant brief.\n\nThe brief in this response is already in the incident log -- it is persisted\nbefore it is returned, exactly as it is before it is streamed.",
+        "operationId": "open_incident_api_v1_incidents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpenIncidentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenIncidentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Open an incident from a CAD dispatch",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/approvals/{approval_id}": {
+      "post": {
+        "description": "The human tap. Records who approved it, and then executes.",
+        "operationId": "approve_action_api_v1_incidents__incident_id__approvals__approval_id__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "approval_id",
+            "required": true,
+            "schema": {
+              "title": "Approval Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Action Api V1 Incidents  Incident Id  Approvals  Approval Id  Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve a staged action",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/benchmarks/{benchmark_type}": {
+      "post": {
+        "description": "Record that something happened, when it happened. Clerical, not tactical.",
+        "operationId": "record_benchmark_api_v1_incidents__incident_id__benchmarks__benchmark_type__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "benchmark_type",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/BenchmarkType"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Record Benchmark Api V1 Incidents  Incident Id  Benchmarks  Benchmark Type  Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Timestamp an operational benchmark",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/brief": {
+      "get": {
+        "operationId": "latest_brief_api_v1_incidents__incident_id__brief_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Latest Brief Api V1 Incidents  Incident Id  Brief Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The latest brief version",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/brief/enrich": {
+      "post": {
+        "description": "Add the model-composed stage.\n\nA model that is unavailable or returns something the contract rejects leaves\nthe deterministic brief exactly as it was, and the emission says the\nnarrative is unavailable.",
+        "operationId": "enrich_brief_api_v1_incidents__incident_id__brief_enrich_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Enrich Brief Api V1 Incidents  Incident Id  Brief Enrich Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Produce the enriched brief version",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/close": {
+      "post": {
+        "description": "Close: revoke the grant, seal the log, draft the report.\n\nBoth the revocation and the seal happen. Authority ends when the incident\ndoes, and a log that could still be appended to afterwards is a log nobody\ncan rely on.",
+        "operationId": "close_incident_api_v1_incidents__incident_id__close_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseIncidentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Close Incident Api V1 Incidents  Incident Id  Close Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Close the incident",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/log": {
+      "get": {
+        "description": "Everything recorded during the incident, in order, with content hashes.",
+        "operationId": "incident_log_api_v1_incidents__incident_id__log_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Incident Log Api V1 Incidents  Incident Id  Log Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The append-only incident log",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/resolutions": {
+      "post": {
+        "description": "Settle a disagreement by looking at the building.\n\nAn IC walking the 360 is a human observation, so it can close a conflict\nthat no newer document could. It writes a live-observation fact, resolves\nthe conflict, bumps ``profile_version``, and produces a marked amendment.",
+        "operationId": "resolve_conflict_api_v1_incidents__incident_id__resolutions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resolve Conflict Api V1 Incidents  Incident Id  Resolutions Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record an IC resolution during the 360",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/resources": {
+      "post": {
+        "description": "Ask for a resource. The gateway decides whether a human must approve.\n\nNotifications go out autonomously. Anything that commits another agency's\nresources comes back ``REQUIRE_APPROVAL`` with a staged, prefilled card --\nand that distinction is made by policy, not by this endpoint.",
+        "operationId": "request_resource_api_v1_incidents__incident_id__resources_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResourceRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Request Resource Api V1 Incidents  Incident Id  Resources Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request a resource -- notification or commitment",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/stream": {
+      "get": {
+        "description": "Stream every brief version, in order, resumable.\n\nA reconnecting tablet sends ``Last-Event-ID`` and receives everything after\nit. The frames come from the emissions the log already holds, so a resumed\nstream shows what the original one sent rather than a fresh render.\n\nEvery frame calls ``require_persisted()`` before it is yielded. An emission\nthat somehow reached this point unpersisted raises rather than being shown.",
+        "operationId": "stream_brief_api_v1_incidents__incident_id__stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Version"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream brief versions over SSE",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/thermal": {
+      "post": {
+        "description": "Register recorded or synthetic thermal footage to one face.\n\nNever presented as a live flight. Faces with no current frame stay\nUNSCANNED, and every reading carries the caveat that thermal imaging\nmeasures surface temperature and cannot see through walls.",
+        "operationId": "register_thermal_api_v1_incidents__incident_id__thermal_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThermalFrameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Register Thermal Api V1 Incidents  Incident Id  Thermal Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register a thermal frame to a face",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/internal/audit/decisions": {
+      "get": {
+        "description": "Why every access was allowed, derived, withheld, staged, or denied.",
+        "operationId": "list_policy_decisions_api_v1_internal_audit_decisions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "incident_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Incident Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PolicyDecisionView"
+                  },
+                  "title": "Response List Policy Decisions Api V1 Internal Audit Decisions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Gateway policy decisions",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/audit/events": {
+      "get": {
+        "description": "Every recorded decision, exception, block, write, and grant.\n\nDetail was redacted on the way in, so this endpoint cannot leak what the\nrecords said even to a caller who is entitled to read the audit log.",
+        "operationId": "list_audit_events_api_v1_internal_audit_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "incident_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Incident Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AuditEventKind"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "correlation_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Correlation Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AuditEventView"
+                  },
+                  "title": "Response List Audit Events Api V1 Internal Audit Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Immutable audit events",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/callbacks/write": {
+      "post": {
+        "description": "Accept an acknowledgement from a system we wrote to.\n\nAuthenticated by HMAC signature over the method, path, timestamp, and a hash\nof the body -- not by the caller asserting who it is. The timestamp is\ninside the signed material and carries a freshness window, because a\nsignature that never goes stale is a replay waiting to happen.\n\nA callback changes what a profile says about a filed referral, so a forged\none would be a way to write to the record from outside.",
+        "operationId": "write_callback_api_v1_internal_callbacks_write_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Write Callback Api V1 Internal Callbacks Write Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, stale, or invalid signature."
+          }
+        },
+        "summary": "Signed callback from a receiving system",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/events/dead-letters": {
+      "get": {
+        "description": "Everything the fleet could not process. Surfaced, never dropped.",
+        "operationId": "list_dead_letters_api_v1_internal_events_dead_letters_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subscriber",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subscriber"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeadLetterListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dead-lettered envelopes",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/events/push": {
+      "post": {
+        "description": "Accept one pushed envelope and route it to local subscribers.",
+        "operationId": "push_event_api_v1_internal_events_push_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subscriber",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subscriber"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "Body",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "Not processed; the broker should redeliver."
+          }
+        },
+        "summary": "Pub/Sub push delivery",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/metrics": {
+      "get": {
+        "description": "The same numbers the OpenTelemetry exporter emits.\n\nServed here as well so the console and the staging smoke test can read them\nwithout a monitoring backend in the loop.",
+        "operationId": "metrics_snapshot_api_v1_internal_metrics_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Operational metrics snapshot",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/scheduler/tick": {
+      "post": {
+        "description": "Drive the slow loop on a schedule.\n\nPhase 3 built the loop and phase 3's own notes recorded the gap: \"`poll`\nruns when something calls it. Cloud Scheduler wiring is not written.\" This\nis what Cloud Scheduler calls, authenticated as a service the same way the\nPub/Sub push endpoint is.\n\nA referral is never auto-approved here. The pass stages it and a human\nfiles it, exactly as it does when a person triggers the poll.",
+        "operationId": "scheduler_tick_api_v1_internal_scheduler_tick_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulerTickRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Scheduler Tick Api V1 Internal Scheduler Tick Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing or invalid credentials."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cloud Scheduler tick: run one slow-loop pass",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/queue/{entry_id}/dispatch": {
+      "post": {
+        "description": "Cut the work order, hold the calendar, notify the crew, write the plan.\n\nIdempotent: dispatching the same entry twice returns the original work\norder and calendar event rather than double-booking a company.",
+        "operationId": "dispatch_entry_api_v1_queue__entry_id__dispatch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Dispatch Entry Api V1 Queue  Entry Id  Dispatch Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dispatch a company to a queued structure",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/referrals/{referral_id}/approve": {
+      "post": {
+        "description": "The one human tap that files.\n\nIdempotent on the referral's key: approving twice returns the first case\nnumber rather than opening a second case against the same property.",
+        "operationId": "approve_referral_api_v1_referrals__referral_id__approve_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "referral_id",
+            "required": true,
+            "schema": {
+              "title": "Referral Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Referral Api V1 Referrals  Referral Id  Approve Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve and file a staged referral",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/registry/agents": {
+      "get": {
+        "description": "List the catalog, filtered. Every filter is an ``AND``.",
+        "operationId": "list_agents_api_v1_registry_agents_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "publisher_department",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Department"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Publisher Department"
+            }
+          },
+          {
+            "in": "query",
+            "name": "loop",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Loop"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loop"
+            }
+          },
+          {
+            "in": "query",
+            "name": "capability",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Capability"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Capability"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Discover agents",
+        "tags": [
+          "registry"
+        ]
+      },
+      "post": {
+        "description": "Publish a descriptor.\n\nIdempotent for an identical descriptor and a 409 for a changed one: a\nversion somebody has pinned must not turn into different code underneath\nthem.",
+        "operationId": "publish_agent_api_v1_registry_agents_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentDescriptor"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDescriptorView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "This version is already published, differently."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Publish an agent descriptor",
+        "tags": [
+          "registry"
+        ]
+      }
+    },
+    "/api/v1/registry/agents/{agent_id}/{version}": {
+      "get": {
+        "operationId": "get_agent_api_v1_registry_agents__agent_id___version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDescriptorView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fetch one published version",
+        "tags": [
+          "registry"
+        ]
+      }
+    },
+    "/api/v1/registry/subscriptions": {
+      "get": {
+        "operationId": "list_subscriptions_api_v1_registry_subscriptions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "subscriber_department",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Department"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Subscriber Department"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List subscriptions",
+        "tags": [
+          "registry"
+        ]
+      },
+      "post": {
+        "description": "Pin a department to one version.\n\nSubscribing to an unpublished version is a 404 rather than a promise to\nresolve later: a pin to something that does not exist is not a pin.",
+        "operationId": "subscribe_api_v1_registry_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "That agent version has not been published."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Subscribe a department to a pinned version",
+        "tags": [
+          "registry"
+        ]
+      }
+    },
+    "/api/v1/registry/subscriptions/{subscriber_department}/{agent_id}/resolved": {
+      "get": {
+        "description": "The exact descriptor this department runs.\n\nPublishing a newer version does not change this answer. That is the point.",
+        "operationId": "resolve_pinned_api_v1_registry_subscriptions__subscriber_department___agent_id__resolved_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscriber_department",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Department"
+            }
+          },
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentDescriptorView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resolve the pinned version a department runs",
+        "tags": [
+          "registry"
+        ]
+      }
+    },
+    "/api/v1/system/status": {
+      "get": {
+        "operationId": "system_status_api_v1_system_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Build and mode status",
+        "tags": [
+          "system"
+        ]
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "healthz_healthz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/readyz": {
+      "get": {
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readiness",
+        "tags": [
+          "health"
+        ]
+      }
+    }
+  }
+}

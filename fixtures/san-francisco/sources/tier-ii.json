@@ -1,0 +1,20 @@
+{
+  "note": "SYNTHETIC Tier II records. Real Tier II filings are confidential; nothing here is real.",
+  "records": [
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "TIER_II_CONFIDENTIAL",
+      "document_text": "Tier II filing: anhydrous ammonia, rear ground-floor mechanical room, maximum 2,200 kg.",
+      "fields": {
+        "chemical": "anhydrous ammonia",
+        "max_quantity_kg": 2200,
+        "present": true,
+        "reporting_year": 2025,
+        "storage_location": "rear ground-floor mechanical room"
+      },
+      "observed_at": "2026-02-21T08:00:00+00:00",
+      "record_ref": "tier-ii/2025/sf-1550-bryant"
+    }
+  ],
+  "synthetic": true
+}

@@ -1,0 +1,174 @@
+{
+  "note": "Synthetic Google Solar API roof geometry responses.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 21.5,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": true
+      },
+      "observed_at": "2025-07-06T08:00:00+00:00",
+      "record_ref": "solar/sf-0450-hayes"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 18.6,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": true
+      },
+      "observed_at": "2025-07-15T08:00:00+00:00",
+      "record_ref": "solar/sf-1215-fell"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 18.6,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": false
+      },
+      "observed_at": "2025-07-24T08:00:00+00:00",
+      "record_ref": "solar/sf-0899-valencia"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 18.6,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": false
+      },
+      "observed_at": "2025-08-02T08:00:00+00:00",
+      "record_ref": "solar/sf-2130-mission"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 18.6,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": false
+      },
+      "observed_at": "2025-08-11T08:00:00+00:00",
+      "record_ref": "solar/sf-0350-rhode-island"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 18.6,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": false
+      },
+      "observed_at": "2025-08-20T08:00:00+00:00",
+      "record_ref": "solar/sf-1550-bryant"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "ground_elevation_m": 12.0,
+        "roof_elevation_m": 18.6,
+        "roof_segments": [
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 210.0,
+            "pitch_deg": 18.0
+          },
+          {
+            "area_m2": 126.5,
+            "azimuth_deg": 30.0,
+            "pitch_deg": 18.0
+          }
+        ],
+        "solar_array_present": false
+      },
+      "observed_at": "2025-08-29T08:00:00+00:00",
+      "record_ref": "solar/sf-0621-clement"
+    }
+  ],
+  "synthetic": true
+}

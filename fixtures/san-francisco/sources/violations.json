@@ -1,0 +1,18 @@
+{
+  "note": "Synthetic code-enforcement rows.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": "Complaint of work beyond the scope of permit 2018-04871 at 450 Hayes St. Additional habitable floor reported at the rear elevation. Case open.",
+      "fields": {
+        "case": "2025-4471",
+        "code": "SFBC 106A.3.2",
+        "status": "OPEN"
+      },
+      "observed_at": "2025-10-24T08:00:00+00:00",
+      "record_ref": "violation/sf-0450-hayes/2025-4471"
+    }
+  ],
+  "synthetic": true
+}

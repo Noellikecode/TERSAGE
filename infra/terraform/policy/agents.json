@@ -1,0 +1,191 @@
+{
+  "_comment": "Source of truth: backend/src/firstdue/registry/descriptors.py. tests/infra/test_iam_matches_descriptors.py fails if this drifts.",
+  "scope_roles": {
+    "read:public-records": [
+      "roles/datastore.viewer"
+    ],
+    "read:profile": [
+      "roles/datastore.viewer"
+    ],
+    "read:geometry": [
+      "roles/storage.objectViewer"
+    ],
+    "read:tier-ii-metadata": [
+      "roles/datastore.viewer"
+    ],
+    "read:audit": [
+      "roles/datastore.viewer"
+    ],
+    "read:ems-derived": [],
+    "write:profile": [
+      "roles/datastore.user"
+    ],
+    "write:preincident-plan": [
+      "roles/storage.objectCreator"
+    ],
+    "write:work-order": [
+      "roles/datastore.user"
+    ],
+    "write:referral": [
+      "roles/datastore.user"
+    ],
+    "write:rms": [
+      "roles/datastore.user"
+    ],
+    "write:utility-shutoff": [],
+    "notify:agency": []
+  },
+  "agents": {
+    "records-watcher": {
+      "loop": "SLOW",
+      "scopes": [
+        "read:public-records",
+        "write:profile"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "hazard-watcher": {
+      "loop": "SLOW",
+      "scopes": [
+        "read:public-records",
+        "read:tier-ii-metadata",
+        "write:profile"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "geometry-watcher": {
+      "loop": "SLOW",
+      "scopes": [
+        "read:geometry",
+        "read:public-records",
+        "write:preincident-plan",
+        "write:profile"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "conflict-detector": {
+      "loop": "SLOW",
+      "scopes": [
+        "read:profile",
+        "write:profile"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "survey-ranker": {
+      "loop": "SLOW",
+      "scopes": [
+        "read:profile",
+        "write:work-order"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "referral-clerk": {
+      "loop": "SLOW",
+      "scopes": [
+        "read:profile",
+        "write:referral"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "incident-controller": {
+      "loop": "INCIDENT",
+      "scopes": [
+        "read:ems-derived",
+        "read:geometry",
+        "read:profile"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "agency-notifier": {
+      "loop": "INCIDENT",
+      "scopes": [
+        "notify:agency",
+        "read:profile",
+        "write:utility-shutoff"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    },
+    "incident-recorder": {
+      "loop": "INCIDENT",
+      "scopes": [
+        "read:audit",
+        "read:profile",
+        "write:rms"
+      ],
+      "pubsub": [
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber"
+      ]
+    }
+  },
+  "services": {
+    "firstdue-slow": {
+      "display": "FIRST DUE slow loop",
+      "roles": [
+        "roles/datastore.user",
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber",
+        "roles/storage.objectAdmin",
+        "roles/aiplatform.user",
+        "roles/cloudtrace.agent",
+        "roles/logging.logWriter",
+        "roles/monitoring.metricWriter"
+      ]
+    },
+    "firstdue-incident": {
+      "display": "FIRST DUE incident loop",
+      "roles": [
+        "roles/datastore.user",
+        "roles/pubsub.publisher",
+        "roles/pubsub.subscriber",
+        "roles/storage.objectViewer",
+        "roles/aiplatform.user",
+        "roles/cloudtrace.agent",
+        "roles/logging.logWriter",
+        "roles/monitoring.metricWriter"
+      ]
+    },
+    "firstdue-console": {
+      "display": "FIRST DUE command center",
+      "roles": [
+        "roles/logging.logWriter"
+      ]
+    },
+    "firstdue-scheduler": {
+      "display": "Cloud Scheduler invoker",
+      "roles": []
+    },
+    "firstdue-pubsub-push": {
+      "display": "Pub/Sub push identity",
+      "roles": []
+    },
+    "firstdue-ci-smoke": {
+      "display": "CI staging smoke test",
+      "roles": []
+    }
+  }
+}

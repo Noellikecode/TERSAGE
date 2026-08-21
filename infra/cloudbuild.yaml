@@ -1,0 +1,32 @@
+# Both images, built in the cloud so no local Docker daemon is required.
+#
+# Cloud Build runs as its own service account and needs Artifact Registry write;
+# `infra/bootstrap.sh` does not grant it, because the grant belongs to whoever
+# owns the project's build permissions.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    id: backend
+    args:
+      - build
+      - -f
+      - backend/Dockerfile
+      - -t
+      - ${_REGISTRY}/backend:${_TAG}
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    id: console
+    args:
+      - build
+      - -f
+      - frontend/Dockerfile
+      - -t
+      - ${_REGISTRY}/console:${_TAG}
+      - .
+
+images:
+  - ${_REGISTRY}/backend:${_TAG}
+  - ${_REGISTRY}/console:${_TAG}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

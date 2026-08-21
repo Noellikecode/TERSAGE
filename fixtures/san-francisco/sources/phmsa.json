@@ -1,0 +1,19 @@
+{
+  "note": "Synthetic PHMSA transmission-pipeline proximity rows.",
+  "records": [
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "commodity": "natural gas",
+        "diameter_in": 12,
+        "operator": "SYNTHETIC GAS CO",
+        "proximity_m": 41.0
+      },
+      "observed_at": "2024-12-28T08:00:00+00:00",
+      "record_ref": "phmsa/ca/transmission-4471"
+    }
+  ],
+  "synthetic": true
+}

@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+.eslintcache
+
+# Local state (deterministic demo state is regenerable via `make reset`)
+.demo-state/
+*.log
+
+# Environment / credentials -- never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*-credentials.json
+service-account*.json
+gcp-key*.json
+application_default_credentials.json
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Terraform / OpenTofu
+infra/terraform/**/.terraform/
+infra/terraform/**/.terraform.lock.hcl
+infra/terraform/**/terraform.tfvars
+infra/terraform/**/backend.hcl
+*.tfstate
+*.tfstate.*
+tfplan

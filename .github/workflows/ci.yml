@@ -1,0 +1,255 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (lint, types, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen || uv sync
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+      - name: Strict mypy
+        run: uv run mypy
+      - name: Tests
+        run: uv run pytest --cov --cov-report=term-missing
+      - name: OpenAPI contract has not drifted
+        # The console's typed client is generated against docs/openapi.json. A
+        # backend change that alters the contract without regenerating it
+        # produces a console that type-checks against a document the server no
+        # longer serves -- which fails at runtime, in the browser, and not here.
+        run: |
+          uv run firstdue schema --out docs/openapi.json
+          if ! git diff --exit-code docs/openapi.json; then
+            echo "::error::OpenAPI drift; run 'make schema' and commit docs/openapi.json"
+            exit 1
+          fi
+      - name: Demo seed is deterministic
+        run: |
+          uv run firstdue seed
+          uv run firstdue verify-seed
+
+  emulators:
+    name: Durable memory and event transport (emulators)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen || uv sync
+      - name: Install and start the Firestore and Pub/Sub emulators
+        run: |
+          gcloud components install cloud-firestore-emulator pubsub-emulator beta --quiet
+          nohup gcloud emulators firestore start \
+            --host-port=127.0.0.1:8081 --project=firstdue-local &
+          nohup gcloud beta emulators pubsub start \
+            --host-port=127.0.0.1:8085 --project=firstdue-local &
+          for _ in $(seq 1 30); do
+            if curl -s http://127.0.0.1:8081 >/dev/null 2>&1 \
+               && curl -s http://127.0.0.1:8085 >/dev/null 2>&1; then
+              echo "emulators up"; break
+            fi
+            sleep 2
+          done
+      - name: Contract suite, both backends
+        # The same tests run in-memory and against Firestore. A skip means the
+        # emulator never came up, which would let the run pass on half the
+        # coverage -- so a skip fails the job.
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8081
+          PUBSUB_EMULATOR_HOST: 127.0.0.1:8085
+        run: |
+          set -o pipefail
+          uv run pytest tests/contract -v -rs | tee /tmp/contract.txt
+          if grep -qi "skipped" /tmp/contract.txt; then
+            echo "::error::a backend was skipped; the emulator did not come up"
+            exit 1
+          fi
+
+  infrastructure:
+    name: Infrastructure (format, validate, IAM conformance)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen || uv sync
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: 1.12.6
+          tofu_wrapper: false
+      - name: Formatting
+        run: tofu fmt -check -recursive infra/terraform
+      - name: Validate staging
+        # -backend=false: validation needs the provider schemas, not the state
+        # bucket. No credentials are involved, so this runs on a fork's PR too.
+        run: |
+          tofu -chdir=infra/terraform/envs/staging init -backend=false -input=false
+          tofu -chdir=infra/terraform/envs/staging validate
+      - name: Validate prod
+        run: |
+          tofu -chdir=infra/terraform/envs/prod init -backend=false -input=false
+          tofu -chdir=infra/terraform/envs/prod validate
+      - name: Terraform matches the code it claims to follow
+        # Firestore indexes against COLLECTION_NAMES, IAM against the agent
+        # descriptors, topics against the Topic enum. All checkable with no
+        # cloud project, which is the point.
+        run: uv run pytest tests/infra -v
+
+  dependencies:
+    name: Dependency scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+      - run: uv sync --frozen || uv sync
+      - name: Python advisories
+        # Reported, not enforced. A brand-new advisory against a transitive
+        # dependency with no fix available should not block a fix for something
+        # else -- but it must be visible in the run that introduced it.
+        continue-on-error: true
+        run: |
+          uv run --with pip-audit pip-audit --strict --progress-spinner off \
+            || echo "::warning::pip-audit reported advisories"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Console advisories
+        continue-on-error: true
+        working-directory: frontend
+        run: npm audit --omit=dev || echo "::warning::npm audit reported advisories"
+
+  frontend:
+    name: Console (lint, types, tests, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+      - run: npm run build
+
+  containers:
+    name: Container images build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: false
+          load: true
+          tags: firstdue-backend:ci
+      - name: Build console image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend/Dockerfile
+          push: false
+          load: true
+          tags: firstdue-console:ci
+      - name: Backend container serves on $PORT as non-root
+        run: |
+          docker run --rm -d --name api -e PORT=8080 -p 8080:8080 firstdue-backend:ci
+          for i in $(seq 1 20); do
+            curl -fsS http://localhost:8080/healthz && break || sleep 1
+          done
+          test "$(docker exec api id -u)" != "0"
+          curl -fsS http://localhost:8080/readyz
+          docker stop api
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+
+  staging-smoke:
+    name: Staging smoke test
+    # Gated on the secret existing, so this repository and every fork stay
+    # green without one. `secrets` is not available in an `if` at job level for
+    # forks, so the guard is an explicit input check inside the job.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: [backend, infrastructure]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Is staging configured for this repository?
+        id: guard
+        env:
+          KEY: ${{ secrets.GCP_SMOKE_SA_KEY }}
+          URL: ${{ secrets.STAGING_BASE_URL }}
+        run: |
+          if [ -n "$KEY" ] && [ -n "$URL" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "staging secrets are not set; skipping"
+          fi
+      - uses: astral-sh/setup-uv@v3
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          enable-cache: true
+      - run: uv python install 3.12
+        if: steps.guard.outputs.configured == 'true'
+      - run: uv sync --frozen || uv sync
+        if: steps.guard.outputs.configured == 'true'
+      - uses: google-github-actions/auth@v2
+        if: steps.guard.outputs.configured == 'true'
+        with:
+          credentials_json: ${{ secrets.GCP_SMOKE_SA_KEY }}
+      - uses: google-github-actions/setup-gcloud@v2
+        if: steps.guard.outputs.configured == 'true'
+      - name: Six checks against the deployed environment
+        if: steps.guard.outputs.configured == 'true'
+        env:
+          STAGING_BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+        run: |
+          STAGING_TOKEN="$(gcloud auth print-identity-token --audiences="$STAGING_BASE_URL")"
+          export STAGING_TOKEN
+          uv run pytest tests/staging -v
