@@ -1,0 +1,125 @@
+{
+  "note": "Synthetic hydrant records. San Francisco publishes no open hydrant dataset; these stand in for the department's own water-supply records.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-AYES-A",
+          "HYD-AYES-B"
+        ],
+        "nearest_distance_m": 30,
+        "supply_type": "AWSS"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-0450-hayes"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-FELL-A",
+          "HYD-FELL-B"
+        ],
+        "nearest_distance_m": 37,
+        "supply_type": "MUNICIPAL"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-1215-fell"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-NCIA-A",
+          "HYD-NCIA-B"
+        ],
+        "nearest_distance_m": 44,
+        "supply_type": "MUNICIPAL"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-0899-valencia"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-SION-A",
+          "HYD-SION-B"
+        ],
+        "nearest_distance_m": 51,
+        "supply_type": "AWSS"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-2130-mission"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-LAND-A",
+          "HYD-LAND-B"
+        ],
+        "nearest_distance_m": 58,
+        "supply_type": "MUNICIPAL"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-0350-rhode-island"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-YANT-A",
+          "HYD-YANT-B"
+        ],
+        "nearest_distance_m": 65,
+        "supply_type": "MUNICIPAL"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-1550-bryant"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-MENT-A",
+          "HYD-MENT-B"
+        ],
+        "nearest_distance_m": 32,
+        "supply_type": "AWSS"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-0621-clement"
+    },
+    {
+      "address_id": "sf-3120-24th",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "hydrant_ids": [
+          "HYD-24TH-A",
+          "HYD-24TH-B"
+        ],
+        "nearest_distance_m": 39,
+        "supply_type": "MUNICIPAL"
+      },
+      "observed_at": "2026-01-15T08:00:00+00:00",
+      "record_ref": "hydrant/sf-3120-24th"
+    }
+  ]
+}

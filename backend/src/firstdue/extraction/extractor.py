@@ -22,8 +22,7 @@ ever adds what a narrative says that a column does not.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Final
 
@@ -31,46 +30,25 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from firstdue.domain.enums import Classification, SourceType
 from firstdue.domain.facts import SourceSpan, StructuralFact, natural_fact_id
-from firstdue.domain.keys import Keys
 from firstdue.errors import UpstreamTimeoutError
 from firstdue.extraction.coercion import coerce_value
 from firstdue.extraction.screening import ScreenResult, screen_document
+from firstdue.extraction.triage import NARRATIVE_KEYS, TriageDecision, triage
 from firstdue.observability.logging import get_logger
 from firstdue.ports.clock import IdGenerator
 from firstdue.ports.model import ModelClient
 from firstdue.ports.sources import SourceRecord, SourceSnapshot
+from firstdue.security.armor import DocumentScreen
 
 logger = get_logger(__name__)
-
-#: What a narrative may be asked about. A closed list: a model cannot mint a
-#: canonical key, because a key nothing recognises is a value nothing renders.
-NARRATIVE_KEYS: Final[tuple[str, ...]] = (
-    Keys.STORIES,
-    Keys.CONSTRUCTION_TYPE,
-    Keys.YEAR_BUILT,
-    Keys.LIGHTWEIGHT_TRUSS,
-    Keys.SUPPRESSION_SPRINKLERED,
-    Keys.EGRESS_OBSTRUCTION,
-    Keys.HAZARD_SOLAR_ARRAY,
-)
 
 #: Confidence assigned to a value a model read out of prose. Deliberately below
 #: a filed structured field: prose is evidence, a column is a filing.
 MODEL_CONFIDENCE_CEILING: Final[float] = 0.72
 EXTRACTION_DEADLINE_MS: Final[int] = 8_000
-
-#: Documents shorter than this are not worth a model call at all.
-TRIAGE_MIN_CHARS: Final[int] = 40
-
-
-@dataclass(slots=True)
-class TriageDecision:
-    """Whether a document is worth extracting from, and why."""
-
-    extract: bool
-    reason: str
-    #: Keys the triage thought were plausibly present. Advisory only.
-    candidate_keys: tuple[str, ...] = field(default_factory=tuple)
+#: Triage is a cheap call and must stay cheap: a triage that takes as long as
+#: an extraction has saved nothing.
+TRIAGE_DEADLINE_MS: Final[int] = 1_500
 
 
 class ExtractionOutcome(BaseModel):
@@ -86,39 +64,15 @@ class ExtractionOutcome(BaseModel):
     #: Set when the model was unreachable or its output was rejected. The
     #: structured fields were still extracted; only the narrative was lost.
     model_unavailable_reason: str | None = Field(default=None, max_length=200)
+    #: The document text *after* screening, for anything downstream that stores
+    #: or indexes it. Never the raw text: whatever an ingested document tried
+    #: to instruct has been removed, and a later semantic query must not be
+    #: able to recall the injection attempt.
+    screened_text: str | None = Field(default=None, max_length=200_000)
 
     @property
     def used_model(self) -> bool:
         return not self.triaged_out and self.model_unavailable_reason is None
-
-
-def triage(text: str, *, keys: Sequence[str] = NARRATIVE_KEYS) -> TriageDecision:
-    """Cheap local classifier: is this document worth a Gemini call?
-
-    Stands in for the Gemma pass. It looks for the vocabulary the structural
-    keys are actually described in, and it can only ever *skip* work -- a false
-    negative costs one extraction, and a false positive costs one model call.
-    Neither can put a wrong fact in front of an officer.
-    """
-    if len(text.strip()) < TRIAGE_MIN_CHARS:
-        return TriageDecision(extract=False, reason="document too short to carry a structural fact")
-
-    lowered = text.lower()
-    signals: dict[str, tuple[str, ...]] = {
-        Keys.STORIES: ("storey", "story", "stories", "floor"),
-        Keys.CONSTRUCTION_TYPE: ("wood-frame", "wood frame", "ordinary", "timber", "type i"),
-        Keys.YEAR_BUILT: ("built in",),
-        Keys.LIGHTWEIGHT_TRUSS: ("truss",),
-        Keys.SUPPRESSION_SPRINKLERED: ("sprinkler",),
-        Keys.EGRESS_OBSTRUCTION: ("stairwell", "egress", "obstructed"),
-        Keys.HAZARD_SOLAR_ARRAY: ("solar",),
-    }
-    present = tuple(key for key in keys if any(token in lowered for token in signals.get(key, ())))
-    if not present:
-        return TriageDecision(extract=False, reason="no structural vocabulary present")
-    return TriageDecision(
-        extract=True, reason="structural vocabulary present", candidate_keys=present
-    )
 
 
 class FactExtractor:
@@ -132,12 +86,18 @@ class FactExtractor:
         agent_id: str = "records-watcher",
         agent_version: str = "1.0.0",
         use_triage: bool = True,
+        screen: DocumentScreen | None = None,
     ) -> None:
         self._ids = ids
         self._model = model
         self._agent_id = agent_id
         self._agent_version = agent_version
         self._use_triage = use_triage
+        # The configured screen, not the module function. Live mode composes
+        # Model Armor *around* the local detector, and an extractor that called
+        # the local one directly would never reach Armor at all -- which is
+        # exactly what it did before this argument existed.
+        self._screen = screen
 
     async def extract(
         self,
@@ -184,16 +144,23 @@ class FactExtractor:
                 )
             )
 
-        screen: ScreenResult = screen_document(record.document_text)
+        screen: ScreenResult = self._screen_document(record.document_text)
         if not screen.safe_text or self._model is None:
-            return ExtractionOutcome(facts=tuple(facts), screen_findings=screen.findings)
+            return ExtractionOutcome(
+                facts=tuple(facts),
+                screen_findings=screen.findings,
+                screened_text=screen.safe_text or None,
+            )
 
         if self._use_triage:
-            decision = triage(screen.safe_text)
+            decision = await self._triage(screen.safe_text)
             if not decision.extract:
                 logger.info("extraction_triaged_out", extra={"reason": decision.reason})
                 return ExtractionOutcome(
-                    facts=tuple(facts), screen_findings=screen.findings, triaged_out=True
+                    facts=tuple(facts),
+                    screen_findings=screen.findings,
+                    triaged_out=True,
+                    screened_text=screen.safe_text,
                 )
 
         try:
@@ -210,6 +177,7 @@ class FactExtractor:
                 facts=tuple(facts),
                 screen_findings=screen.findings,
                 model_unavailable_reason="UPSTREAM_TIMEOUT",
+                screened_text=screen.safe_text,
             )
 
         if not result.accepted:
@@ -218,6 +186,7 @@ class FactExtractor:
                 facts=tuple(facts),
                 screen_findings=screen.findings,
                 model_unavailable_reason="MODEL_OUTPUT_REJECTED",
+                screened_text=screen.safe_text,
             )
 
         already = {f.canonical_key for f in facts}
@@ -255,7 +224,11 @@ class FactExtractor:
                 )
             )
 
-        return ExtractionOutcome(facts=tuple(facts), screen_findings=screen.findings)
+        return ExtractionOutcome(
+            facts=tuple(facts),
+            screen_findings=screen.findings,
+            screened_text=screen.safe_text,
+        )
 
     def _fact(
         self,
@@ -295,4 +268,64 @@ class FactExtractor:
             produced_by_agent=self._agent_id,
             produced_by_version=self._agent_version,
             extracted_by_model=by_model,
+        )
+
+    def _screen_document(self, document_text: str | None) -> ScreenResult:
+        """Screen ingested text through whichever screen this process was given.
+
+        With no screen configured this is the local detector, which is what the
+        test suite and fake mode run. With Model Armor configured, the verdict
+        comes from both: Armor's answer and the local one, two screens with
+        different failure modes that a document has to get past.
+        """
+        if self._screen is None:
+            return screen_document(document_text)
+        verdict = self._screen.inspect(document_text)
+        return ScreenResult(
+            safe_text=verdict.safe_text,
+            findings=verdict.findings,
+            removed_chars=max(0, len(document_text or "") - len(verdict.safe_text)),
+        )
+
+    async def _triage(self, text: str) -> TriageDecision:
+        """Ask the cheap model, and fall back to the local classifier.
+
+        The failure path answers *extract* -- always. A triage that cannot run
+        must not be able to silence a document: the expensive model runs and
+        the document is read. The only thing a broken triage costs is money.
+        """
+        local = triage(text)
+        if self._model is None:
+            return local
+
+        try:
+            verdict = await self._model.triage(
+                document_text=text,
+                schema_keys=NARRATIVE_KEYS,
+                deadline_ms=TRIAGE_DEADLINE_MS,
+            )
+        except UpstreamTimeoutError as exc:
+            logger.info(
+                "triage_model_unavailable",
+                extra={"error_code": str(exc.code), "fallback": "local"},
+            )
+            return local
+
+        if not verdict.accepted:
+            logger.info("triage_model_rejected", extra={"fallback": "local"})
+            return local
+
+        # Two screens, and a document only skips if *both* say skip. The cheap
+        # model is allowed to save a call, never to hide a document the local
+        # vocabulary check thought was worth reading.
+        if not verdict.extract and not local.extract:
+            return TriageDecision(
+                extract=False,
+                reason=verdict.reason,
+                candidate_keys=verdict.candidate_keys,
+            )
+        return TriageDecision(
+            extract=True,
+            reason=verdict.reason if verdict.extract else local.reason,
+            candidate_keys=tuple(sorted({*verdict.candidate_keys, *local.candidate_keys})),
         )

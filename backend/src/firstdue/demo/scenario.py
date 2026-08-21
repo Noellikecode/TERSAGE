@@ -27,13 +27,18 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field
 
 from firstdue.agents.actions import ActionFlow, ApprovalResult, DispatchResult
-from firstdue.agents.geometry_watcher import GeometryWatcher
-from firstdue.agents.hazard_watcher import HazardWatcher
+from firstdue.agents.fleet import FleetRun, FleetRunner, outcome
+from firstdue.agents.geometry_watcher import GeometryWatcher, GeometryWatchResult
+from firstdue.agents.hazard_watcher import HazardWatcher, HazardWatchResult
 from firstdue.agents.ranker import DeltaRanker, RankedQueue
 from firstdue.agents.records_watcher import RecordsWatcher, WatchResult
 from firstdue.container import Container
+from firstdue.errors import ConfigurationError
 from firstdue.extraction.extractor import FactExtractor
 from firstdue.observability.logging import get_logger
+from firstdue.ports.runtime import AgentHandler, AgentInput, AgentOutcome
+from firstdue.ports.sources import SourceAdapter
+from firstdue.services.grants import GrantService
 from firstdue.services.materialization import ProfileMaterializer
 
 logger = get_logger(__name__)
@@ -43,6 +48,180 @@ DISPUTED_ADDRESS_ID: Final[str] = "sf-0450-hayes"
 DEFAULT_COMPANY: Final[str] = "E-05"
 DEFAULT_CREW_EMAIL: Final[str] = "e05-crew@sffd.example"
 APPROVER: Final[str] = "capt-alvarez"
+
+
+class AgentRunSummary(BaseModel):
+    """One agent run, as the console and the CLI render it.
+
+    Present so the demo can *show* that the fleet ran through its runtime --
+    the version that ran, the terminal state it reached, and how long it took
+    against the budget its descriptor declares.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_id: str
+    version: str
+    status: str
+    duration_ms: float = Field(ge=0.0)
+    facts_written: int = Field(default=0, ge=0)
+
+
+class _Pass:
+    """One slow-loop pass, addressable by the correlation id that started it.
+
+    The runtime handlers below are module-level and stateless: they are
+    registered once per process and take everything they need from the
+    ``AgentInput`` they are called with. That is the shape the payload contract
+    asks for -- identifiers in, work done, identifiers out -- and it is what
+    lets one registration serve every pass the process ever runs.
+
+    A handler still has to leave its own typed result somewhere for the report,
+    and this is that somewhere. It lives exactly as long as the pass does.
+    """
+
+    __slots__ = (
+        "actions",
+        "company",
+        "crew_email",
+        "dispatch",
+        "district",
+        "geometry",
+        "geometry_agent",
+        "hazard",
+        "hazard_agent",
+        "queue",
+        "ranker",
+        "records",
+        "sources",
+        "watch",
+    )
+
+    def __init__(
+        self,
+        *,
+        district: str,
+        records: RecordsWatcher,
+        geometry_agent: GeometryWatcher,
+        hazard_agent: HazardWatcher,
+        ranker: DeltaRanker,
+        actions: ActionFlow,
+        sources: list[SourceAdapter],
+        company: str,
+        crew_email: str,
+    ) -> None:
+        self.district = district
+        self.records = records
+        self.geometry_agent = geometry_agent
+        self.hazard_agent = hazard_agent
+        self.ranker = ranker
+        self.actions = actions
+        self.sources = sources
+        self.company = company
+        self.crew_email = crew_email
+        self.watch: WatchResult | None = None
+        self.geometry: GeometryWatchResult | None = None
+        self.hazard: HazardWatchResult | None = None
+        self.queue: RankedQueue | None = None
+        self.dispatch: DispatchResult | None = None
+
+
+#: Passes in flight, keyed by the correlation id that opened them. A handler
+#: finds its pass here; nothing else reads it, and a finished pass is removed.
+_PASSES: Final[dict[str, _Pass]] = {}
+
+
+def _pass_for(payload: AgentInput) -> _Pass:
+    current = _PASSES.get(payload.correlation_id)
+    if current is None:  # pragma: no cover - a handler cannot run without one
+        raise ConfigurationError(
+            "no slow-loop pass is open for this correlation id",
+            details={"correlation_id": payload.correlation_id},
+        )
+    return current
+
+
+async def _run_records(payload: AgentInput, _grant: object) -> AgentOutcome:
+    current = _pass_for(payload)
+    current.watch = await current.records.poll(
+        district_id=current.district,
+        sources=current.sources,
+        correlation_id=payload.correlation_id,
+    )
+    return outcome(facts=current.watch.written_fact_ids)
+
+
+async def _run_geometry(payload: AgentInput, _grant: object) -> AgentOutcome:
+    current = _pass_for(payload)
+    current.geometry = await current.geometry_agent.poll(
+        district_id=current.district,
+        sources=current.sources,
+        correlation_id=payload.correlation_id,
+    )
+    return outcome(facts=current.geometry.written_fact_ids)
+
+
+async def _run_hazards(payload: AgentInput, _grant: object) -> AgentOutcome:
+    current = _pass_for(payload)
+    current.hazard = await current.hazard_agent.poll(
+        district_id=current.district,
+        sources=current.sources,
+        correlation_id=payload.correlation_id,
+    )
+    return outcome(facts=current.hazard.written_fact_ids)
+
+
+async def _run_ranker(payload: AgentInput, _grant: object) -> AgentOutcome:
+    current = _pass_for(payload)
+    current.queue = await current.ranker.rank(current.district)
+    return outcome()
+
+
+async def _run_referral_clerk(payload: AgentInput, _grant: object) -> AgentOutcome:
+    """Stage the work order, the calendar hold, the crew mail, and the referral.
+
+    The referral is staged and stays staged. Approving it is a captain's act,
+    and it happens outside this run.
+    """
+    current = _pass_for(payload)
+    queue = current.queue
+    if queue is None or not queue.entries:  # pragma: no cover - guarded by caller
+        return outcome()
+    current.dispatch = await current.actions.dispatch(
+        queue.entries[0],
+        company=current.company,
+        crew_email=current.crew_email,
+        correlation_id=payload.correlation_id,
+    )
+    return outcome(writes=current.dispatch.external_refs)
+
+
+#: Every slow-loop agent, and the work it does. Registered once per process.
+SLOW_LOOP_HANDLERS: Final[dict[str, AgentHandler]] = {
+    "records-watcher": _run_records,
+    "geometry-watcher": _run_geometry,
+    "hazard-watcher": _run_hazards,
+    "survey-ranker": _run_ranker,
+    "referral-clerk": _run_referral_clerk,
+}
+
+
+def build_fleet_runner(container: Container) -> FleetRunner:
+    """The runner every catalogued agent goes through."""
+    return FleetRunner(
+        runtime=container.runtime,
+        registry=container.registry,
+        grants=GrantService(
+            grants=container.grants,
+            clock=container.clock,
+            ids=container.ids,
+            audit=container.audit,
+        ),
+        runs=container.runs,
+        clock=container.clock,
+        ids=container.ids,
+        only_agent=container.settings.firstdue_agent,
+    )
 
 
 class SlowLoopReport(BaseModel):
@@ -66,6 +245,8 @@ class SlowLoopReport(BaseModel):
 
     dispatch: DispatchResult | None = None
     approval: ApprovalResult | None = None
+    #: Every agent run this pass made, in order, with its terminal state.
+    agent_runs: tuple[AgentRunSummary, ...] = ()
 
     @property
     def produced_the_conflict(self) -> bool:
@@ -85,7 +266,8 @@ def build_agents(
         ids=container.ids,
         bus=container.bus,
     )
-    extractor = FactExtractor(ids=container.ids, model=container.model)
+    # The configured screen, so a live process actually reaches Model Armor.
+    extractor = FactExtractor(ids=container.ids, model=container.model, screen=container.screen)
 
     records = RecordsWatcher(
         profiles=container.profiles,
@@ -96,6 +278,7 @@ def build_agents(
         clock=container.clock,
         ids=container.ids,
         audit=container.audit,
+        vectors=container.vectors,
     )
     geometry = GeometryWatcher(
         profiles=container.profiles,
@@ -150,32 +333,65 @@ async def run_slow_loop(
     correlation_id = container.ids.new_id("corr")
     records, geometry, hazards, ranker, actions = build_agents(container)
     sources = list(container.source_adapters)
+    fleet = build_fleet_runner(container)
 
-    watch: WatchResult = await records.poll(
-        district_id=district, sources=sources, correlation_id=correlation_id
+    # Every pass below runs *through the runtime*: the grant is checked before
+    # any work, the descriptor's latency target is the deadline, and the run --
+    # completed, denied, or timed out -- lands on the record naming the pinned
+    # version that produced it. Nothing here calls an agent directly.
+    fleet.register_all(SLOW_LOOP_HANDLERS)
+    current = _Pass(
+        district=district,
+        records=records,
+        geometry_agent=geometry,
+        hazard_agent=hazards,
+        ranker=ranker,
+        actions=actions,
+        sources=sources,
+        company=company,
+        crew_email=crew_email,
     )
-    geometry_result = await geometry.poll(
-        district_id=district, sources=sources, correlation_id=correlation_id
-    )
-    hazard_result = await hazards.poll(
-        district_id=district, sources=sources, correlation_id=correlation_id
-    )
-
-    queue: RankedQueue = await ranker.rank(district)
-
-    dispatch: DispatchResult | None = None
-    approval: ApprovalResult | None = None
-    if queue.entries:
-        dispatch = await actions.dispatch(
-            queue.entries[0],
-            company=company,
-            crew_email=crew_email,
-            correlation_id=correlation_id,
-        )
-        if approve and dispatch.referral_id:
-            approval = await actions.approve_referral(
-                dispatch.referral_id, approved_by=APPROVER, correlation_id=correlation_id
+    _PASSES[correlation_id] = current
+    runs: list[FleetRun] = []
+    try:
+        for agent_id in (
+            "records-watcher",
+            "geometry-watcher",
+            "hazard-watcher",
+            "survey-ranker",
+        ):
+            runs.append(
+                await fleet.run(
+                    agent_id,
+                    correlation_id=correlation_id,
+                    parameters={"district_id": district},
+                )
             )
+
+        queue: RankedQueue = current.queue or RankedQueue(district_id=district)
+        if queue.entries:
+            runs.append(
+                await fleet.run(
+                    "referral-clerk",
+                    correlation_id=correlation_id,
+                    parameters={
+                        "district_id": district,
+                        "entry_id": queue.entries[0].entry_id,
+                    },
+                )
+            )
+    finally:
+        _PASSES.pop(correlation_id, None)
+
+    watch: WatchResult = current.watch or WatchResult(district_id=district)
+    geometry_result = current.geometry or GeometryWatchResult(district_id=district)
+    hazard_result = current.hazard or HazardWatchResult(district_id=district)
+    dispatch: DispatchResult | None = current.dispatch
+    approval: ApprovalResult | None = None
+    if approve and dispatch is not None and dispatch.referral_id:
+        approval = await actions.approve_referral(
+            dispatch.referral_id, approved_by=APPROVER, correlation_id=correlation_id
+        )
 
     conflicts = tuple(
         sorted(
@@ -220,4 +436,14 @@ async def run_slow_loop(
         top_reasons=tuple(reason.detail for reason in top.reasons) if top else (),
         dispatch=dispatch,
         approval=approval,
+        agent_runs=tuple(
+            AgentRunSummary(
+                agent_id=run.agent_id,
+                version=run.version,
+                status=str(run.result.status),
+                duration_ms=round(run.result.duration_ms, 3),
+                facts_written=len(run.result.written_fact_ids),
+            )
+            for run in runs
+        ),
     )

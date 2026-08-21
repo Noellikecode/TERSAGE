@@ -578,3 +578,101 @@ phase 1.
 | The gateway is only consulted on incident commitment paths | Slow-loop reads do not produce a `PolicyDecision`. That predates phase 7 and is unchanged by it; widening it is a policy-coverage phase, not an infrastructure one |
 | `terraform.tfvars` and `backend.hcl` are operator-managed | Both gitignored, both with `.example` files. `tests/infra` asserts no `google_secret_manager_secret_version` resource exists anywhere, so a value cannot be added to Terraform by habit |
 | Firestore index builds are not instant | `docs/deploy.md` says to apply an index before deploying the code that queries it. Nothing enforces the ordering |
+
+---
+
+## Phase 8 — Closing the gap between what the PRD claims and what the code does
+
+**Date:** 2026-08-20
+
+A cross-reference of PRD v3 against the built system found eight places where a
+claimed capability was a seam, an adapter with no caller, or configuration
+nothing read. None of them were credential problems, so none would have been
+fixed by a deploy. This phase closes all eight.
+
+### The eight, and what each actually was
+
+| # | Claimed | Actually | Now |
+|---|---|---|---|
+| 1 | Agents run on an Agent Runtime | `AgentRuntime.invoke` was called from **nowhere** in production code | `agents/fleet.py`; both loops run through it |
+| 2 | Gemma triages documents | `GEMMA_MODEL` read by nothing; triage was a keyword list | `triage` verb on `ModelClient`, real Gemma call in live mode |
+| 3 | Vertex Vector Search for semantic recall | `VertexVectorIndex` never constructed or called | `ports/vectors.py`, in-memory index, recall endpoint |
+| 4 | Eleven live public sources | **One** had a live endpoint | ten of thirteen, verified against the real feeds |
+| 5 | Hydrants and NWS in the catalog | Declared by the city adapter, no adapter existed | both catalogued; NWS live, hydrants honestly unconfigured |
+| 6 | Prose token-streamed over SSE | One buffered string in one frame | `compose_stream`, provisional `narrative` frames |
+| 7 | Incident replay | A service with tests and no route | `GET /internal/audit/incidents/{id}/replay` |
+| 8 | One Cloud Run service per agent | Three services; `FIRSTDUE_LOOP` read by no code | eleven agent workers, each on its own SA |
+
+### Decisions
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | The runtime *executes* agents rather than wrapping nothing: handlers register against a descriptor and `invoke` calls them | A runtime that only enforced rules on a path nothing took made `required_scopes` and `latency_target_ms` documentation. Now a denied run is a denial of actual work. |
+| 2 | Slow-loop handlers are module-level and stateless, reading from `AgentInput` | Per-pass closures had to be re-registered every pass, which collided with the guard against two implementations of one agent. Reading identifiers from the payload is what the contract always asked for. |
+| 3 | Incident agents require an explicit `IncidentGrant`; the runner refuses to mint them a standing one | Incident authority is bound to one incident and dies at its close. For the agents that reach EMS-derived facts, `StandingGrant` refuses to construct at all — the type already said this. |
+| 4 | Triage fails **open**: every failure path answers *extract* | A wrong "extract" costs one model call; a wrong "skip" means nobody reads the document. Only that asymmetry justifies letting a cheap model decide at all. |
+| 5 | A document skips only when **both** the model and the local vocabulary screen agree | The cheap model may save a call. It may not hide a filing. |
+| 6 | Height is `solar plane height − 3DEP ground elevation`, and the fact cites both readings | No public DSM answers "how tall is this building" for San Francisco. The subtraction is real, and a subtraction citing one operand is a number nobody can check. |
+| 7 | An implausible height difference produces **no** height rather than a small one | A building of height zero is one storey with a collapse zone computed from nothing. |
+| 8 | Streamed prose is `provisional` and is always followed by an authoritative `brief` frame | Persist-before-transmit is about *facts*. Prose being composed is not a fact, carries no version, and is withdrawn by the emission that follows — including when the composition is refused. |
+| 9 | A vector match returns ids and a distance, never text or a value | An embedding can say two documents resemble each other. It cannot say a building has three storeys, and nothing downstream may promote a match into an assertion. |
+| 10 | Agent → topic routing lives in `registry/routing.py`, and Terraform reads a file derived from it | A push subscription pointed at a service that does not handle its topic dead-letters forever while every dashboard looks healthy. Phase 2's notes flagged exactly this. |
+| 11 | `sensor-fusion` declares no `WRITE` capability | `Capability.WRITE` means writing *outside* the department's own store. A thermal observation goes to the profile and the log. |
+
+### Four defects this phase found
+
+| Defect | Why it mattered |
+|---|---|
+| **Every DataSF timestamp is naive.** `StructuralFact` refuses a naive datetime, so the first live poll would have raised on every row | Fixed by attaching `America/Los_Angeles` per source. Reading them as UTC would have shifted every municipal filing by up to eight hours — enough to reorder a merge against a same-day survey |
+| **The configured screen was never called.** `build_screen` chose Model Armor in live mode; `FactExtractor` called the module-level `screen_document` regardless | A fully configured live process would have screened every ingested document with the local detector and never called Armor once. The boundary existed; nothing crossed it |
+| **The incident grant lacked `write:profile`.** The incident loop writes IC resolutions and thermal readings back to the profile and always did | Nothing checked, so it worked. Routing sensor-fusion through the runtime produced a `DENIED` run — the scope declaration had been wrong since phase 5 |
+| **An error inside an SSE generator cannot become an error envelope.** `200 OK` and the content type are already on the socket | An unknown incident broke the connection instead of returning 404. Prerequisites are now resolved before the response begins |
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `uv run pytest` | **859 passed**, 46 skipped |
+| `FIRESTORE_EMULATOR_HOST=… PUBSUB_EMULATOR_HOST=… uv run pytest` | **899 passed**, 6 skipped |
+| `uv run ruff check . && ruff format --check .` | clean |
+| `uv run mypy` (strict) | no issues, **151 source files** |
+| `make infra-check` (fmt, validate staging + prod, `tests/infra`) | clean; 38 infra tests |
+| `npm run lint && typecheck && test && build` | clean; 87 console tests; production build succeeds |
+| `firstdue slow-loop` | unchanged finding: severity-4 conflict, 450 Hayes rank 1 at 0.871, referral staged, one case number |
+| `firstdue verify-seed` | deterministic, hash unchanged |
+| Live mappers against captured real rows | 6 feeds, 3 rows each, all map; captures checked into `tests/fixtures/live_rows` |
+
+**Live endpoints were reached from this machine** to capture those rows: DataSF
+(permits, assessor, inspections, violations, parcels), EPA Envirofacts, USGS
+3DEP EPQS, and api.weather.gov all answered. Google Solar and NREL were **not**
+reached — both need a key this machine does not have — so their mappers are
+written against the published response shapes and tested against
+hand-constructed payloads. That is the honest state of those two.
+
+### What phase 8 did **not** verify
+
+**Still no cloud resource has been created and no cloud test has been run.**
+`gcloud` remains unauthenticated here with no ADC file. Everything new that
+touches Google — the Gemma triage call, `compose_stream` against Vertex, the
+Solar and NREL fetchers, `VertexVectorIndex`, the eleven agent workers, and the
+per-agent push subscriptions — is **written and unvalidated against a real
+project**. Terraform validates against the provider schema, which catches a
+misspelled argument and not a quota, an org policy, or a disabled API.
+
+Two further honest notes:
+
+- **Eleven Cloud Run services is a cost decision nobody has priced.** Ten scale
+  to zero and the incident worker keeps one warm instance. The arithmetic is in
+  `docs/deploy.md`; no bill has confirmed it.
+- **`GEMINI_MODEL` defaults to `gemini-3.5-flash` and `GEMMA_MODEL` to
+  `gemma-3-4b-it`.** Neither id has been resolved against a real Vertex
+  endpoint. Confirm both against the model list before the first live call.
+
+### Risks carried forward
+
+| Risk | Mitigation |
+|---|---|
+| The entire live path remains unexercised | Unchanged from phase 7, and now larger. The fake and live adapters implement the same ports and the same contract suite covers both |
+| Address normalisation against real DataSF rows is unproven at scale | The assessor's fixed-width location field is parsed and tested against real rows; the city adapter still drops what it cannot resolve, and the drop is counted but not surfaced |
+| PHMSA, Tier II, and SF hydrants have no public feed | Catalogued as `UNCONFIGURED` with a stated reason each, rendered verbatim. "Unavailable" and "withheld by statute" are different statements and the console shows which |
+| The in-memory vector index is lexical, not semantic | It is a real second implementation of the port with the same refusals, and it is what fake mode runs. A query needing true semantic distance needs the live index |

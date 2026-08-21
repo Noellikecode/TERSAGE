@@ -1,0 +1,198 @@
+[
+  {
+    "mapblklot": "3584032",
+    "blklot": "3584032",
+    "block_num": "3584",
+    "lot_num": "032",
+    "from_address_num": "3976",
+    "to_address_num": "3976",
+    "street_name": "19TH",
+    "street_type": "ST",
+    "odd_even": "E",
+    "in_asr_secured_roll": true,
+    "pw_recorded_map": true,
+    "zoning_code": "RH-2",
+    "zoning_district": "RESIDENTIAL- HOUSE, TWO FAMILY",
+    "date_map_add": "1998-07-01T00:00:00.000",
+    "project_id_add": "ORIG_BASEMAP",
+    "active": true,
+    "shape": {
+      "type": "MultiPolygon",
+      "coordinates": [
+        [
+          [
+            [
+              -122.432054193,
+              37.759546743
+            ],
+            [
+              -122.432084189,
+              37.759859519
+            ],
+            [
+              -122.431997957,
+              37.759864717
+            ],
+            [
+              -122.431967962,
+              37.759551961
+            ],
+            [
+              -122.432054193,
+              37.759546743
+            ]
+          ]
+        ]
+      ]
+    },
+    "centroid_latitude": "37.75970573486825",
+    "centroid_longitude": "-122.4320260756015",
+    "supdist": "SUPERVISORIAL DISTRICT 8",
+    "supervisor_district": "8",
+    "supdistpad": "08",
+    "numbertext": "EIGHT",
+    "supname": "Rafael Mandelman",
+    "analysis_neighborhood": "Castro/Upper Market",
+    "police_district": "MISSION",
+    "police_company": "D",
+    "planning_district": "Central",
+    "planning_district_number": "7",
+    "data_as_of": "2026-04-23T03:55:00.000",
+    "data_loaded_at": "2026-04-23T14:26:04.773"
+  },
+  {
+    "mapblklot": "3602085",
+    "blklot": "3602085",
+    "block_num": "3602",
+    "lot_num": "085",
+    "from_address_num": "4043",
+    "to_address_num": "4043",
+    "street_name": "19TH",
+    "street_type": "ST",
+    "odd_even": "O",
+    "in_asr_secured_roll": true,
+    "pw_recorded_map": true,
+    "zoning_code": "RH-3",
+    "zoning_district": "RESIDENTIAL- HOUSE, THREE FAMILY",
+    "date_map_add": "1998-07-01T00:00:00.000",
+    "project_id_add": "ORIG_BASEMAP",
+    "active": true,
+    "shape": {
+      "type": "MultiPolygon",
+      "coordinates": [
+        [
+          [
+            [
+              -122.433484704,
+              37.759139871
+            ],
+            [
+              -122.433527205,
+              37.759137299
+            ],
+            [
+              -122.433540942,
+              37.759280493
+            ],
+            [
+              -122.43345816,
+              37.759285503
+            ],
+            [
+              -122.433444424,
+              37.759142309
+            ],
+            [
+              -122.433484704,
+              37.759139871
+            ]
+          ]
+        ]
+      ]
+    },
+    "centroid_latitude": "37.759211401039565",
+    "centroid_longitude": "-122.43349268250867",
+    "supdist": "SUPERVISORIAL DISTRICT 8",
+    "supervisor_district": "8",
+    "supdistpad": "08",
+    "numbertext": "EIGHT",
+    "supname": "Rafael Mandelman",
+    "analysis_neighborhood": "Castro/Upper Market",
+    "police_district": "MISSION",
+    "police_company": "D",
+    "planning_district": "Central",
+    "planning_district_number": "7",
+    "data_as_of": "2026-04-23T03:55:00.000",
+    "data_loaded_at": "2026-04-23T14:26:04.773"
+  },
+  {
+    "mapblklot": "3719020",
+    "blklot": "3719257",
+    "block_num": "3719",
+    "lot_num": "257",
+    "from_address_num": "301",
+    "to_address_num": "301",
+    "street_name": "MISSION",
+    "street_type": "ST",
+    "odd_even": "O",
+    "in_asr_secured_roll": true,
+    "pw_recorded_map": true,
+    "zoning_code": "C-3-O(SD)",
+    "zoning_district": "DOWNTOWN- OFFICE (SPECIAL DEVELOPMENT)",
+    "date_rec_add": "2009-03-13T00:00:00.000",
+    "date_map_add": "2009-03-30T00:00:00.000",
+    "project_id_add": "2008C3719",
+    "active": true,
+    "shape": {
+      "type": "MultiPolygon",
+      "coordinates": [
+        [
+          [
+            [
+              -122.395358761,
+              37.790630023
+            ],
+            [
+              -122.396034183,
+              37.79009811
+            ],
+            [
+              -122.396486122,
+              37.790459611
+            ],
+            [
+              -122.39614652,
+              37.790722949
+            ],
+            [
+              -122.395806162,
+              37.79098687
+            ],
+            [
+              -122.395470527,
+              37.790719168
+            ],
+            [
+              -122.395358761,
+              37.790630023
+            ]
+          ]
+        ]
+      ]
+    },
+    "centroid_latitude": "37.79054311591944",
+    "centroid_longitude": "-122.39592192359946",
+    "supdist": "SUPERVISORIAL DISTRICT 6",
+    "supervisor_district": "6",
+    "supdistpad": "06",
+    "numbertext": "SIX",
+    "supname": "Matt Dorsey",
+    "analysis_neighborhood": "Financial District/South Beach",
+    "police_district": "SOUTHERN",
+    "police_company": "B",
+    "planning_district": "Downtown",
+    "planning_district_number": "4",
+    "data_as_of": "2026-04-23T03:55:00.000",
+    "data_loaded_at": "2026-04-23T14:26:04.773"
+  }
+]

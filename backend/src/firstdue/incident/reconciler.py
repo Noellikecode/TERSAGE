@@ -23,8 +23,10 @@ template here, and a test asserts it.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Final
+from collections.abc import AsyncIterator, Sequence
+from typing import Final, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from firstdue.domain.briefs import BriefEmission, BriefItem, BriefSection, BriefSectionKey
 from firstdue.domain.conflicts import Conflict
@@ -104,6 +106,28 @@ def _order(sections: Sequence[BriefSection]) -> tuple[BriefSection, ...]:
     """Sort sections into size-up order, keeping anything unlisted at the end."""
     rank = {key: index for index, key in enumerate(COAL_WAS_WEALTH)}
     return tuple(sorted(sections, key=lambda s: rank.get(s.key, len(rank))))
+
+
+class NarrativeChunk(BaseModel):
+    """Prose arriving before the emission it belongs to is final.
+
+    Deliberately not a :class:`BriefEmission`. It has no version of its own, no
+    sections, no unknowns, and no content hash -- it is not part of the record
+    and the incident log does not store it. It exists so a commander watching a
+    brief fill in can see it filling in.
+
+    ``provisional`` is always true, and it is a field rather than a constant so
+    a console cannot render one of these without having read the flag that says
+    it may be withdrawn.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    incident_id: str = Field(min_length=1, max_length=120)
+    #: The emission version this prose is being composed for.
+    for_version: int = Field(ge=0)
+    text: str = Field(max_length=20_000)
+    provisional: Literal[True] = True
 
 
 class Reconciler:
@@ -304,6 +328,100 @@ class Reconciler:
             narrative=narrative,
             narrative_available=available,
             model_invoked=invoked,
+            profile_snapshot_id=previous.profile_snapshot_id,
+            agent_versions=dict(previous.agent_versions),
+            produced_at=self._clock.now(),
+        ).sealed()
+
+    async def enriched_streaming(
+        self, previous: BriefEmission, snapshot: ProfileSnapshot
+    ) -> AsyncIterator[NarrativeChunk | BriefEmission]:
+        """Stream the narrative as it composes, then yield the persisted emission.
+
+        Three seconds of nothing looks exactly like three seconds of broken, so
+        the prose is shown as it arrives. What is shown is **provisional**: it
+        carries no facts, no values, and no conclusions, and it is retracted if
+        the completed composition is refused.
+
+        The invariant that matters is unchanged. Every *fact* a commander sees
+        has been persisted before transmission -- the deterministic sections
+        arrived in the instant emission, and this stage adds prose to them.
+        What streams here is that prose being written, and the emission it
+        belongs to is persisted before it is yielded at the end.
+
+        A stream that ends without an accepted composition yields a final
+        emission whose narrative is absent and marked unavailable, so the
+        console has something authoritative to replace the provisional text
+        with. There is no path where provisional prose is left standing.
+        """
+        if self._model is None:
+            yield await self._enriched_without_model(previous)
+            return
+
+        accumulated: list[str] = []
+        completed = False
+        async for chunk in self._model.compose_stream(
+            template_id="brief.enriched.v1",
+            fields=self._prose_fields(previous, snapshot),
+            max_chars=NARRATIVE_MAX_CHARS,
+            deadline_ms=NARRATIVE_DEADLINE_MS,
+        ):
+            if chunk.final:
+                completed = True
+                break
+            accumulated.append(chunk.text)
+            yield NarrativeChunk(
+                incident_id=previous.incident_id,
+                # The version the prose belongs to, so a console can discard a
+                # chunk that arrives after it has moved on.
+                for_version=previous.version + 1,
+                text=chunk.text,
+                provisional=True,
+            )
+
+        narrative = "".join(accumulated).strip()[:NARRATIVE_MAX_CHARS] if completed else None
+        if not narrative:
+            if accumulated:
+                logger.warning(
+                    "brief_narrative_withdrawn",
+                    extra={"incident_id": previous.incident_id, "reason": "stream_incomplete"},
+                )
+            yield await self._enriched_without_model(previous)
+            return
+
+        yield BriefEmission(
+            emission_id=self._ids.new_id("emission"),
+            incident_id=previous.incident_id,
+            version=previous.version + 1,
+            stage=BriefStage.ENRICHED,
+            sections=previous.sections,
+            unknowns=previous.unknowns,
+            unavailable=previous.unavailable,
+            withheld=previous.withheld,
+            conflict_ids=previous.conflict_ids,
+            narrative=narrative,
+            narrative_available=True,
+            model_invoked=True,
+            profile_snapshot_id=previous.profile_snapshot_id,
+            agent_versions=dict(previous.agent_versions),
+            produced_at=self._clock.now(),
+        ).sealed()
+
+    async def _enriched_without_model(self, previous: BriefEmission) -> BriefEmission:
+        """The enriched stage with the narrative absent and saying so."""
+        return BriefEmission(
+            emission_id=self._ids.new_id("emission"),
+            incident_id=previous.incident_id,
+            version=previous.version + 1,
+            stage=BriefStage.ENRICHED,
+            sections=previous.sections,
+            unknowns=previous.unknowns,
+            unavailable=previous.unavailable,
+            withheld=previous.withheld,
+            conflict_ids=previous.conflict_ids,
+            narrative=None,
+            narrative_available=False,
+            model_invoked=self._model is not None,
             profile_snapshot_id=previous.profile_snapshot_id,
             agent_versions=dict(previous.agent_versions),
             produced_at=self._clock.now(),

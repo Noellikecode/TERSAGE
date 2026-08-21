@@ -56,6 +56,14 @@ INCIDENT_SCOPES: Final[frozenset[Scope]] = frozenset(
         Scope.READ_TIER_II_METADATA,
         Scope.READ_EMS_DERIVED,
         Scope.WRITE_RMS,
+        # The incident loop writes back what it observes: an IC resolution
+        # during the 360 and a registered thermal reading both become facts on
+        # the building profile, and the queue an officer returns to after the
+        # incident is different because of them. The loop always did this; the
+        # grant never said so, because until the fleet ran through the runtime
+        # nothing checked. Routing sensor-fusion through it produced a DENIED
+        # run, which is the scope declaration having been wrong all along.
+        Scope.WRITE_PROFILE,
         Scope.NOTIFY_AGENCY,
         # Carried, not exercised freely: the gateway returns REQUIRE_APPROVAL
         # for these, so the scope is what makes the request *stageable* rather

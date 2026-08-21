@@ -70,6 +70,8 @@ class HazardWatchResult(BaseModel):
     district_id: str
     addresses_touched: tuple[str, ...] = ()
     facts_written: int = Field(default=0, ge=0)
+    #: The ids of the facts this pass appended, for the run record.
+    written_fact_ids: tuple[str, ...] = ()
     #: Facts written as UNAVAILABLE because a registry could not be reached.
     unavailable_facts: int = Field(default=0, ge=0)
     unavailable_sources: tuple[str, ...] = ()

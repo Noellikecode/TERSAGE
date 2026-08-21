@@ -12,9 +12,10 @@ appends it; nothing here waits on a source before emitting what it already has.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from typing import Any, Final
 
+from firstdue.agents.fleet import FleetRunner
 from firstdue.container import Container
 from firstdue.domain.briefs import BriefEmission
 from firstdue.domain.conflicts import ConflictResolution, ConflictStatus
@@ -22,23 +23,43 @@ from firstdue.domain.enums import Classification, PolicyAction, SourceType
 from firstdue.domain.facts import StructuralFact, natural_fact_id
 from firstdue.domain.identity import IncidentGrant
 from firstdue.domain.keys import Keys
-from firstdue.domain.profiles import ProfileEvent, ProfileEventType
+from firstdue.domain.profiles import ProfileEvent, ProfileEventType, ProfileSnapshot
 from firstdue.domain.values import TextValue
-from firstdue.errors import NotFoundError, StaleVersionError
+from firstdue.errors import NotFoundError, StaleVersionError, ValidationError
 from firstdue.extraction.coercion import coerce_value
 from firstdue.incident.controller import IncidentController, OpenIncidentResult
 from firstdue.incident.fusion import SensorFusion, ThermalFrame
-from firstdue.incident.reconciler import Reconciler
+from firstdue.incident.reconciler import NarrativeChunk, Reconciler
 from firstdue.incident.recorder import IncidentRecorder
 from firstdue.incident.resources import ResourceAgent, ResourceOutcome
 from firstdue.incident.timer import truss_time_window
 from firstdue.observability.logging import get_logger
 from firstdue.observability.metrics import METRICS
+from firstdue.ports.runtime import AgentInput, AgentOutcome, Grant
 from firstdue.services.grants import GrantService
 
 logger = get_logger(__name__)
 
 IC_AGENT: Final[str] = "incident-controller"
+
+
+def _one(payload: AgentInput, key: str) -> str:
+    """Read one identifier from an agent input.
+
+    ``AgentInput.ids`` allows a tuple, because some handoffs carry several fact
+    ids. The incident handlers each work on exactly one incident, and reading a
+    tuple as though it were a string is the kind of mistake that only shows up
+    on a fireground.
+    """
+    value = payload.ids[key]
+    if isinstance(value, tuple):
+        if len(value) != 1:
+            raise ValidationError(
+                "this handler works on exactly one identifier",
+                details={"key": key, "count": str(len(value))},
+            )
+        return value[0]
+    return value
 
 
 class IncidentSession:
@@ -86,6 +107,86 @@ class IncidentSession:
         #: Persisted emissions, in order, per incident. What the stream replays.
         self._emissions: dict[str, list[BriefEmission]] = {}
         self._grants: dict[str, IncidentGrant] = {}
+        # Work staged for a runtime handler, keyed by the correlation id of the
+        # run that will pick it up. An AgentInput carries identifiers, never
+        # payloads, so a thermal frame cannot travel inside one.
+        self._pending_frames: dict[str, ThermalFrame] = {}
+        self._pending_requests: dict[str, dict[str, Any]] = {}
+        # Where a handler leaves its typed result for the caller. An
+        # AgentOutcome carries identifiers; the route still wants the object.
+        self._last_thermal: dict[str, dict[str, Any]] = {}
+        self._last_resource: dict[str, ResourceOutcome] = {}
+
+        # The incident loop runs through the same runtime the slow loop does.
+        # Its agents are *not* given standing grants -- incident authority is
+        # bound to one incident, one address, and one responding agency, and it
+        # is revoked at close -- so every run here passes the incident grant
+        # explicitly and the runner refuses without one.
+        self.fleet = FleetRunner(
+            runtime=container.runtime,
+            registry=container.registry,
+            grants=GrantService(
+                grants=container.grants,
+                clock=container.clock,
+                ids=container.ids,
+                audit=container.audit,
+            ),
+            runs=container.runs,
+            clock=container.clock,
+            ids=container.ids,
+            only_agent=container.settings.firstdue_agent,
+        )
+        self.fleet.register_all(
+            {
+                "brief-reconciler": self._reconciler_handler,
+                "sensor-fusion": self._fusion_handler,
+                "agency-notifier": self._notifier_handler,
+                "incident-recorder": self._recorder_handler,
+            }
+        )
+
+    # ------------------------------------------------------- runtime handlers
+    #
+    # Each is registered against the descriptor it implements. They are thin on
+    # purpose: the work already lives in the agent objects, and what the
+    # runtime adds is the grant check, the deadline, the terminal state, and
+    # the durable run record naming the pinned version that produced it.
+
+    async def _reconciler_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
+        emission = await self.emit_enriched(_one(payload, "incident_id"))
+        return AgentOutcome(emitted_event_ids=(emission.emission_id,))
+
+    async def _fusion_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
+        """Registering a thermal frame amends the brief and appends to the log."""
+        frame = self._pending_frames.pop(payload.correlation_id, None)
+        if frame is None:  # pragma: no cover - the caller always stages one
+            return AgentOutcome()
+        incident_id = _one(payload, "incident_id")
+        result = await self.register_thermal(incident_id, frame)
+        self._last_thermal[incident_id] = result
+        return AgentOutcome()
+
+    async def _notifier_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
+        """Telling an agency is autonomous; cutting their gas needs a chief."""
+        request = self._pending_requests.pop(payload.correlation_id, None)
+        if request is None:  # pragma: no cover - the caller always stages one
+            return AgentOutcome()
+        incident_id = _one(payload, "incident_id")
+        outcome = await self.request_resource(incident_id, **request)
+        self._last_resource[incident_id] = outcome
+        return AgentOutcome(
+            write_action_ids=tuple(ref for ref in (outcome.external_ref,) if ref),
+            policy_decision_ids=(outcome.decision_id,),
+        )
+
+    async def _recorder_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
+        """Drain buffered log entries into the records system."""
+        result = await self.recorder.flush_to_rms(incident_id=_one(payload, "incident_id"))
+        # The count is what the recorder reports; the entry ids stay in the log
+        # where they belong. A run record naming them would duplicate the log.
+        return AgentOutcome(
+            write_action_ids=(f"rms-flush:{result.flushed}",) if result.flushed else ()
+        )
 
     # ------------------------------------------------------------ emissions
 
@@ -113,6 +214,73 @@ class IncidentSession:
         self._grants[opened.incident.incident_id] = opened.grant
         return await self._persist(emission)
 
+    async def run_enrichment(self, incident_id: str, *, correlation_id: str) -> BriefEmission:
+        """Enrich through the runtime, under the incident's own grant.
+
+        The work is unchanged. What the runtime adds is the grant check before
+        it, the descriptor's latency target around it, and a durable run record
+        naming the pinned version that produced the emission -- which is what a
+        NIOSH investigation asks for and what a direct call never wrote.
+        """
+        grant = await self._require_grant(incident_id)
+        await self.fleet.run(
+            "brief-reconciler",
+            correlation_id=correlation_id,
+            ids={"incident_id": incident_id},
+            grant=grant,
+        )
+        emission = self.latest(incident_id)
+        if emission is None:  # pragma: no cover - enrichment always emits one
+            raise NotFoundError("enrichment produced no emission", details={"id": incident_id})
+        return emission
+
+    async def run_thermal_registration(
+        self, incident_id: str, frame: ThermalFrame, *, correlation_id: str
+    ) -> dict[str, Any]:
+        """Register a thermal frame through the runtime."""
+        grant = await self._require_grant(incident_id)
+        self._pending_frames[correlation_id] = frame
+        try:
+            await self.fleet.run(
+                "sensor-fusion",
+                correlation_id=correlation_id,
+                ids={"incident_id": incident_id},
+                grant=grant,
+            )
+        finally:
+            self._pending_frames.pop(correlation_id, None)
+        return self._last_thermal.pop(incident_id, {})
+
+    async def run_resource_request(
+        self,
+        incident_id: str,
+        *,
+        correlation_id: str,
+        kind_id: str,
+        detail: str,
+        approval_id: str | None,
+    ) -> ResourceOutcome:
+        """Ask for a resource through the runtime."""
+        grant = await self._require_grant(incident_id)
+        self._pending_requests[correlation_id] = {
+            "kind_id": kind_id,
+            "detail": detail,
+            "approval_id": approval_id,
+        }
+        try:
+            await self.fleet.run(
+                "agency-notifier",
+                correlation_id=correlation_id,
+                ids={"incident_id": incident_id},
+                grant=grant,
+            )
+        finally:
+            self._pending_requests.pop(correlation_id, None)
+        outcome = self._last_resource.pop(incident_id, None)
+        if outcome is None:  # pragma: no cover - the handler always sets one
+            raise NotFoundError("resource request produced no outcome", details={"id": incident_id})
+        return outcome
+
     async def emit_enriched(self, incident_id: str) -> BriefEmission:
         previous = self.latest(incident_id)
         if previous is None:
@@ -123,6 +291,42 @@ class IncidentSession:
             raise NotFoundError("profile snapshot is missing", details={"incident_id": incident_id})
         emission = await self.reconciler.enriched(previous, snapshot)
         return await self._persist(emission)
+
+    async def require_enrichable(self, incident_id: str) -> tuple[BriefEmission, ProfileSnapshot]:
+        """Resolve everything enrichment needs, or raise before anything streams.
+
+        Called by the route *before* the response begins. An error raised
+        inside a streaming generator has already had ``200 OK`` and the SSE
+        content type written to the socket, so it cannot become an error
+        envelope -- the connection just breaks. Prerequisites are resolved here
+        so an unknown incident is an ordinary 404.
+        """
+        previous = self.latest(incident_id)
+        if previous is None:
+            raise NotFoundError("no brief to enrich", details={"incident_id": incident_id})
+        incident = await self._require_incident(incident_id)
+        snapshot = await self._container.snapshots.get(incident.profile_snapshot_id)
+        if snapshot is None:
+            raise NotFoundError("profile snapshot is missing", details={"incident_id": incident_id})
+        return previous, snapshot
+
+    async def emit_enriched_streaming(
+        self, incident_id: str, prepared: tuple[BriefEmission, ProfileSnapshot] | None = None
+    ) -> AsyncIterator[NarrativeChunk | BriefEmission]:
+        """Enrich, streaming the prose as it composes.
+
+        The chunks pass straight through -- they are provisional prose and the
+        log does not store them. The emission at the end goes through the same
+        ``_persist`` every other emission does, so what the record holds is
+        unchanged by the fact that the prose was watched being written.
+        """
+        previous, snapshot = prepared or await self.require_enrichable(incident_id)
+
+        async for item in self.reconciler.enriched_streaming(previous, snapshot):
+            if isinstance(item, BriefEmission):
+                yield await self._persist(item)
+            else:
+                yield item
 
     async def emit_amendment(self, incident_id: str, **kwargs: Any) -> BriefEmission:
         previous = self.latest(incident_id)

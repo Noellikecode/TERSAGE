@@ -225,6 +225,50 @@ AGENCY_NOTIFIER = _agent(
     output_schema="NotificationReceipt",
 )
 
+BRIEF_RECONCILER = _agent(
+    "brief-reconciler",
+    publisher=Department.FIRE,
+    loop=Loop.INCIDENT,
+    role_summary="Assembles the three-stage brief and streams it to the commander.",
+    capabilities={Capability.READ},
+    # It reads the snapshot and the EMS-derived life-safety fact, and it writes
+    # nothing outside the department: an emission goes to the incident log,
+    # which the recorder owns.
+    scopes={Scope.READ_PROFILE, Scope.READ_GEOMETRY, Scope.READ_EMS_DERIVED},
+    classifications={
+        Classification.PUBLIC,
+        Classification.RESTRICTED,
+        Classification.TIER_II_CONFIDENTIAL,
+        Classification.PHI,
+    },
+    # The enriched stage waits on a model. The instant stage that precedes it is
+    # the one with the 500 ms budget, and it is the controller's.
+    latency_ms=5_000,
+    input_schema="ProfileSnapshot",
+    output_schema="BriefEmission",
+)
+
+SENSOR_FUSION = _agent(
+    "sensor-fusion",
+    publisher=Department.FIRE,
+    loop=Loop.INCIDENT,
+    role_summary="Registers thermal frames to building faces and detects voids.",
+    # No WRITE capability: that means writing *outside* the department's own
+    # store, and a thermal observation goes to the profile and the incident
+    # log. The write:profile scope below is what it actually needs.
+    capabilities={Capability.READ},
+    # Writing a thermal observation amends the brief and appends to the log, so
+    # it is a write scope. The authorization matrix test refused to let a
+    # viewer do it, which is how that was settled.
+    scopes={Scope.READ_PROFILE, Scope.READ_GEOMETRY, Scope.WRITE_PROFILE},
+    classifications={Classification.PUBLIC, Classification.RESTRICTED},
+    # A frame that registers slower than this is a frame describing a fire that
+    # has moved. Void detection is a fixed threshold, not a search.
+    latency_ms=2_000,
+    input_schema="ThermalFrame",
+    output_schema="ThermalObservation",
+)
+
 INCIDENT_RECORDER = _agent(
     "incident-recorder",
     publisher=Department.FIRE,
@@ -240,8 +284,8 @@ INCIDENT_RECORDER = _agent(
 )
 
 
-#: The fleet, in publication order. Nine agents, five write targets, two loops,
-#: three publishing departments.
+#: The fleet, in publication order. Eleven agents, five write targets, two
+#: loops, three publishing departments.
 FLEET: Final[tuple[AgentDescriptor, ...]] = (
     RECORDS_WATCHER,
     HAZARD_WATCHER,
@@ -250,6 +294,8 @@ FLEET: Final[tuple[AgentDescriptor, ...]] = (
     SURVEY_RANKER,
     REFERRAL_CLERK,
     INCIDENT_CONTROLLER,
+    BRIEF_RECONCILER,
+    SENSOR_FUSION,
     AGENCY_NOTIFIER,
     INCIDENT_RECORDER,
 )

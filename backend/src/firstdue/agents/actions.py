@@ -100,6 +100,26 @@ class DispatchResult(BaseModel):
     replayed: bool = False
     compensations_recorded: tuple[str, ...] = ()
 
+    @property
+    def external_refs(self) -> tuple[str, ...]:
+        """Every reference an external system handed back, in citation order.
+
+        This is what lands on the agent run record as its write actions, so a
+        replay can point at the work order and the case number the run created
+        rather than asserting that it created some.
+        """
+        return tuple(
+            ref
+            for ref in (
+                self.work_order_ref,
+                self.calendar_event_ref,
+                self.notification_ref,
+                self.plan_object_id,
+                self.referral_id,
+            )
+            if ref
+        )
+
 
 class ApprovalResult(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")

@@ -527,3 +527,47 @@ async def test_an_unreachable_records_system_buffers_rather_than_blocks(
     flush = await session.recorder.flush_to_rms(incident_id=opened.incident.incident_id)
     assert flush.flushed > 0
     assert flush.complete
+
+
+async def test_the_incident_loop_runs_through_the_runtime(
+    container: Container, session: IncidentSession
+) -> None:
+    """Incident agents run under the incident grant, not around it.
+
+    The slow loop was routed through the runtime first; the incident loop kept
+    calling its agents directly, so an incident produced no run records and the
+    descriptors' scopes and latency targets applied to nothing on that path.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    emission = await session.run_enrichment(incident_id, correlation_id="corr_enrich")
+    assert emission.stage.value == "ENRICHED"
+
+    runtime = container.runtime
+    invoked = {ref.split("@")[0] for ref, _ in runtime.invocations}  # type: ignore[attr-defined]
+    assert "brief-reconciler" in invoked
+
+
+async def test_an_incident_run_is_durable_and_names_its_version(
+    container: Container, session: IncidentSession
+) -> None:
+    """A run record is what an investigation reads two years later."""
+    await _warm(container)
+    opened = await _open(session)
+    await session.emit_instant(opened)
+    run = await session.fleet.run(
+        "brief-reconciler",
+        correlation_id="corr_enrich",
+        ids={"incident_id": opened.incident.incident_id},
+        grant=opened.grant,
+    )
+    assert run.completed
+    assert run.record.agent_version
+    assert run.record.finished_at is not None
+
+    stored = await container.runs.get(run.record.run_id)
+    assert stored is not None
+    assert stored.status is run.record.status

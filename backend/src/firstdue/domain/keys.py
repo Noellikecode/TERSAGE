@@ -63,6 +63,11 @@ class Keys:
     THERMAL_FACE_C: Final = "thermal.face_temperature_c"
     WEATHER_WIND_KPH: Final = "weather.wind_kph"
 
+    #: Not an attribute anything merges on: the key a screened narrative is
+    #: filed under in the semantic index, so a recall result can say what kind
+    #: of thing it is pointing at.
+    NARRATIVE: Final = "document.narrative"
+
 
 #: Keys whose change invalidates measured geometry and queues a re-measure.
 GEOMETRY_INVALIDATING_KEYS: frozenset[str] = frozenset(

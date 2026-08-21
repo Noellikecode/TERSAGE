@@ -661,3 +661,80 @@ async def approve_referral(
     # to escalate. A falling number means the ranker is wasting inspectors.
     METRICS.record_referral_outcome(accepted=result.case_number is not None)
     return result.model_dump(mode="json")
+
+
+class RecalledNarrativeView(BaseModel):
+    """One filing the semantic index thinks resembles the query.
+
+    Deliberately not a fact. It carries no value, no confidence, and no
+    canonical attribute of its own -- only the ids that lead a human back to
+    the record. Nothing downstream may promote one of these into something the
+    system believes about a building.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    address_id: str
+    source_ref: str
+    #: Lower is nearer. The index's own unit, shown rather than compared.
+    distance: float
+    #: True when the match is on the building that was asked about, rather than
+    #: a comparable one elsewhere in the district.
+    same_building: bool
+
+
+class NarrativeRecallResponse(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    address_id: str
+    query: str
+    matches: tuple[RecalledNarrativeView, ...] = ()
+    #: Stated so a console never renders an empty list as "nothing similar has
+    #: ever been filed" when the index simply holds nothing yet.
+    index_populated: bool
+
+
+@router.get(
+    "/buildings/{address_id}/narratives",
+    response_model=NarrativeRecallResponse,
+    summary="Semantic recall over filed narratives",
+)
+async def recall_narratives(
+    address_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+    q: Annotated[str, Query(min_length=3, max_length=400)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
+) -> NarrativeRecallResponse:
+    """Find filings that read like the question, here and at comparable buildings.
+
+    This is the other half of the memory bank. Structured facts answer "what
+    does the department believe about this building"; this answers "where has
+    somebody written about something like this before" -- the inspection three
+    doors down that described the same stair arrangement, the violation from
+    2019 nobody has read since.
+
+    **A match is a pointer, never an assertion.** It returns ids and a distance,
+    not text and not a value, so the officer goes and reads the record. That is
+    the whole boundary: an embedding can tell you two documents resemble each
+    other, and it cannot tell you a building has three storeys.
+
+    Only screened narratives are indexed, so an injection attempt an ingested
+    document carried is not something this can recall. ``PHI`` and Tier II
+    filings never enter the index at all.
+    """
+    matches = await container.vectors.query(q, limit=limit)
+    return NarrativeRecallResponse(
+        address_id=address_id,
+        query=q,
+        matches=tuple(
+            RecalledNarrativeView(
+                address_id=match.address_id,
+                source_ref=match.source_ref,
+                distance=match.distance,
+                same_building=match.address_id == address_id,
+            )
+            for match in matches
+        ),
+        index_populated=bool(matches),
+    )

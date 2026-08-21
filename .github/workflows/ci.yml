@@ -57,20 +57,37 @@ jobs:
           enable-cache: true
       - run: uv python install 3.12
       - run: uv sync --frozen || uv sync
-      - name: Install and start the Firestore and Pub/Sub emulators
+      # The gcloud preinstalled on a GitHub runner comes from a package whose
+      # component manager is disabled, so `gcloud components install` fails
+      # outright. This action installs an SDK that can install components.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: cloud-firestore-emulator,pubsub-emulator,beta
+      - name: Start the Firestore and Pub/Sub emulators
         run: |
-          gcloud components install cloud-firestore-emulator pubsub-emulator beta --quiet
           nohup gcloud emulators firestore start \
-            --host-port=127.0.0.1:8081 --project=firstdue-local &
+            --host-port=127.0.0.1:8081 --project=firstdue-local \
+            >/tmp/firestore.log 2>&1 &
           nohup gcloud beta emulators pubsub start \
-            --host-port=127.0.0.1:8085 --project=firstdue-local &
-          for _ in $(seq 1 30); do
-            if curl -s http://127.0.0.1:8081 >/dev/null 2>&1 \
-               && curl -s http://127.0.0.1:8085 >/dev/null 2>&1; then
-              echo "emulators up"; break
+            --host-port=127.0.0.1:8085 --project=firstdue-local \
+            >/tmp/pubsub.log 2>&1 &
+          # A port that accepts a connection is the only signal that matters;
+          # both emulators answer non-2xx on `/`, so an HTTP status check would
+          # be reading the wrong thing.
+          for _ in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/8081) 2>/dev/null \
+               && (exec 4<>/dev/tcp/127.0.0.1/8085) 2>/dev/null; then
+              echo "emulators up"; exit 0
             fi
             sleep 2
           done
+          echo "::error::the emulators did not come up within 120s"
+          cat /tmp/firestore.log /tmp/pubsub.log || true
+          exit 1
       - name: Contract suite, both backends
         # The same tests run in-memory and against Firestore. A skip means the
         # emulator never came up, which would let the run pass on half the
@@ -204,10 +221,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
+      # The pinned binary rather than the action, for two reasons: it is the
+      # same scanner at the same version that `make secret-scan` runs locally,
+      # so a developer can reproduce a CI finding exactly; and it has no
+      # licensing check, which the action applies to organization-owned
+      # repositories and would fail this job for a reason unrelated to secrets.
+      - name: Install gitleaks
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+      - name: Scan the full history
+        # --redact so a finding names the file and the rule without reprinting
+        # the credential into a public log, which would publish what it found.
+        run: |
+          gitleaks detect \
+            --source . \
+            --config .gitleaks.toml \
+            --redact \
+            --no-banner \
+            --exit-code 1
 
   staging-smoke:
     name: Staging smoke test

@@ -18,30 +18,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field
-
 from firstdue.domain.enums import VECTOR_FORBIDDEN_CLASSIFICATIONS
 from firstdue.domain.vectors import VectorPayload
 from firstdue.errors import ClassificationViolationError, ConfigurationError
 from firstdue.observability.logging import get_logger
 from firstdue.observability.tracing import source_query_span, source_write_span
+from firstdue.ports.vectors import VectorMatch
 
 logger = get_logger(__name__)
 
 #: The embedding model. Named here so a change is a reviewable diff rather than
 #: a silently different vector space.
 DEFAULT_EMBEDDING_MODEL: Final[str] = "text-embedding-004"
-
-
-class VectorMatch(BaseModel):
-    """One neighbour, with the id that traces it back to a fact."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    payload_id: str = Field(min_length=1, max_length=120)
-    address_id: str = Field(min_length=1, max_length=120)
-    canonical_key: str = Field(min_length=1, max_length=120)
-    distance: float
 
 
 class VertexVectorIndex:

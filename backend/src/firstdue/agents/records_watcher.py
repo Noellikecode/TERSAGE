@@ -28,7 +28,13 @@ from firstdue.domain.enums import SourceType
 from firstdue.domain.facts import StructuralFact
 from firstdue.domain.keys import Keys
 from firstdue.domain.profiles import BuildingProfile, ProfileEvent, ProfileEventType
-from firstdue.errors import AppendOnlyViolationError, SourceUnavailableError, StaleVersionError
+from firstdue.domain.vectors import VectorPayload
+from firstdue.errors import (
+    AppendOnlyViolationError,
+    ClassificationViolationError,
+    SourceUnavailableError,
+    StaleVersionError,
+)
 from firstdue.extraction.extractor import FactExtractor
 from firstdue.observability.logging import get_logger
 from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
@@ -36,6 +42,7 @@ from firstdue.ports.city import CityAdapter
 from firstdue.ports.clock import Clock, IdGenerator
 from firstdue.ports.repositories import FactRepository, ProfileRepository
 from firstdue.ports.sources import SourceAdapter, SourceRecord, SourceSnapshot
+from firstdue.ports.vectors import VectorIndex
 from firstdue.services.materialization import ProfileMaterializer
 from firstdue.sources.catalog import ASSESSOR, INSPECTIONS, PERMITS, VIOLATIONS
 
@@ -79,11 +86,16 @@ class WatchResult(BaseModel):
     #: Facts re-derived identically and therefore not written again.
     facts_deduped: int = Field(default=0, ge=0)
     conflicts_detected: tuple[str, ...] = ()
+    #: The ids of the facts this pass actually appended. Carried on the run
+    #: record, which is what makes a run reconstructible two years later.
+    written_fact_ids: tuple[str, ...] = ()
     #: Sources that could not be reached on this pass. Rendered as UNAVAILABLE.
     unavailable_sources: tuple[str, ...] = ()
     #: Injection patterns the screen removed from ingested documents.
     screen_findings: tuple[str, ...] = ()
     documents_triaged_out: int = Field(default=0, ge=0)
+    #: Narratives written to the semantic index for later recall.
+    narratives_indexed: int = Field(default=0, ge=0)
 
 
 class RecordsWatcher:
@@ -100,6 +112,7 @@ class RecordsWatcher:
         clock: Clock,
         ids: IdGenerator,
         audit: AuditSink | None = None,
+        vectors: VectorIndex | None = None,
         agent_version: str = "1.0.0",
     ) -> None:
         self._profiles = profiles
@@ -110,6 +123,7 @@ class RecordsWatcher:
         self._clock = clock
         self._ids = ids
         self._audit = audit
+        self._vectors = vectors
         self._agent_version = agent_version
 
     async def poll(
@@ -125,6 +139,7 @@ class RecordsWatcher:
         unavailable: list[str] = []
         findings: set[str] = set()
         triaged = 0
+        indexed = 0
 
         for source in sources:
             source_type = SOURCE_TYPES.get(source.source_id)
@@ -177,12 +192,20 @@ class RecordsWatcher:
                     findings.update(outcome.screen_findings)
                     triaged += 1 if outcome.triaged_out else 0
                     pending.setdefault(address_id, []).extend(outcome.facts)
+                    # The screened text, not the raw record: whatever an
+                    # ingested document tried to instruct has already been
+                    # removed, and the injection attempt must not be what a
+                    # later semantic query recalls.
+                    indexed += await self._index_narrative(
+                        record, address_id=address_id, screened=outcome.screened_text
+                    )
 
-        written, deduped = 0, 0
+        written: list[str] = []
+        deduped = 0
         conflicts: list[str] = []
         for address_id in sorted(pending):
             stored, skipped = await self._apply(address_id, district_id, pending[address_id])
-            written += stored
+            written.extend(stored)
             deduped += skipped
             materialized = await self._materializer.run(
                 address_id,
@@ -196,7 +219,7 @@ class RecordsWatcher:
             extra={
                 "district_id": district_id,
                 "addresses": len(pending),
-                "facts_written": written,
+                "facts_written": len(written),
                 "conflicts": len(conflicts),
                 "unavailable": len(unavailable),
             },
@@ -204,12 +227,14 @@ class RecordsWatcher:
         return WatchResult(
             district_id=district_id,
             addresses_touched=tuple(sorted(pending)),
-            facts_written=written,
+            facts_written=len(written),
             facts_deduped=deduped,
             conflicts_detected=tuple(conflicts),
+            written_fact_ids=tuple(written),
             unavailable_sources=tuple(unavailable),
             screen_findings=tuple(sorted(findings)),
             documents_triaged_out=triaged,
+            narratives_indexed=indexed,
         )
 
     # ------------------------------------------------------------ internals
@@ -244,15 +269,18 @@ class RecordsWatcher:
 
     async def _apply(
         self, address_id: str, district_id: str, facts: Sequence[StructuralFact]
-    ) -> tuple[int, int]:
-        """Append facts to the store and the profile. Returns (written, deduped)."""
+    ) -> tuple[tuple[str, ...], int]:
+        """Append facts to the store and the profile.
+
+        Returns the ids actually written and the count re-derived identically.
+        """
         profile = await self._profiles.get(address_id)
         if profile is None:
             profile = await self._profiles.create(
                 BuildingProfile(address_id=address_id, district_id=district_id)
             )
 
-        written = 0
+        written: list[str] = []
         deduped = 0
         updated = profile
         for fact in sorted(facts, key=lambda f: (f.observed_at, f.fact_id)):
@@ -267,7 +295,7 @@ class RecordsWatcher:
             except AppendOnlyViolationError:
                 deduped += 1
                 continue
-            written += 1
+            written.append(fact.fact_id)
 
         if updated.profile_version != profile.profile_version:
             try:
@@ -276,8 +304,46 @@ class RecordsWatcher:
                 # Another instance wrote first. Its pass extracted the same
                 # facts from the same records, so there is nothing to redo.
                 logger.info("watcher_write_contended", extra={"address_id": address_id})
-                return 0, written + deduped
-        return written, deduped
+                return (), len(written) + deduped
+        return tuple(written), deduped
+
+    async def _index_narrative(
+        self, record: SourceRecord, *, address_id: str, screened: str | None
+    ) -> int:
+        """Add one screened narrative to the semantic index.
+
+        Indexing is best effort and never blocks a pass. Recall is a
+        convenience for a human reading the file; facts are what the system
+        believes, and they are already written by the time this runs.
+
+        ``PHI`` and ``TIER_II_CONFIDENTIAL`` never arrive here: the payload
+        refuses them at construction, and this catches that refusal rather than
+        letting one confidential filing fail an entire district poll.
+        """
+        if self._vectors is None or not screened:
+            return 0
+        try:
+            payload = VectorPayload(
+                payload_id=f"vec/{address_id}/{record.record_ref}"[:120],
+                address_id=address_id,
+                canonical_key=Keys.NARRATIVE,
+                text=screened[:8000],
+                classification=record.classification,
+                source_ref=record.record_ref,
+                observed_at=record.observed_at,
+            )
+        except ClassificationViolationError:
+            logger.info(
+                "narrative_not_indexed",
+                extra={"reason": "classification_forbidden", "source_ref": record.record_ref},
+            )
+            return 0
+
+        try:
+            return await self._vectors.upsert((payload,))
+        except Exception:
+            logger.warning("narrative_index_failed", extra={"address_id": address_id})
+            return 0
 
     async def _audit_event(
         self,

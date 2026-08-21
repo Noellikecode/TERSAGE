@@ -25,6 +25,7 @@ renderer shows it as disputed.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
@@ -72,6 +73,75 @@ DEFAULT_FOOTPRINT: Final[tuple[Point2D, ...]] = (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class MeasuredHeight:
+    """A height above ground, and every reading it rests on.
+
+    Two shapes produce one of these. A digital surface model reports height
+    above ground directly. The live pairing does not: Google Solar reports each
+    roof plane in the same vertical datum USGS reports the ground in, so the
+    height is a *subtraction* -- and a subtraction that cites only one of its
+    two operands is a number nobody can check.
+    """
+
+    height_m: float
+    #: The record the fact is attributed to: the one that measured the roof.
+    primary: SourceRecord
+    #: Every record the number rests on, in citation order.
+    citations: tuple[str, ...]
+    method: str
+
+    @property
+    def source_ref(self) -> str:
+        return " + ".join(self.citations)
+
+
+def measured_height(
+    lidar: SourceRecord | None, solar: SourceRecord | None
+) -> MeasuredHeight | None:
+    """Height above ground from whichever measurement pair is available.
+
+    Returns ``None`` when neither shape is present. That becomes an absent
+    height, which renders as ``UNKNOWN`` -- never as a building of height zero,
+    which would be a one-storey structure the collapse zone was computed from.
+    """
+    if lidar is not None:
+        # A digital surface model already answers "how tall above the ground".
+        direct = lidar.fields.get("dsm_height_m")
+        if direct is not None:
+            datum = float(lidar.fields.get("dtm_height_m") or 0.0)
+            return MeasuredHeight(
+                height_m=float(direct) - datum,
+                primary=lidar,
+                citations=(lidar.record_ref,),
+                method="dsm-minus-dtm",
+            )
+
+    if solar is None or lidar is None:
+        return None
+    plane = solar.fields.get("max_plane_height_m")
+    ground = lidar.fields.get("ground_elevation_m")
+    if plane is None or ground is None:
+        return None
+
+    height = float(plane) - float(ground)
+    if height < MIN_STRUCTURE_HEIGHT_M:
+        # A roof plane below the ground it sits on means the two readings are
+        # not in the same datum, or the API answered about a different
+        # building. Either way the honest output is no height at all.
+        logger.warning(
+            "geometry_height_rejected",
+            extra={"reason": "implausible_difference", "method": "solar-minus-3dep"},
+        )
+        return None
+    return MeasuredHeight(
+        height_m=height,
+        primary=solar,
+        citations=(solar.record_ref, lidar.record_ref),
+        method="solar-plane-minus-3dep-ground",
+    )
+
+
 def stories_from_height(height_m: float, *, storey_m: float = TYPICAL_STOREY_M) -> int:
     """Deterministic storey count from a measured height.
 
@@ -92,6 +162,8 @@ class GeometryWatchResult(BaseModel):
     district_id: str
     addresses_updated: tuple[str, ...] = ()
     facts_written: int = Field(default=0, ge=0)
+    #: The ids of the facts this pass appended, for the run record.
+    written_fact_ids: tuple[str, ...] = ()
     #: Addresses whose stored geometry was invalidated by a newer permit.
     invalidated: tuple[str, ...] = ()
     conflicts_detected: tuple[str, ...] = ()
@@ -221,17 +293,24 @@ class GeometryWatcher:
         measured_facts: list[StructuralFact] = []
         height_m: float | None = None
 
-        if lidar is not None:
-            height_m = float(lidar.fields.get("dsm_height_m", 0.0))
+        measurement = measured_height(lidar, solar)
+        if measurement is not None:
+            height_m = measurement.height_m
+            # A height that two instruments were subtracted to produce is worth
+            # marginally less than one a surface model measured outright, and
+            # the storey count derived from it is worth less again. The
+            # confidence says so rather than presenting both as equal.
+            derived = len(measurement.citations) > 1
             measured_facts.append(
                 self._fact(
                     profile.address_id,
                     Keys.HEIGHT_M,
                     QuantityValue(magnitude=round(height_m, 2), unit="m"),
-                    record=lidar,
+                    record=measurement.primary,
                     source_type=SourceType.LIDAR_DSM,
-                    confidence=0.85,
+                    confidence=0.80 if derived else 0.85,
                     now=now,
+                    source_ref=measurement.source_ref,
                 )
             )
             measured_facts.append(
@@ -239,10 +318,11 @@ class GeometryWatcher:
                     profile.address_id,
                     Keys.STORIES,
                     IntegerValue(integer=stories_from_height(height_m)),
-                    record=lidar,
+                    record=measurement.primary,
                     source_type=SourceType.LIDAR_DSM,
-                    confidence=0.81,
+                    confidence=0.76 if derived else 0.81,
                     now=now,
+                    source_ref=measurement.source_ref,
                 )
             )
 
@@ -411,12 +491,16 @@ class GeometryWatcher:
         source_type: SourceType,
         confidence: float,
         now: datetime,
+        source_ref: str | None = None,
     ) -> StructuralFact:
+        # A fact derived from more than one reading cites all of them, so an
+        # officer who doubts the height can find both numbers it came from.
+        cited = source_ref or record.record_ref
         return StructuralFact(
             fact_id=natural_fact_id(
                 address_id=address_id,
                 canonical_key=key,
-                source_ref=record.record_ref,
+                source_ref=cited,
                 observed_at=record.observed_at,
                 rendered_value=value.render(),
             ),
@@ -424,7 +508,7 @@ class GeometryWatcher:
             canonical_key=key,
             value=value,
             source_type=source_type,
-            source_ref=record.record_ref,
+            source_ref=cited,
             source_snapshot_id=record.record_ref,
             observed_at=record.observed_at,
             ingested_at=now,

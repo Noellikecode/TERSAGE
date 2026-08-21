@@ -35,6 +35,25 @@ class AppEnv(StrEnum):
     PRODUCTION = "production"
 
 
+class ServiceRole(StrEnum):
+    """Which surfaces this process serves.
+
+    One image, three deployments. Terraform sets ``FIRSTDUE_LOOP`` per service
+    and this is what reads it -- before, the variable was set and read by
+    nothing, so both backend services ran the identical full app and the
+    per-service split was cosmetic.
+
+    ``ALL`` is the default and is what the demo and the test suite run: a single
+    process serving everything, with no split to reason about.
+    """
+
+    ALL = "all"
+    #: The slow loop: district polls, the survey queue, profiles, referrals.
+    SLOW = "slow"
+    #: The incident loop: dispatch, briefs, streams, resources, the log.
+    INCIDENT = "incident"
+
+
 class StorageBackend(StrEnum):
     """Where durable memory lives.
 
@@ -76,6 +95,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------ modes -----
     #: The master switch. True means no Google credentials are needed anywhere.
     use_fake_agents: bool = True
+    #: Which loop this process serves. Cloud Run sets it per service; a local
+    #: process serves everything.
+    firstdue_loop: ServiceRole = ServiceRole.ALL
+    #: Which single agent this process is, when it is an agent worker. Empty
+    #: means the process runs the whole fleet, which is what the demo and the
+    #: test suite do. A worker refuses events addressed to any other agent:
+    #: a push subscription pointed at the wrong service would otherwise be
+    #: silently absorbed instead of visibly misrouted.
+    firstdue_agent: str = ""
     #: Durable memory. Independent of fake mode: the emulator suite runs the
     #: Firestore repositories with no credentials at all.
     storage_backend: StorageBackend = StorageBackend.MEMORY
@@ -111,6 +139,18 @@ class Settings(BaseSettings):
     gemma_model: str = "gemma-3-4b-it"
     vector_search_index: str | None = None
     model_armor_template: str | None = None
+
+    # ------------------------------------------------- live source access ---
+    #: Google Maps Platform key for the Solar API. Without it the solar source
+    #: reports UNCONFIGURED in live mode -- it never falls back to a fixture.
+    google_maps_api_key: str | None = None
+    #: developer.nrel.gov key for the alternative-fuel-station registry.
+    nrel_api_key: str | None = None
+    #: DataSF app token. It identifies the caller to lift the anonymous
+    #: throttle; it authorizes nothing, and the feeds are public without it.
+    socrata_app_token: str | None = None
+    #: NWS asks every caller to identify itself and throttles those that do not.
+    source_contact_email: str = "firstdue@example.org"
     #: Prefixes every Firestore collection. Empty in production; set per run by
     #: the emulator suite so parallel runs cannot see each other's documents.
     firestore_namespace: str = ""
@@ -222,6 +262,22 @@ class Settings(BaseSettings):
                 details={"missing": missing},
             )
         return self
+
+    @property
+    def is_agent_worker(self) -> bool:
+        return bool(self.firstdue_agent)
+
+    def serves_agent(self, agent_id: str) -> bool:
+        """Whether this process is allowed to run work for an agent."""
+        return not self.firstdue_agent or self.firstdue_agent == agent_id
+
+    @property
+    def serves_slow_loop(self) -> bool:
+        return self.firstdue_loop in (ServiceRole.ALL, ServiceRole.SLOW)
+
+    @property
+    def serves_incident_loop(self) -> bool:
+        return self.firstdue_loop in (ServiceRole.ALL, ServiceRole.INCIDENT)
 
     @property
     def is_fake_mode(self) -> bool:

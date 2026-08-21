@@ -276,3 +276,82 @@ def test_no_secret_value_is_written_into_terraform() -> None:
     for path in TERRAFORM.rglob("*.tf"):
         text = path.read_text()
         assert "google_secret_manager_secret_version" not in text, path
+
+
+# ------------------------------------------------ per-agent workers and routing
+
+
+def _subscriptions_policy() -> dict:
+    return _load("subscriptions.json")
+
+
+def test_the_routing_policy_matches_the_code() -> None:
+    """A subscription pointed at a service that does not handle its topic
+    dead-letters forever while every dashboard looks healthy."""
+    from firstdue.registry.routing import topics_for
+
+    agents = _subscriptions_policy()["agents"]
+    for agent_id, spec in agents.items():
+        assert tuple(spec["topics"]) == topics_for(agent_id), agent_id
+
+
+def test_every_fleet_agent_has_a_worker_and_no_others_do() -> None:
+    from firstdue.registry.descriptors import FLEET
+
+    agents = set(_subscriptions_policy()["agents"])
+    assert agents == {d.agent_id for d in FLEET}
+
+
+def test_every_routed_topic_exists() -> None:
+    """A subscription to a topic nothing creates fails at apply, not at review."""
+    topics = set(json.loads((POLICY / "topics.json").read_text(encoding="utf-8"))["topics"])
+    for spec in _subscriptions_policy()["agents"].values():
+        for topic in spec["topics"]:
+            assert topic in topics, topic
+
+
+def test_unconsumed_topics_are_declared_rather_than_discovered() -> None:
+    """A topic nothing subscribes to is a decision, not an oversight."""
+    from firstdue.registry.routing import unconsumed_topics
+
+    assert tuple(_subscriptions_policy()["unconsumed_topics"]) == unconsumed_topics()
+
+
+def test_each_worker_runs_as_its_own_agent_service_account() -> None:
+    """The whole point: least privilege that is true of processes, not bindings.
+
+    A worker that ran as a shared identity would execute one agent's work under
+    the union of every agent's roles, which is exactly what the per-agent
+    service accounts exist to prevent.
+    """
+    module = (TERRAFORM / "modules" / "agent-workers" / "main.tf").read_text(encoding="utf-8")
+    assert "service_account                  = var.agent_service_accounts[each.key]" in module
+    assert 'name                = "firstdue-agent-${each.key}"' in module
+
+
+def test_a_worker_is_told_which_agent_it_is() -> None:
+    module = (TERRAFORM / "modules" / "agent-workers" / "main.tf").read_text(encoding="utf-8")
+    assert 'name  = "FIRSTDUE_AGENT"' in module
+    assert 'name  = "FIRSTDUE_LOOP"' in module
+
+
+def test_no_worker_is_publicly_invokable() -> None:
+    """A worker is reached by Pub/Sub push and the scheduler. Both authenticate."""
+    module = (TERRAFORM / "modules" / "agent-workers" / "main.tf").read_text(encoding="utf-8")
+    assert "allUsers" not in module
+    assert "allAuthenticatedUsers" not in module
+    assert "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" in module
+
+
+def test_agent_subscriptions_push_to_their_own_worker() -> None:
+    """Routing, in the module that creates the subscriptions."""
+    module = (TERRAFORM / "modules" / "pubsub" / "main.tf").read_text(encoding="utf-8")
+    assert "agent_push_endpoints[each.value.agent]" in module
+    assert "google_pubsub_subscription" in module
+
+
+def test_every_environment_deploys_the_workers() -> None:
+    for env in ("staging", "prod"):
+        main = (TERRAFORM / "envs" / env / "main.tf").read_text(encoding="utf-8")
+        assert 'source      = "../../modules/agent-workers"' in main, env
+        assert "agent_service_accounts = module.iam.agent_emails" in main, env

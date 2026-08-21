@@ -103,6 +103,21 @@ because each corresponds to a different way authority leaks.
 `set(Scope) - WRITE_SCOPES`, and the check is exact membership. Every read scope
 in the system is tried as a write in the test suite and refused.
 
+## Semantic recall
+
+Structured facts are what the department *believes*. The narratives those facts
+were read out of are searchable separately, by meaning, through `VectorIndex` —
+in-memory in fake mode, Vertex Vector Search in live mode.
+
+A match is a **pointer, never an assertion**. It carries the ids and a distance,
+not text and not a value, so an officer goes and reads the record. An embedding
+can say two documents resemble each other; it cannot say a building has three
+storeys, and nothing downstream may promote a match into something the system
+believes. Only *screened* text is indexed, so an injection attempt an ingested
+document carried is not something a later query can recall, and `PHI` and
+`TIER_II_CONFIDENTIAL` never enter the index at all — refused at payload
+construction and again at the adapter boundary.
+
 ## Durable memory
 
 Two backends, one contract. `STORAGE_BACKEND` selects `memory` or `firestore`;
@@ -146,8 +161,19 @@ or `403` for a caller that is not the fleet. See
 
 ## The agent registry
 
-Eight agents, two loops, five external write targets, all published at
-`1.0.0` and pinned by the fire department at startup.
+Eleven agents, two loops, five external write targets, all published at `1.0.0`
+and pinned by the fire department at startup.
+
+**Every one of them runs through `AgentRuntime`.** `agents/fleet.py` resolves
+the pinned descriptor, obtains the authority that descriptor's scopes imply,
+opens a durable run record, hands the work to the runtime, and closes the record
+with whatever terminal state came back. Four properties follow that no agent has
+to remember: no agent runs without a grant, none runs past the latency target
+its own descriptor declares, every run — including the denied and timed-out ones
+— reaches a terminal state on the record, and every run names the pinned version
+that produced it. A slow-loop agent runs under a standing grant; an incident
+agent runs under the incident's own grant and the runner refuses to mint it a
+permanent one.
 
 | Agent | Publisher | Loop | Writes to | Approval | Budget |
 |---|---|---|---|---|---|
@@ -157,6 +183,8 @@ Eight agents, two loops, five external write targets, all published at
 | `survey-ranker` | fire | slow | inspection-work-orders | supervisor | 60 s |
 | `referral-clerk` | fire | slow | building-referral-intake | supervisor | 60 s |
 | `incident-controller` | fire | incident | — | — | 500 ms |
+| `brief-reconciler` | fire | incident | — | — | 5 s |
+| `sensor-fusion` | fire | incident | — | — | 2 s |
 | `agency-notifier` | fire | incident | agency-notifications | chief | 5 s |
 | `incident-recorder` | fire | incident | department-rms | — | 15 s |
 
@@ -235,6 +263,25 @@ verbatim.
 | `FIXTURE` | deterministic synthetic records | in-memory, paginated |
 | `UNCONFIGURED` | named in the catalog, no endpoint reachable | raises; the fact becomes `UNAVAILABLE` |
 
+Thirteen sources, ten of them live. Three are `UNCONFIGURED` **and say why**:
+PHMSA restricts programmatic access to pipeline centrelines, Tier II filings are
+confidential under EPCRA, and San Francisco publishes no open hydrant dataset.
+The console renders that reason verbatim, because "the feed is down" and
+"withheld by statute" are different statements about the same empty result.
+
+Two of the ten need a key — Google Solar and NREL. Without it they report
+`UNCONFIGURED` rather than falling back to a fixture, so a live-mode process
+never serves synthetic records under a live label.
+
+**Measured height is a subtraction.** No public digital surface model answers
+"how tall is this building" for San Francisco, so the Geometry Watcher takes the
+Solar API's roof-plane height and subtracts USGS 3DEP's ground elevation at the
+same coordinate. The resulting fact cites **both** readings, because a
+subtraction that cites one operand is a number nobody can check. A difference
+below one storey is refused outright rather than recorded as a short building —
+a structure of height zero would be one storey with a collapse zone computed
+from nothing.
+
 Live mode never falls back to a fixture. A source that is down produces an
 explicit `UNAVAILABLE` fact naming it — never an empty result that reads as "no
 hazard here".
@@ -258,6 +305,16 @@ CAD ──▶ open ──▶ grant ──▶ ONE snapshot ──▶ instant brie
 | Instant | none, by construction | construction, storeys, conflicts, collapse zone, occupancy, suppression, unknowns | it cannot: nothing on its path can be down |
 | Enriched | optional Gemini | the same sections plus prose, in size-up order | the deterministic brief stands, narrative marked unavailable |
 | Amendment | none | late data, marked as an amendment | earlier stages are already on screen |
+
+**Prose streams; facts do not.** The enriched stage emits the narrative as the
+model writes it, over `narrative` SSE frames marked `provisional`. Those frames
+carry no facts, no version, and no content hash, and the incident log does not
+store them — three seconds of nothing looks exactly like three seconds of
+broken, and that is the only problem streaming solves here. Every such stream
+ends with an authoritative `brief` frame: the persisted emission, or, if the
+composition was refused or timed out, one whose narrative is absent and marked
+unavailable. There is no path where provisional prose is left standing on a
+screen with nothing behind it.
 
 `BriefEmission` refuses to be constructed with `model_invoked=True` at the
 instant stage, so "no model call" is enforced by the type rather than by

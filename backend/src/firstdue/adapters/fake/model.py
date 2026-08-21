@@ -14,15 +14,30 @@ degraded-brief path gets tested without credentials.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final
 
 from firstdue.domain.facts import SourceSpan
 from firstdue.domain.keys import Keys
 from firstdue.errors import UpstreamTimeoutError
-from firstdue.ports.model import ExtractedValue, ExtractionResult, ProseResult
+from firstdue.extraction.triage import NARRATIVE_KEYS
+from firstdue.extraction.triage import triage as local_triage
+from firstdue.ports.model import (
+    ExtractedValue,
+    ExtractionResult,
+    ProseChunk,
+    ProseResult,
+    TriageResult,
+)
 
 MODEL_REF: Final[str] = "fake-extractor/1"
+#: The triage model is a separate, cheaper one in live mode, so the fake names
+#: it separately too -- a trace that cannot tell the two apart cannot show that
+#: the expensive model was skipped.
+TRIAGE_MODEL_REF: Final[str] = "fake-triage/1"
+
+#: Words per streamed chunk. Small enough that a test can see more than one.
+FAKE_CHUNK_WORDS: Final[int] = 4
 
 #: Deterministic patterns. Each maps a canonical key to a regex whose first
 #: group is the value. Order is fixed so output is reproducible.
@@ -55,6 +70,8 @@ class FakeModelClient:
         self.extract_calls = 0
         self.compose_calls = 0
         self.explain_calls = 0
+        self.triage_calls = 0
+        self.compose_stream_calls = 0
 
     def _guard(self) -> None:
         if self.unavailable:
@@ -62,6 +79,35 @@ class FakeModelClient:
                 "model endpoint unavailable",
                 details={"model_ref": MODEL_REF},
             )
+
+    async def triage(
+        self,
+        *,
+        document_text: str,
+        schema_keys: tuple[str, ...],
+        deadline_ms: int,
+    ) -> TriageResult:
+        """The local vocabulary classifier, standing in for Gemma.
+
+        Unlike the other verbs this one does *not* raise when the client is
+        marked unavailable: a triage outage must never be able to silence a
+        document. It reports ``accepted=False`` and the caller falls back.
+        """
+        self.triage_calls += 1
+        if self.unavailable or self.reject_output:
+            return TriageResult(
+                extract=True,
+                reason="triage unavailable; extracting rather than skipping",
+                accepted=False,
+                model_ref=TRIAGE_MODEL_REF,
+            )
+        decision = local_triage(document_text, keys=schema_keys or NARRATIVE_KEYS)
+        return TriageResult(
+            extract=decision.extract,
+            reason=decision.reason,
+            candidate_keys=decision.candidate_keys,
+            model_ref=TRIAGE_MODEL_REF,
+        )
 
     async def extract(
         self,
@@ -120,6 +166,45 @@ class FakeModelClient:
             model_ref=MODEL_REF,
         )
 
+    async def compose_stream(
+        self,
+        *,
+        template_id: str,
+        fields: Mapping[str, Any],
+        max_chars: int,
+        deadline_ms: int,
+    ) -> AsyncIterator[ProseChunk]:
+        """The same prose as :meth:`compose`, in word-sized pieces.
+
+        Deterministic: the same call produces the same chunks in the same
+        order, and their concatenation equals what ``compose`` returns. That
+        equality is what lets the console render chunks and the record store
+        the completed text without the two ever disagreeing.
+
+        A failure ends the stream with no ``final`` chunk. It does not raise --
+        a half-composed narrative is withdrawn by the consumer, not by an
+        exception unwinding through a fireground stream.
+        """
+        self.compose_stream_calls += 1
+        if self.unavailable or self.reject_output:
+            return
+
+        text = self._composed_text(template_id, fields)[:max_chars]
+        words = text.split(" ")
+        for index in range(0, len(words), FAKE_CHUNK_WORDS):
+            chunk = " ".join(words[index : index + FAKE_CHUNK_WORDS])
+            is_last = index + FAKE_CHUNK_WORDS >= len(words)
+            yield ProseChunk(
+                text=chunk if index == 0 else f" {chunk}",
+                final=is_last,
+                model_ref=MODEL_REF,
+            )
+
+    @staticmethod
+    def _composed_text(template_id: str, fields: Mapping[str, Any]) -> str:
+        parts = [f"{key}: {value}" for key, value in sorted(fields.items())]
+        return f"[{template_id}] " + "; ".join(parts) + "."
+
     async def compose(
         self,
         *,
@@ -139,8 +224,7 @@ class FakeModelClient:
                 rejection_reason="composed output failed contract validation",
                 model_ref=MODEL_REF,
             )
-        parts = [f"{key}: {value}" for key, value in sorted(fields.items())]
-        text = f"[{template_id}] " + "; ".join(parts) + "."
+        text = self._composed_text(template_id, fields)
         truncated = len(text) > max_chars
         return ProseResult(
             text=text[:max_chars],

@@ -1,0 +1,125 @@
+{
+  "note": "Synthetic National Weather Service current-hour conditions, shaped exactly as api.weather.gov returns them.",
+  "records": [
+    {
+      "address_id": "sf-0450-hayes",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 70,
+        "short_forecast": "Mostly Cloudy",
+        "temperature": 58,
+        "temperature_unit": "F",
+        "wind_direction": "W",
+        "wind_speed": "8 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-0450-hayes/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 74,
+        "short_forecast": "Partly Sunny",
+        "temperature": 61,
+        "temperature_unit": "F",
+        "wind_direction": "NW",
+        "wind_speed": "13 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-1215-fell/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 78,
+        "short_forecast": "Fog",
+        "temperature": 64,
+        "temperature_unit": "F",
+        "wind_direction": "SW",
+        "wind_speed": "18 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-0899-valencia/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 82,
+        "short_forecast": "Clear",
+        "temperature": 67,
+        "temperature_unit": "F",
+        "wind_direction": "N",
+        "wind_speed": "9 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-2130-mission/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-0350-rhode-island",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 86,
+        "short_forecast": "Mostly Cloudy",
+        "temperature": 58,
+        "temperature_unit": "F",
+        "wind_direction": "W",
+        "wind_speed": "14 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-0350-rhode-island/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 90,
+        "short_forecast": "Partly Sunny",
+        "temperature": 61,
+        "temperature_unit": "F",
+        "wind_direction": "NW",
+        "wind_speed": "19 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-1550-bryant/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-0621-clement",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 94,
+        "short_forecast": "Fog",
+        "temperature": 64,
+        "temperature_unit": "F",
+        "wind_direction": "SW",
+        "wind_speed": "10 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-0621-clement/2026-08-20T08:00:00+00:00"
+    },
+    {
+      "address_id": "sf-3120-24th",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "relative_humidity": 73,
+        "short_forecast": "Clear",
+        "temperature": 67,
+        "temperature_unit": "F",
+        "wind_direction": "N",
+        "wind_speed": "15 mph"
+      },
+      "observed_at": "2026-08-20T08:00:00+00:00",
+      "record_ref": "nws/sf-3120-24th/2026-08-20T08:00:00+00:00"
+    }
+  ]
+}

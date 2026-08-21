@@ -1,0 +1,86 @@
+[
+  {
+    "inspection_number": "435150",
+    "violation_id": "2106-0053SFC19AY",
+    "address": "105 Roscoe St",
+    "battalion": "06",
+    "bfp_district": "06",
+    "close_date": "2021-07-19T11:49:06.000",
+    "corrective_action": "correct - no permit",
+    "status": "abated",
+    "violation_item_description": "2022 san francisco fire code",
+    "violation_date": "2021-05-23T00:00:00.000",
+    "violation_number": "2106-0053",
+    "violation_item": "SFC19A",
+    "primary": "Y",
+    "data_as_of": "2021-07-19T11:49:06.000",
+    "data_loaded_at": "2026-08-20T02:16:12.000"
+  },
+  {
+    "inspection_number": "441543",
+    "violation_id": "2107-0113SFC19C",
+    "address": "55 South Mcdonnell Rd",
+    "battalion": "AP",
+    "station": "AP",
+    "bfp_district": "AP",
+    "close_date": "2021-12-29T00:00:00.000",
+    "corrective_action": "correct - no permit",
+    "status": "abated",
+    "violation_item_description": "2022 san francisco fire code",
+    "violation_date": "2021-07-26T00:00:00.000",
+    "violation_number": "2107-0113",
+    "violation_item": "SFC19C",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        -122.3883487,
+        37.6085413
+      ]
+    },
+    "data_as_of": "2021-08-18T13:03:20.000",
+    "data_loaded_at": "2026-08-20T02:16:12.000",
+    ":@computed_region_bh8s_q3mv": "60"
+  },
+  {
+    "inspection_number": "628515",
+    "violation_id": "2604-035822SPR08Y",
+    "address": "1625 Post St",
+    "battalion": "04",
+    "station": "38",
+    "bfp_district": "04",
+    "corrective_action": "correct - no permit",
+    "status": "open",
+    "violation_item_description": "sprinkler / 5-year service",
+    "violation_date": "2026-04-24T00:00:00.000",
+    "violation_number": "2604-0358",
+    "violation_item": "22SPR08",
+    "primary": "Y",
+    "eas_id": "287815-500372-323775",
+    "eas_street_no": "1625",
+    "eas_street": "POST ST",
+    "neighborhood_district": "Japantown",
+    "location": {
+      "type": "Point",
+      "coordinates": [
+        -122.42870489,
+        37.78556119
+      ]
+    },
+    "supervisor_district": "5",
+    "zipcode": "94115",
+    "data_as_of": "2026-04-24T15:59:30.000",
+    "data_loaded_at": "2026-08-20T02:16:12.000",
+    ":@computed_region_f58d_8dbm": "13",
+    ":@computed_region_rxqg_mtj9": "11",
+    ":@computed_region_yftq_j783": "13",
+    ":@computed_region_jx4q_fizf": "6",
+    ":@computed_region_ajp5_b2md": "15",
+    ":@computed_region_bh8s_q3mv": "29490",
+    ":@computed_region_fyvs_ahh9": "13",
+    ":@computed_region_p5aj_wyqh": "9",
+    ":@computed_region_jwn9_ihcz": "101",
+    ":@computed_region_6qbp_sg9q": "101",
+    ":@computed_region_qgnn_b9vv": "4",
+    ":@computed_region_26cr_cadq": "11"
+  }
+]

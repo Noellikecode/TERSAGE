@@ -42,6 +42,7 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/queue", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/timeline", Role.VIEWER),
+    Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/narratives?q=stairwell", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/geometry", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/surveys", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/registry/agents", Role.VIEWER),
@@ -50,10 +51,12 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("GET", f"{PREFIX}/registry/subscriptions/fire/records-watcher/resolved", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/internal/audit/events", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/internal/audit/decisions", Role.VIEWER),
+    Endpoint("GET", f"{PREFIX}/internal/audit/incidents/inc-x/replay", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/internal/metrics", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/brief", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/log", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/stream", Role.VIEWER),
+    Endpoint("GET", f"{PREFIX}/incidents/inc-x/brief/stream-enriched", Role.VIEWER),
 )
 
 WRITE_ENDPOINTS: tuple[Endpoint, ...] = (
@@ -255,11 +258,16 @@ def test_the_matrix_exercises_every_guarded_route(app_client: Any) -> None:
     """Every route template has at least one row in the table above."""
     import re
 
-    covered = (
-        [e.path for e in ALL_GUARDED + PUBLIC]
-        + list(SERVICE_ENDPOINTS)
-        + list(SIGNATURE_AUTHENTICATED)
-    )
+    # A row may carry a query string so the request it makes is valid; the
+    # route template it covers is the path alone.
+    covered = [
+        candidate.split("?", 1)[0]
+        for candidate in (
+            [e.path for e in ALL_GUARDED + PUBLIC]
+            + list(SERVICE_ENDPOINTS)
+            + list(SIGNATURE_AUTHENTICATED)
+        )
+    ]
     missing: list[str] = []
 
     for route in app_client.app.routes:

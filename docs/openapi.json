@@ -1180,6 +1180,83 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "IncidentReplayView": {
+        "additionalProperties": false,
+        "description": "What a commander was shown, reconstructed from what was recorded.",
+        "properties": {
+          "agent_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Agent Versions",
+            "type": "object"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ReplayedEntryView"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "intact": {
+            "title": "Intact",
+            "type": "boolean"
+          },
+          "policy_versions": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Policy Versions",
+            "type": "array"
+          },
+          "profile_snapshot_id": {
+            "title": "Profile Snapshot Id",
+            "type": "string"
+          },
+          "sealed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sealed At"
+          },
+          "snapshot_available": {
+            "title": "Snapshot Available",
+            "type": "boolean"
+          },
+          "tampered_sequences": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Tampered Sequences",
+            "type": "array"
+          }
+        },
+        "required": [
+          "incident_id",
+          "profile_snapshot_id",
+          "snapshot_available",
+          "intact",
+          "digest"
+        ],
+        "title": "IncidentReplayView",
+        "type": "object"
+      },
       "IntegerValue": {
         "additionalProperties": false,
         "properties": {
@@ -1338,6 +1415,38 @@
           "samples"
         ],
         "title": "MetricsView",
+        "type": "object"
+      },
+      "NarrativeRecallResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "address_id": {
+            "title": "Address Id",
+            "type": "string"
+          },
+          "index_populated": {
+            "title": "Index Populated",
+            "type": "boolean"
+          },
+          "matches": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RecalledNarrativeView"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address_id",
+          "query",
+          "index_populated"
+        ],
+        "title": "NarrativeRecallResponse",
         "type": "object"
       },
       "Obstruction": {
@@ -1836,6 +1945,93 @@
           "checks"
         ],
         "title": "ReadinessResponse",
+        "type": "object"
+      },
+      "RecalledNarrativeView": {
+        "additionalProperties": false,
+        "description": "One filing the semantic index thinks resembles the query.\n\nDeliberately not a fact. It carries no value, no confidence, and no\ncanonical attribute of its own -- only the ids that lead a human back to\nthe record. Nothing downstream may promote one of these into something the\nsystem believes about a building.",
+        "properties": {
+          "address_id": {
+            "title": "Address Id",
+            "type": "string"
+          },
+          "distance": {
+            "title": "Distance",
+            "type": "number"
+          },
+          "same_building": {
+            "title": "Same Building",
+            "type": "boolean"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address_id",
+          "source_ref",
+          "distance",
+          "same_building"
+        ],
+        "title": "RecalledNarrativeView",
+        "type": "object"
+      },
+      "ReplayedEntryView": {
+        "additionalProperties": false,
+        "description": "One reconstructed log entry, as the audit console renders it.",
+        "properties": {
+          "agent_versions": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Agent Versions",
+            "type": "object"
+          },
+          "content": {
+            "additionalProperties": true,
+            "title": "Content",
+            "type": "object"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "entry_id": {
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "entry_type": {
+            "title": "Entry Type",
+            "type": "string"
+          },
+          "intact": {
+            "title": "Intact",
+            "type": "boolean"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "profile_snapshot_id": {
+            "title": "Profile Snapshot Id",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sequence",
+          "entry_id",
+          "entry_type",
+          "occurred_at",
+          "profile_snapshot_id",
+          "content_hash",
+          "intact"
+        ],
+        "title": "ReplayedEntryView",
         "type": "object"
       },
       "ResolutionRequest": {
@@ -2876,6 +3072,72 @@
         ]
       }
     },
+    "/api/v1/buildings/{address_id}/narratives": {
+      "get": {
+        "description": "Find filings that read like the question, here and at comparable buildings.\n\nThis is the other half of the memory bank. Structured facts answer \"what\ndoes the department believe about this building\"; this answers \"where has\nsomebody written about something like this before\" -- the inspection three\ndoors down that described the same stair arrangement, the violation from\n2019 nobody has read since.\n\n**A match is a pointer, never an assertion.** It returns ids and a distance,\nnot text and not a value, so the officer goes and reads the record. That is\nthe whole boundary: an embedding can tell you two documents resemble each\nother, and it cannot tell you a building has three storeys.\n\nOnly screened narratives are indexed, so an injection attempt an ingested\ndocument carried is not something this can recall. ``PHI`` and Tier II\nfilings never enter the index at all.",
+        "operationId": "recall_narratives_api_v1_buildings__address_id__narratives_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 400,
+              "minLength": 3,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 20,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NarrativeRecallResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Semantic recall over filed narratives",
+        "tags": [
+          "console"
+        ]
+      }
+    },
     "/api/v1/buildings/{address_id}/surveys": {
       "get": {
         "operationId": "building_surveys_api_v1_buildings__address_id__surveys_get",
@@ -3469,6 +3731,47 @@
         ]
       }
     },
+    "/api/v1/incidents/{incident_id}/brief/stream-enriched": {
+      "get": {
+        "description": "Compose the enriched brief and stream the prose token by token.\n\nTwo frame types, and the difference between them is the whole contract:\n\n* ``narrative`` frames are **provisional**. They carry prose being written,\n  no facts, no version id, and nothing the incident log stores. A consumer\n  must be able to discard them.\n* the final ``brief`` frame is the persisted emission. It has a version, a\n  content hash, and a place in the record, and it arrives only after\n  ``require_persisted()`` has passed.\n\nIf the composition is refused or times out, the stream still ends with a\n``brief`` frame -- one whose narrative is absent and marked unavailable.\nThere is no path where provisional prose is left standing on a screen with\nnothing authoritative behind it.",
+        "operationId": "stream_enriched_api_v1_incidents__incident_id__brief_stream_enriched_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enrich the brief, streaming the prose as it composes",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
     "/api/v1/incidents/{incident_id}/close": {
       "post": {
         "description": "Close: revoke the grant, seal the log, draft the report.\n\nBoth the revocation and the seal happen. Authority ends when the incident\ndoes, and a log that could still be appended to afterwards is a log nobody\ncan rely on.",
@@ -3987,6 +4290,52 @@
           }
         },
         "summary": "Immutable audit events",
+        "tags": [
+          "internal"
+        ]
+      }
+    },
+    "/api/v1/internal/audit/incidents/{incident_id}/replay": {
+      "get": {
+        "description": "Reconstruct what the commander saw, in the order they saw it.\n\nThis is the endpoint a NIOSH investigation or a subpoena reaches for. It\nreplays the append-only incident log, checks each entry against its own\nstored hash, and reports the agent and policy versions that were *recorded*\nat the time -- never the ones this build happens to ship today.\n\nTwo tampering shapes are caught by two different checks. Editing an entry's\ncontent under its own hash fails the per-entry check and lands in\n``tampered_sequences``. Editing content *and* rehashing it passes that check\nand changes ``digest``, which is why both are returned.\n\nA tampered log still replays. Refusing to show it would deny an\ninvestigator the very evidence that something was altered.",
+        "operationId": "replay_incident_api_v1_internal_audit_incidents__incident_id__replay_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncidentReplayView"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No such incident was ever opened."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Replay one incident from its own record",
         "tags": [
           "internal"
         ]

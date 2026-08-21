@@ -236,8 +236,14 @@ describe('the dispatch transition', () => {
 
   it('announces the stage to a screen reader', async () => {
     await dispatch();
+    // The announcement is written by an effect that runs *after* the incident
+    // renders, so it lands a paint later than the banner `dispatch()` waits
+    // for. Asserting it synchronously passed on Node 24 and failed on Node 20
+    // -- a flake in the test, not a change in what an officer hears.
     const announcer = screen.getByTestId('brief-announcer');
-    expect(announcer).toHaveTextContent(/Instant brief ready, version 1/);
+    await waitFor(() =>
+      expect(announcer).toHaveTextContent(/Instant brief ready, version 1/),
+    );
     expect(announcer).toHaveTextContent(/no model was invoked/);
   });
 

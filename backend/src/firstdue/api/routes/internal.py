@@ -46,6 +46,7 @@ from firstdue.security.signing import (
     SignatureError,
     verify_signature,
 )
+from firstdue.services.replay import IncidentReplay
 
 logger = get_logger(__name__)
 
@@ -484,4 +485,104 @@ async def list_dead_letters(
     )
     return DeadLetterListResponse(
         dead_letters=[DeadLetterView.of(r) for r in records], count=len(records)
+    )
+
+
+class ReplayedEntryView(BaseModel):
+    """One reconstructed log entry, as the audit console renders it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sequence: int
+    entry_id: str
+    entry_type: str
+    occurred_at: str
+    profile_snapshot_id: str
+    agent_versions: dict[str, str] = Field(default_factory=dict)
+    content: dict[str, Any] = Field(default_factory=dict)
+    content_hash: str
+    intact: bool
+
+
+class IncidentReplayView(BaseModel):
+    """What a commander was shown, reconstructed from what was recorded."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    incident_id: str
+    profile_snapshot_id: str
+    #: False when the snapshot the brief was built from is no longer readable.
+    #: The replay is still returned: an incomplete reconstruction that says so
+    #: is more useful than a refusal.
+    snapshot_available: bool
+    entries: tuple[ReplayedEntryView, ...] = ()
+    agent_versions: dict[str, str] = Field(default_factory=dict)
+    policy_versions: tuple[str, ...] = ()
+    sealed_at: str | None = None
+    #: True when every stored hash still matches its stored content.
+    intact: bool
+    #: Entries whose stored hash does not match their stored content.
+    tampered_sequences: tuple[int, ...] = ()
+    #: A hash over the ordered entry hashes. Two replays of an untouched
+    #: incident produce the same digest; one changed byte anywhere changes it.
+    digest: str
+
+
+@router.get(
+    "/audit/incidents/{incident_id}/replay",
+    response_model=IncidentReplayView,
+    summary="Replay one incident from its own record",
+    responses={404: {"description": "No such incident was ever opened."}},
+)
+async def replay_incident(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_audit_read)],
+) -> IncidentReplayView:
+    """Reconstruct what the commander saw, in the order they saw it.
+
+    This is the endpoint a NIOSH investigation or a subpoena reaches for. It
+    replays the append-only incident log, checks each entry against its own
+    stored hash, and reports the agent and policy versions that were *recorded*
+    at the time -- never the ones this build happens to ship today.
+
+    Two tampering shapes are caught by two different checks. Editing an entry's
+    content under its own hash fails the per-entry check and lands in
+    ``tampered_sequences``. Editing content *and* rehashing it passes that check
+    and changes ``digest``, which is why both are returned.
+
+    A tampered log still replays. Refusing to show it would deny an
+    investigator the very evidence that something was altered.
+    """
+    replay = IncidentReplay(
+        incidents=container.incidents,
+        incident_log=container.incident_log,
+        snapshots=container.snapshots,
+        audit=container.audit,
+    )
+    result = await replay.replay(incident_id)
+    return IncidentReplayView(
+        incident_id=result.incident_id,
+        profile_snapshot_id=result.profile_snapshot_id,
+        snapshot_available=result.snapshot_available,
+        entries=tuple(
+            ReplayedEntryView(
+                sequence=entry.sequence,
+                entry_id=entry.entry_id,
+                entry_type=entry.entry_type,
+                occurred_at=entry.occurred_at.isoformat(),
+                profile_snapshot_id=entry.profile_snapshot_id,
+                agent_versions=dict(entry.agent_versions),
+                content=dict(entry.content),
+                content_hash=entry.content_hash,
+                intact=entry.intact,
+            )
+            for entry in result.entries
+        ),
+        agent_versions=dict(result.agent_versions),
+        policy_versions=result.policy_versions,
+        sealed_at=result.sealed_at.isoformat() if result.sealed_at else None,
+        intact=result.is_intact,
+        tampered_sequences=result.tampered_sequences,
+        digest=result.digest,
     )

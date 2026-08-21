@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime
-from typing import Any, Final
+from typing import Any
 
 from firstdue.domain.enums import AgentRunStatus
 from firstdue.domain.registry import AgentDescriptor
@@ -30,12 +30,18 @@ from firstdue.errors import ConfigurationError
 from firstdue.observability.logging import get_logger
 from firstdue.observability.tracing import agent_span
 from firstdue.ports.clock import Clock, IdGenerator
-from firstdue.ports.runtime import AgentInput, AgentResult, Grant
+from firstdue.ports.runtime import (
+    AgentHandler,
+    AgentInput,
+    AgentOutcome,
+    AgentResult,
+    Grant,
+)
+from firstdue.reliability.budget import budget_seconds
 
 logger = get_logger(__name__)
 
 #: What an agent gets if the descriptor names no budget. Every descriptor does.
-FALLBACK_DEADLINE_MS: Final[int] = 30_000
 
 
 class ADKRuntime:
@@ -58,6 +64,19 @@ class ADKRuntime:
         self._location = location
         self._engine = agent_engine
         self.invocations: list[tuple[str, AgentInput]] = []
+        self._handlers: dict[str, AgentHandler] = {}
+
+    def register(self, agent_id: str, handler: AgentHandler) -> None:
+        """Bind an agent id to the work it does."""
+        existing = self._handlers.get(agent_id)
+        if existing is not None and existing is not handler:
+            raise ConfigurationError(
+                "an agent id already has a different handler; two implementations "
+                "of one catalogued agent means the catalog no longer describes "
+                "what runs",
+                details={"agent_id": agent_id},
+            )
+        self._handlers[agent_id] = handler
 
     async def invoke(
         self,
@@ -76,13 +95,19 @@ class ADKRuntime:
             *,
             error_code: str | None = None,
             error_message: str | None = None,
+            outcome: AgentOutcome | None = None,
         ) -> AgentResult:
+            produced = outcome or AgentOutcome()
             return AgentResult(
                 run_id=run_id,
                 agent_ref=descriptor.ref,
                 status=status,
                 started_at=started,
                 finished_at=self._clock.now(),
+                written_fact_ids=produced.written_fact_ids,
+                emitted_event_ids=produced.emitted_event_ids,
+                write_action_ids=produced.write_action_ids,
+                policy_decision_ids=produced.policy_decision_ids,
                 error_code=error_code,
                 error_message=error_message,
             )
@@ -113,7 +138,7 @@ class ADKRuntime:
                 error_message="deadline elapsed before the run started",
             )
 
-        budget_s = self._budget_seconds(descriptor, deadline, started)
+        budget_s = budget_seconds(descriptor, deadline, started)
 
         with agent_span(
             descriptor.agent_id,
@@ -124,9 +149,10 @@ class ADKRuntime:
         ) as span:
             span.set("deadline_ms", int(budget_s * 1000))
             began = time.perf_counter()
+            outcome: AgentOutcome | None = None
             try:
                 async with asyncio.timeout(budget_s):
-                    await self._run(descriptor, payload, grant)
+                    outcome = await self._run(descriptor, payload, grant)
             except TimeoutError:
                 span.set("timed_out", True)
                 span.set("latency_ms", round((time.perf_counter() - began) * 1000, 3))
@@ -163,38 +189,28 @@ class ADKRuntime:
                 )
 
             span.set("latency_ms", round((time.perf_counter() - began) * 1000, 3))
-            return finish(AgentRunStatus.COMPLETED)
-
-    def _budget_seconds(
-        self, descriptor: AgentDescriptor, deadline: datetime | None, started: datetime
-    ) -> float:
-        """The tighter of the caller's deadline and the descriptor's budget.
-
-        A descriptor declares ``latency_target_ms`` and that is a promise the
-        catalog makes about the agent. Letting a run exceed it because nobody
-        passed a deadline would make the catalog a decoration.
-        """
-        declared = float(descriptor.latency_target_ms or FALLBACK_DEADLINE_MS) / 1000.0
-        if deadline is None:
-            return declared
-        remaining = max(0.0, (deadline - started).total_seconds())
-        return min(declared, remaining) or declared
+            return finish(AgentRunStatus.COMPLETED, outcome=outcome)
 
     async def _run(
         self, descriptor: AgentDescriptor, payload: AgentInput, grant: Grant
-    ) -> None:  # pragma: no cover - live mode only
-        """Hand the work to the agent engine.
+    ) -> AgentOutcome | None:
+        """Run the agent's registered work, then notify the engine.
 
-        The engine is injected so this class is testable without Vertex. When it
-        is absent the runtime is a no-op that still enforces every rule above --
-        which is what makes the parity test possible.
+        The handler is the agent. The engine -- Vertex Agent Engine, when one is
+        configured -- is told the run happened so a managed session records it;
+        it is not what does the work, and a process without one runs the same
+        fleet. That ordering matters: an engine outage must not stop a district
+        poll, because the poll is what the department's readiness depends on.
         """
-        if self._engine is None:
-            return
-        await asyncio.to_thread(
-            self._engine.run,
-            agent_ref=descriptor.ref,
-            correlation_id=payload.correlation_id,
-            ids=dict(payload.ids),
-            parameters=dict(payload.parameters),
-        )
+        handler = self._handlers.get(descriptor.agent_id)
+        outcome = await handler(payload, grant) if handler is not None else None
+
+        if self._engine is not None:  # pragma: no cover - live mode only
+            await asyncio.to_thread(
+                self._engine.run,
+                agent_ref=descriptor.ref,
+                correlation_id=payload.correlation_id,
+                ids=dict(payload.ids),
+                parameters=dict(payload.parameters),
+            )
+        return outcome

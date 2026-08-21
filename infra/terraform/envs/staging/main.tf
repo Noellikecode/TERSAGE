@@ -194,16 +194,47 @@ module "console_service" {
   ready_path            = "/api/health"
 }
 
-module "pubsub" {
-  source      = "../../modules/pubsub"
+# One Cloud Run service per agent, each running as its own service account.
+# Without these the per-agent identities in the iam module bind roles nothing
+# runs as, and least privilege is a property of the bindings rather than of the
+# processes.
+module "agent_workers" {
+  source      = "../../modules/agent-workers"
   project_id  = var.project_id
-  policy_file = "${local.policy_dir}/topics.json"
+  region      = var.region
+  image       = var.backend_image
+  policy_file = "${local.policy_dir}/subscriptions.json"
+
+  agent_service_accounts = module.iam.agent_emails
+
+  environment_variables        = local.common_env
+  secret_environment_variables = local.secret_env
+
+  invokers = [
+    module.iam.service_emails["firstdue-pubsub-push"],
+    module.iam.service_emails["firstdue-scheduler"],
+  ]
+
+  depends_on = [module.firestore, module.secrets]
+}
+
+module "pubsub" {
+  source                    = "../../modules/pubsub"
+  project_id                = var.project_id
+  policy_file               = "${local.policy_dir}/topics.json"
+  subscriptions_policy_file = "${local.policy_dir}/subscriptions.json"
 
   push_endpoint        = "${module.slow_service.url}/api/v1/internal/events/push"
   push_service_account = module.iam.service_emails["firstdue-pubsub-push"]
   push_audience        = module.slow_service.url
 
-  depends_on = [module.slow_service]
+  # Each agent's subscriptions push to that agent's own worker.
+  agent_push_endpoints = {
+    for id, url in module.agent_workers.worker_urls :
+    id => "${url}/api/v1/internal/events/push"
+  }
+
+  depends_on = [module.slow_service, module.agent_workers]
 }
 
 module "scheduler" {

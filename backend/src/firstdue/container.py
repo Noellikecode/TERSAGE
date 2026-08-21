@@ -54,6 +54,7 @@ from firstdue.adapters.memory.repositories import (
     InMemorySurveyRepository,
     InMemoryWriteActionRepository,
 )
+from firstdue.adapters.memory.vectors import InMemoryVectorIndex
 from firstdue.adapters.pubsub.bus import PubSubEventBus
 from firstdue.city.san_francisco import SanFranciscoAdapter
 from firstdue.domain.enums import Department
@@ -90,11 +91,12 @@ from firstdue.ports.repositories import (
 )
 from firstdue.ports.runtime import AgentRuntime
 from firstdue.ports.sources import SourceAdapter, SourceRegistry
+from firstdue.ports.vectors import VectorIndex
 from firstdue.ports.writes import ExternalWriteTarget
 from firstdue.reliability.retry import RetryPolicy
 from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient, build_screen
 from firstdue.settings import EventBackend, Settings, StorageBackend
-from firstdue.sources.catalog import build_sources
+from firstdue.sources.catalog import LiveCredentials, build_sources
 
 #: The five systems FIRST DUE writes into.
 WRITE_TARGET_IDS: tuple[tuple[str, Department, str], ...] = (
@@ -137,6 +139,7 @@ class Container:
     audit: AuditSink
     runtime: AgentRuntime
     model: ModelClient
+    vectors: VectorIndex
     sources: SourceRegistry
     write_targets: dict[str, ExternalWriteTarget]
 
@@ -355,6 +358,8 @@ def _build_model(settings: Settings, *, secrets: object | None = None) -> ModelC
             project_id=settings.gcp_project_id or "",
             location=settings.vertex_location,
             model=settings.gemini_model,
+            # The cheap model that decides whether the expensive one runs.
+            triage_model=settings.gemma_model,
             policy=_retry_policy(settings),
         )
     return RecordedModelClient(
@@ -397,6 +402,39 @@ def _build_office(
             idempotency=stores.idempotency,
         ),
         GoogleObjectStore(bucket=settings.gcs_plans_bucket, clock=clock),
+    )
+
+
+def _build_vectors(settings: Settings) -> VectorIndex:
+    """Semantic recall over screened narratives.
+
+    Selected independently of fake mode, like storage and events are: the
+    in-memory index is a real second implementation of the same protocol, and
+    it is what runs unless Vector Search is both enabled and configured. A
+    process that quietly ran with no recall at all would report empty results
+    that read as "nothing similar on file".
+    """
+    if not settings.vector_search_enabled:
+        return InMemoryVectorIndex()
+    if settings.use_fake_agents:
+        raise ConfigurationError(
+            "VECTOR_SEARCH_ENABLED requires live mode; the in-memory index is "
+            "what fake mode uses and it needs no configuration",
+            details={"setting": "VECTOR_SEARCH_ENABLED"},
+        )
+    if not settings.vector_search_index:
+        raise ConfigurationError(
+            "VECTOR_SEARCH_ENABLED requires VECTOR_SEARCH_INDEX",
+            details={"missing": ["VECTOR_SEARCH_INDEX"]},
+        )
+    from firstdue.adapters.vertex.vectors import VertexVectorIndex
+
+    return VertexVectorIndex(
+        project_id=settings.gcp_project_id or "",
+        location=settings.vertex_location,
+        index_id=settings.vector_search_index,
+        endpoint_id=settings.vector_search_endpoint,
+        embedding_model=settings.vector_embedding_model,
     )
 
 
@@ -449,13 +487,25 @@ def build_container(settings: Settings) -> Container:
     )
 
     sources = build_sources(
-        fixtures_dir=settings.fixtures_dir, clock=clock, live=not settings.use_fake_agents
+        fixtures_dir=settings.fixtures_dir,
+        clock=clock,
+        live=not settings.use_fake_agents,
+        # The city adapter is the only component that knows where an address
+        # is, so the point-query sources resolve their coordinates through it.
+        city=city,
+        credentials=LiveCredentials(
+            maps_api_key=settings.google_maps_api_key,
+            nrel_api_key=settings.nrel_api_key,
+            socrata_app_token=settings.socrata_app_token,
+            contact_email=settings.source_contact_email,
+        ),
     )
     source_registry = InMemorySourceRegistry(sources)
 
     # Recorded responses pin what each document extracted, so a change in the
     # extractor shows up as a diff rather than as a quietly different demo.
     model: ModelClient = _build_model(settings)
+    vectors: VectorIndex = _build_vectors(settings)
 
     write_targets: dict[str, ExternalWriteTarget] = {
         target_id: FakeWriteTarget(
@@ -496,6 +546,7 @@ def build_container(settings: Settings) -> Container:
         audit=stores.audit,
         runtime=_build_runtime(settings, clock=clock, ids=ids),
         model=model,
+        vectors=vectors,
         sources=source_registry,
         write_targets=write_targets,
         source_adapters=sources,

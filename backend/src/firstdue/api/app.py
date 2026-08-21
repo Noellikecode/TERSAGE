@@ -133,12 +133,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_error_handlers(app)
 
+    # Health, status, the registry, and the internal surfaces are on every
+    # service: a load balancer probes all of them, and both loops publish and
+    # consume events. The two loop routers are what the split actually splits.
     app.include_router(health.router)
     app.include_router(system.router, prefix=resolved.api_prefix)
     app.include_router(registry.router, prefix=resolved.api_prefix)
-    app.include_router(console.router, prefix=resolved.api_prefix)
-    app.include_router(incidents.router, prefix=resolved.api_prefix)
     app.include_router(internal.router, prefix=resolved.api_prefix)
+    if resolved.serves_slow_loop:
+        app.include_router(console.router, prefix=resolved.api_prefix)
+    if resolved.serves_incident_loop:
+        app.include_router(incidents.router, prefix=resolved.api_prefix)
 
     return app
 

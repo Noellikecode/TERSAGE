@@ -27,6 +27,8 @@ EXPECTED_AGENTS = {
     "survey-ranker",
     "referral-clerk",
     "incident-controller",
+    "brief-reconciler",
+    "sensor-fusion",
     "agency-notifier",
     "incident-recorder",
 }
@@ -34,7 +36,7 @@ EXPECTED_AGENTS = {
 
 def test_the_fleet_is_the_declared_agents() -> None:
     assert {d.agent_id for d in FLEET} == EXPECTED_AGENTS
-    assert len(FLEET) == 9
+    assert len(FLEET) == 11
 
 
 def test_tier_two_is_read_by_the_county_agent_the_department_pins() -> None:

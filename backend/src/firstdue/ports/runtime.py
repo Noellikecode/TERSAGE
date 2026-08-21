@@ -3,10 +3,17 @@
 ``ADKRuntime`` (Google ADK on Vertex AI) and ``FakeRuntime`` (deterministic,
 credential-free) both satisfy this. No agent runs without a grant, and no agent
 runs forever: ``deadline`` is part of the call signature, not an option.
+
+**The runtime is the only way an agent runs.** A handler is registered against
+the descriptor it implements, and ``invoke`` is what calls it -- so the grant
+check, the deadline, the terminal state, and the run record are not things each
+agent has to remember to do. An agent called directly would skip all four, which
+is exactly the shape of the gap this protocol closed.
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Protocol, TypeAlias, runtime_checkable
 
@@ -18,7 +25,9 @@ from firstdue.domain.identity import IncidentGrant, StandingGrant
 from firstdue.domain.registry import AgentDescriptor
 
 __all__ = [
+    "AgentHandler",
     "AgentInput",
+    "AgentOutcome",
     "AgentResult",
     "AgentRunStatus",
     "AgentRuntime",
@@ -65,8 +74,39 @@ class AgentResult(BaseModel):
         return (self.finished_at - self.started_at).total_seconds() * 1000.0
 
 
+class AgentOutcome(BaseModel):
+    """What an agent's own work produced.
+
+    The runtime wraps this into an :class:`AgentResult` with the run id, the
+    terminal status, and the timings. An agent reports what it wrote; it does
+    not get to report whether it was allowed to.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    written_fact_ids: tuple[str, ...] = ()
+    emitted_event_ids: tuple[str, ...] = ()
+    write_action_ids: tuple[str, ...] = ()
+    policy_decision_ids: tuple[str, ...] = ()
+
+
+#: The work one agent does. Registered against a descriptor; called by the
+#: runtime, under a grant the runtime has already checked, inside a deadline
+#: the runtime enforces.
+AgentHandler: TypeAlias = Callable[[AgentInput, "Grant"], Awaitable[AgentOutcome]]
+
+
 @runtime_checkable
 class AgentRuntime(Protocol):
+    def register(self, agent_id: str, handler: AgentHandler) -> None:
+        """Bind an agent id to the work it does.
+
+        Registering twice for one agent id is a configuration error: two
+        implementations of one catalogued agent means the catalog no longer
+        describes what runs.
+        """
+        ...
+
     async def invoke(
         self,
         descriptor: AgentDescriptor,

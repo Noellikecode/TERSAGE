@@ -128,9 +128,9 @@ frontend-verify: ## Console lint, types, tests, build
 	cd $(FRONT) && $(NPM) run build
 
 .PHONY: secret-scan
-secret-scan: ## Scan the working tree for credentials
+secret-scan: ## Scan the full history for credentials (same command CI runs)
 	@if command -v gitleaks >/dev/null 2>&1; then \
-	  gitleaks detect --no-banner --redact --config .gitleaks.toml --source . ; \
+	  gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --exit-code 1 ; \
 	else \
 	  echo "gitleaks not installed locally; CI runs it on every push."; \
 	  echo "install: brew install gitleaks"; \

@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from firstdue.domain.enums import Classification
 from firstdue.errors import SourceUnavailableError
 from firstdue.observability.logging import get_logger
 from firstdue.ports.sources import SourceMode, SourceRecord
@@ -189,3 +190,235 @@ class HttpFetcher:
         offset = int(cursor or "0")
         next_cursor = str(offset + len(records)) if len(records) == page_size else None
         return RawPage(records=tuple(records), next_cursor=next_cursor)
+
+
+#: Resolves an address id to (latitude, longitude), or None when unknown.
+PointResolver = Callable[[str], "tuple[float, float] | None"]
+
+#: Maps one point-query response to a SourceRecord, or None to skip it.
+PointMapper = Callable[[dict[str, Any], str, float, float], SourceRecord | None]
+
+
+class PointFetcher:
+    """A live feed that answers about one coordinate rather than a list.
+
+    Elevation, roof geometry, and weather are not paginated record sets -- they
+    are questions about a place. Asking them requires an address, so this
+    fetcher refuses to run without one: a district-wide sweep would be a
+    per-address fan-out the caller has to decide to do, not something a fetcher
+    should do behind its back.
+
+    The coordinate comes from the city adapter, which is the only component
+    allowed to know where an address is. A fetcher that geocoded for itself
+    would be a second, disagreeing answer to that question.
+    """
+
+    def __init__(
+        self,
+        *,
+        url: str,
+        mapper: PointMapper,
+        resolver: PointResolver,
+        params: dict[str, str] | None = None,
+        lat_param: str = "y",
+        lon_param: str = "x",
+        point_param: str | None = None,
+        point_format: str = "{lat},{lon}",
+        headers: dict[str, str] | None = None,
+        timeout_s: float = 10.0,
+    ) -> None:
+        self._url = url
+        self._mapper = mapper
+        self._resolver = resolver
+        self._params = dict(params or {})
+        self._lat_param = lat_param
+        self._lon_param = lon_param
+        self._point_param = point_param
+        self._point_format = point_format
+        self._headers = dict(headers or {})
+        self._timeout_s = timeout_s
+
+    @property
+    def mode(self) -> SourceMode:
+        return SourceMode.LIVE
+
+    def _build_params(self, latitude: float, longitude: float) -> dict[str, str]:
+        params = dict(self._params)
+        if self._templated:
+            # The coordinate is already in the path; repeating it as a query
+            # parameter is how you get a 400 from an API that validates them.
+            return params
+        if self._point_param:
+            params[self._point_param] = self._point_format.format(lat=latitude, lon=longitude)
+        else:
+            params[self._lat_param] = f"{latitude:.6f}"
+            params[self._lon_param] = f"{longitude:.6f}"
+        return params
+
+    @property
+    def _templated(self) -> bool:
+        return "{lat}" in self._url or "{lon}" in self._url
+
+    def _build_url(self, latitude: float, longitude: float) -> str:
+        if not self._templated:
+            return self._url
+        return self._url.format(lat=f"{latitude:.4f}", lon=f"{longitude:.4f}")
+
+    async def fetch_page(
+        self,
+        *,
+        address_id: str | None,
+        since: datetime | None,
+        cursor: str | None,
+        page_size: int,
+    ) -> RawPage:
+        import httpx
+
+        if address_id is None:
+            raise SourceUnavailableError(
+                "this source answers about one address and none was given",
+                details={"reason": "address_required"},
+            )
+        # A second page of a one-point answer is always empty. Saying so here
+        # keeps the backfill loop from asking the upstream the same question
+        # again for a cursor that cannot advance.
+        if cursor:
+            return RawPage(records=(), next_cursor=None)
+
+        point = self._resolver(address_id)
+        if point is None:
+            raise SourceUnavailableError(
+                "the address has no resolved coordinate",
+                details={"reason": "address_unresolved"},
+            )
+        latitude, longitude = point
+
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_s) as client:
+                response = await client.get(
+                    self._build_url(latitude, longitude),
+                    params=self._build_params(latitude, longitude),
+                    headers=self._headers or None,
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except Exception as exc:
+            logger.warning("source_fetch_failed", extra={"error_type": type(exc).__name__})
+            raise SourceUnavailableError(
+                "live source is unreachable", details={"error_type": type(exc).__name__}
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise SourceUnavailableError(
+                "point source returned an unexpected shape",
+                details={"payload_type": type(payload).__name__},
+            )
+
+        try:
+            record = self._mapper(payload, address_id, latitude, longitude)
+        except Exception:
+            logger.warning("source_row_skipped", extra={"reason": "unmappable"})
+            return RawPage(records=(), next_cursor=None)
+
+        return RawPage(records=(record,) if record is not None else (), next_cursor=None)
+
+
+class NwsPointFetcher:
+    """Current-hour conditions from the National Weather Service.
+
+    Two hops, because that is how the API is shaped: ``/points/{lat},{lon}``
+    resolves a coordinate to a forecast grid, and the grid answers the weather.
+    The intermediate URL is taken from the first response rather than
+    constructed, so a change to NWS's grid scheme does not silently produce a
+    404 this code would report as "no weather".
+
+    NWS asks every caller to identify itself in ``User-Agent``. An anonymous
+    caller is rate-limited hard, so the identity is part of the config.
+    """
+
+    POINTS_URL: str = "https://api.weather.gov/points/{lat},{lon}"
+
+    def __init__(
+        self,
+        *,
+        resolver: PointResolver,
+        user_agent: str,
+        timeout_s: float = 10.0,
+    ) -> None:
+        self._resolver = resolver
+        self._user_agent = user_agent
+        self._timeout_s = timeout_s
+
+    @property
+    def mode(self) -> SourceMode:
+        return SourceMode.LIVE
+
+    async def fetch_page(
+        self,
+        *,
+        address_id: str | None,
+        since: datetime | None,
+        cursor: str | None,
+        page_size: int,
+    ) -> RawPage:
+        import httpx
+
+        if address_id is None:
+            raise SourceUnavailableError(
+                "weather is asked about one address and none was given",
+                details={"reason": "address_required"},
+            )
+        if cursor:
+            return RawPage(records=(), next_cursor=None)
+
+        point = self._resolver(address_id)
+        if point is None:
+            raise SourceUnavailableError(
+                "the address has no resolved coordinate",
+                details={"reason": "address_unresolved"},
+            )
+        latitude, longitude = point
+        headers = {"User-Agent": self._user_agent, "Accept": "application/geo+json"}
+
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout_s, headers=headers) as client:
+                grid = await client.get(
+                    self.POINTS_URL.format(lat=f"{latitude:.4f}", lon=f"{longitude:.4f}")
+                )
+                grid.raise_for_status()
+                hourly_url = grid.json()["properties"]["forecastHourly"]
+
+                forecast = await client.get(hourly_url)
+                forecast.raise_for_status()
+                periods = forecast.json()["properties"]["periods"]
+        except Exception as exc:
+            logger.warning("source_fetch_failed", extra={"error_type": type(exc).__name__})
+            raise SourceUnavailableError(
+                "live source is unreachable", details={"error_type": type(exc).__name__}
+            ) from exc
+
+        if not periods:
+            return RawPage(records=(), next_cursor=None)
+
+        current = periods[0]
+        observed = datetime.fromisoformat(str(current["startTime"]))
+        humidity = current.get("relativeHumidity") or {}
+        return RawPage(
+            records=(
+                SourceRecord(
+                    record_ref=f"nws/{address_id}/{observed.isoformat()}",
+                    address_id=address_id,
+                    classification=Classification.PUBLIC,
+                    fields={
+                        "temperature": current.get("temperature"),
+                        "temperature_unit": current.get("temperatureUnit"),
+                        "wind_speed": current.get("windSpeed"),
+                        "wind_direction": current.get("windDirection"),
+                        "relative_humidity": humidity.get("value"),
+                        "short_forecast": current.get("shortForecast"),
+                    },
+                    observed_at=observed,
+                ),
+            ),
+            next_cursor=None,
+        )

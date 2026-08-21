@@ -14,12 +14,22 @@ cannot happen.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import datetime
 
 from firstdue.domain.registry import AgentDescriptor
+from firstdue.errors import ConfigurationError
 from firstdue.ports.clock import Clock, IdGenerator
-from firstdue.ports.runtime import AgentInput, AgentResult, AgentRunStatus, Grant
+from firstdue.ports.runtime import (
+    AgentHandler,
+    AgentInput,
+    AgentOutcome,
+    AgentResult,
+    AgentRunStatus,
+    Grant,
+)
+from firstdue.reliability.budget import budget_seconds
 
 
 class FakeRuntime:
@@ -38,6 +48,19 @@ class FakeRuntime:
         self._failures = dict(scripted_failures or {})
         self._timeouts = set(scripted_timeouts)
         self._invocations: list[tuple[str, AgentInput]] = []
+        self._handlers: dict[str, AgentHandler] = {}
+
+    def register(self, agent_id: str, handler: AgentHandler) -> None:
+        """Bind an agent id to the work it does."""
+        existing = self._handlers.get(agent_id)
+        if existing is not None and existing is not handler:
+            raise ConfigurationError(
+                "an agent id already has a different handler; two implementations "
+                "of one catalogued agent means the catalog no longer describes "
+                "what runs",
+                details={"agent_id": agent_id},
+            )
+        self._handlers[agent_id] = handler
 
     async def invoke(
         self,
@@ -55,15 +78,19 @@ class FakeRuntime:
             *,
             error_code: str | None = None,
             error_message: str | None = None,
-            written_fact_ids: tuple[str, ...] = (),
+            outcome: AgentOutcome | None = None,
         ) -> AgentResult:
+            produced = outcome or AgentOutcome()
             return AgentResult(
                 run_id=run_id,
                 agent_ref=descriptor.ref,
                 status=status,
                 started_at=started,
                 finished_at=self._clock.now(),
-                written_fact_ids=written_fact_ids,
+                written_fact_ids=produced.written_fact_ids,
+                emitted_event_ids=produced.emitted_event_ids,
+                write_action_ids=produced.write_action_ids,
+                policy_decision_ids=produced.policy_decision_ids,
                 error_code=error_code,
                 error_message=error_message,
             )
@@ -102,7 +129,43 @@ class FakeRuntime:
                 error_message=self._failures[descriptor.agent_id],
             )
 
-        return finish(AgentRunStatus.COMPLETED)
+        handler = self._handlers.get(descriptor.agent_id)
+        if handler is None:
+            # A catalogued agent with nothing behind it completes having done
+            # nothing, which is what the registry-only tests rely on. It is not
+            # an error: publishing a descriptor and wiring its work are
+            # separate acts, and the console shows the difference.
+            return finish(AgentRunStatus.COMPLETED)
+
+        budget_s = budget_seconds(descriptor, deadline, started)
+        try:
+            async with asyncio.timeout(budget_s):
+                outcome = await handler(payload, grant)
+        except TimeoutError:
+            return finish(
+                AgentRunStatus.TIMED_OUT,
+                error_code="UPSTREAM_TIMEOUT",
+                error_message="the run exceeded its deadline and was cancelled",
+            )
+        except asyncio.CancelledError:
+            return finish(
+                AgentRunStatus.CANCELLED,
+                error_code="CANCELLED",
+                error_message="the run was cancelled before it finished",
+            )
+        except Exception as exc:
+            from firstdue.reliability.retry import error_code_of
+
+            code = error_code_of(exc)
+            # The message is a stable code, never the exception text: a
+            # traceback can carry record contents.
+            return finish(
+                AgentRunStatus.FAILED,
+                error_code=code,
+                error_message=f"the run failed with {code}",
+            )
+
+        return finish(AgentRunStatus.COMPLETED, outcome=outcome)
 
     @property
     def invocations(self) -> list[tuple[str, AgentInput]]:

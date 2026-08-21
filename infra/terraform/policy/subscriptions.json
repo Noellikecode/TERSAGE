@@ -1,0 +1,89 @@
+{
+ "_comment": "Source of truth: backend/src/firstdue/registry/routing.py. tests/infra/test_terraform_follows_the_code.py fails if this drifts.",
+ "agents": {
+  "agency-notifier": {
+   "loop": "incident",
+   "topics": [
+    "approval.staged",
+    "incident.opened"
+   ]
+  },
+  "brief-reconciler": {
+   "loop": "incident",
+   "topics": [
+    "conflict.detected",
+    "fact.observed",
+    "incident.opened"
+   ]
+  },
+  "conflict-detector": {
+   "loop": "slow",
+   "topics": [
+    "fact.observed",
+    "fact.written"
+   ]
+  },
+  "geometry-watcher": {
+   "loop": "slow",
+   "topics": [
+    "geometry.stale",
+    "source.poll"
+   ]
+  },
+  "hazard-watcher": {
+   "loop": "slow",
+   "topics": [
+    "source.poll"
+   ]
+  },
+  "incident-controller": {
+   "loop": "incident",
+   "topics": [
+    "incident.closed",
+    "incident.opened"
+   ]
+  },
+  "incident-recorder": {
+   "loop": "incident",
+   "topics": [
+    "approval.staged",
+    "brief.emitted",
+    "fact.observed",
+    "incident.closed",
+    "incident.opened",
+    "notification.sent",
+    "record.written"
+   ]
+  },
+  "records-watcher": {
+   "loop": "slow",
+   "topics": [
+    "source.poll"
+   ]
+  },
+  "referral-clerk": {
+   "loop": "slow",
+   "topics": [
+    "approval.staged",
+    "queue.ranked"
+   ]
+  },
+  "sensor-fusion": {
+   "loop": "incident",
+   "topics": [
+    "thermal.frame.received"
+   ]
+  },
+  "survey-ranker": {
+   "loop": "slow",
+   "topics": [
+    "conflict.detected",
+    "profile.materialized"
+   ]
+  }
+ },
+ "unconsumed_topics": [
+  "agent.published",
+  "referral.staged"
+ ]
+}

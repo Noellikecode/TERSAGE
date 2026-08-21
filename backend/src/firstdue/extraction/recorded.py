@@ -19,14 +19,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any, Final
 
 from firstdue.observability.logging import get_logger
 from firstdue.observability.metrics import METRICS
 from firstdue.observability.tracing import Span, model_invoke_span
-from firstdue.ports.model import ExtractionResult, ModelClient, ProseResult
+from firstdue.ports.model import (
+    ExtractionResult,
+    ModelClient,
+    ProseChunk,
+    ProseResult,
+    TriageResult,
+)
 
 logger = get_logger(__name__)
 
@@ -91,6 +97,48 @@ class RecordedModelClient:
         self._dir.mkdir(parents=True, exist_ok=True)
         self._path(digest).write_text(
             json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+    def compose_stream(
+        self,
+        *,
+        template_id: str,
+        fields: Mapping[str, Any],
+        max_chars: int,
+        deadline_ms: int,
+    ) -> AsyncIterator[ProseChunk]:
+        """Streaming passes through to the inner client.
+
+        A cassette pins the *completed* narrative, which is what the record
+        stores and what a replay has to reproduce. Pinning the chunk boundaries
+        too would make a cassette assert how a vendor happened to split its
+        tokens on the day it was recorded.
+        """
+        return self._inner.compose_stream(
+            template_id=template_id,
+            fields=fields,
+            max_chars=max_chars,
+            deadline_ms=deadline_ms,
+        )
+
+    async def triage(
+        self,
+        *,
+        document_text: str,
+        schema_keys: tuple[str, ...],
+        deadline_ms: int,
+    ) -> TriageResult:
+        """Triage passes straight through to the inner client.
+
+        Cassettes pin what a document *extracted*, which is the output an
+        officer sees. Whether the cheap model chose to skip it is a cost
+        decision, not a recorded result, and pinning it would make a cassette
+        replay a spend pattern rather than a finding.
+        """
+        return await self._inner.triage(
+            document_text=document_text,
+            schema_keys=schema_keys,
+            deadline_ms=deadline_ms,
         )
 
     async def extract(

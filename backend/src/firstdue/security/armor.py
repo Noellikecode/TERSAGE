@@ -18,7 +18,7 @@ lose the inspection that mentioned the truss.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Any, Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -153,6 +153,23 @@ class ModelArmorClient:
             findings=tuple(sorted({*local.findings, *findings})),
             screen=self.screen_name,
         )
+
+
+@runtime_checkable
+class DocumentScreen(Protocol):
+    """Anything that can screen an ingested document.
+
+    Two implementations, and which one a process holds is a deployment
+    decision: :class:`LocalInjectionDetector` in fake mode,
+    :class:`ModelArmorClient` in live mode -- and the latter runs the local one
+    *as well*, because two screens with different failure modes are what a
+    document has to get past.
+    """
+
+    @property
+    def screen_name(self) -> str: ...
+
+    def inspect(self, document_text: str | None) -> ArmorVerdict: ...
 
 
 def build_screen(

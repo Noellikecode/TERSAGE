@@ -16,13 +16,27 @@ regex = '''AIza[0-9A-Za-z\-_]{35}'''
 tags = ["gcp", "key"]
 
 [allowlist]
-description = "Synthetic fixtures and documentation placeholders only"
+description = "Synthetic fixtures, documentation placeholders, and idempotency keys"
 paths = [
   '''fixtures/.*''',
   '''\.env\.example''',
   '''docs/.*\.md''',
 ]
+
+# Matched against the whole match rather than the extracted secret, so a
+# pattern can say *what kind of value* it is exempting rather than exempting a
+# literal string.
+regexTarget = "match"
 regexes = [
   '''REPLACE_ME''',
   '''your-project-id''',
+  # An idempotency key is not a credential. In this system it is *derived* from
+  # the content of the work it guards (ADR 0005), it is written into audit
+  # records and API responses on purpose, and it authorises nothing -- it only
+  # lets a duplicate delivery be recognised as one. The test fixtures use
+  # hex-looking values like "abcdef1234567890", which the generic-api-key rule
+  # reads as a high-entropy secret. Exempting the field is correct; blanket
+  # exempting tests/ would not be, because a real credential in a test file is
+  # still a leak.
+  '''idempotency_key["\']?\s*[:=]\s*["\'][^"\']+["\']''',
 ]

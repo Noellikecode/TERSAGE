@@ -50,10 +50,12 @@ information delivery or clerical execution. Tactics belong to the incident
 commander, and an agent that nudges them is a liability.
 
 Gemini extracts facts into strict schemas, composes bounded prose, and explains
-deterministic results. Gemini never makes an authorization decision, never
-decides whether facts conflict, never invents a structural fact, never fills an
-UNKNOWN, never blocks the instant brief, and never issues a tactical
-recommendation. **The instant brief stage contains no model call at all.**
+deterministic results. Gemma decides only whether a document is worth a Gemini
+call — the one judgement whose failure is safe in both directions, and it fails
+open. Neither model makes an authorization decision, decides whether facts
+conflict, invents a structural fact, fills an UNKNOWN, blocks the instant brief,
+or issues a tactical recommendation. **The instant brief stage contains no model
+call at all.**
 
 ---
 
@@ -97,7 +99,7 @@ backend/src/firstdue/   FastAPI application, domain model, ports, adapters
   gateway/              Default-deny policy, PHI derivation, jurisdiction
   incident/             Controller, reconciler, fusion, resources, recorder
   security/             Screening, signed callbacks, request limits
-  registry/             The nine agent descriptors
+  registry/             The eleven agent descriptors, and topic routing
   observability/        Structured logs, OpenTelemetry traces and metrics
   adapters/             memory · fake · firestore · pubsub · google · vertex
 frontend/               Next.js 14 App Router command center

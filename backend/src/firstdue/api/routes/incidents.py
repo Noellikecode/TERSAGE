@@ -37,6 +37,7 @@ from firstdue.domain.enums import BenchmarkType
 from firstdue.errors import NotFoundError, ValidationError
 from firstdue.incident.controller import IncidentController
 from firstdue.incident.fusion import ThermalFrame
+from firstdue.incident.reconciler import NarrativeChunk
 from firstdue.incident.session import get_session, sessions
 from firstdue.observability.context import get_correlation_id
 from firstdue.observability.logging import get_logger
@@ -218,7 +219,9 @@ async def enrich_brief(
     """
     session = get_session(container)
     started = time.perf_counter()
-    emission = await session.emit_enriched(incident_id)
+    emission = await session.run_enrichment(
+        incident_id, correlation_id=get_correlation_id() or container.ids.new_id("corr")
+    )
     METRICS.record_enriched_latency((time.perf_counter() - started) * 1000.0)
     return emission.model_dump(mode="json")
 
@@ -230,6 +233,62 @@ def _frame(emission: BriefEmission) -> dict[str, str]:
         "id": str(emission.version),
         "data": json.dumps(emission.model_dump(mode="json"), sort_keys=True),
     }
+
+
+def _narrative_frame(chunk: NarrativeChunk) -> dict[str, str]:
+    """One provisional prose frame.
+
+    It carries **no event id**. Event ids are what ``Last-Event-ID`` resumes
+    from, and resuming from a chunk would replay half a sentence as though it
+    were a brief version. A reconnecting tablet resumes at the last emission it
+    saw and hears the narrative again from the top, which is correct: the prose
+    is a rendering of an emission, not a record of its own.
+    """
+    return {
+        "event": "narrative",
+        "data": json.dumps(chunk.model_dump(mode="json"), sort_keys=True),
+    }
+
+
+@router.get(
+    "/incidents/{incident_id}/brief/stream-enriched",
+    summary="Enrich the brief, streaming the prose as it composes",
+)
+async def stream_enriched(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> EventSourceResponse:
+    """Compose the enriched brief and stream the prose token by token.
+
+    Two frame types, and the difference between them is the whole contract:
+
+    * ``narrative`` frames are **provisional**. They carry prose being written,
+      no facts, no version id, and nothing the incident log stores. A consumer
+      must be able to discard them.
+    * the final ``brief`` frame is the persisted emission. It has a version, a
+      content hash, and a place in the record, and it arrives only after
+      ``require_persisted()`` has passed.
+
+    If the composition is refused or times out, the stream still ends with a
+    ``brief`` frame -- one whose narrative is absent and marked unavailable.
+    There is no path where provisional prose is left standing on a screen with
+    nothing authoritative behind it.
+    """
+    session = get_session(container)
+    # Resolved before the response begins: an error raised inside the generator
+    # has already sent 200 OK and cannot become an error envelope.
+    prepared = await session.require_enrichable(incident_id)
+
+    async def frames() -> AsyncIterator[dict[str, str]]:
+        async for item in session.emit_enriched_streaming(incident_id, prepared):
+            if isinstance(item, BriefEmission):
+                # The same gate every other frame passes.
+                yield _frame(item.require_persisted())
+            else:
+                yield _narrative_frame(item)
+
+    return EventSourceResponse(frames())
 
 
 @router.get(
@@ -342,7 +401,9 @@ async def register_thermal(
         source=request.source,
     )
     session = get_session(container)
-    return await session.register_thermal(incident_id, frame)
+    return await session.run_thermal_registration(
+        incident_id, frame, correlation_id=get_correlation_id() or container.ids.new_id("corr")
+    )
 
 
 @router.post(
@@ -362,8 +423,9 @@ async def request_resource(
     and that distinction is made by policy, not by this endpoint.
     """
     session = get_session(container)
-    outcome = await session.request_resource(
+    outcome = await session.run_resource_request(
         incident_id,
+        correlation_id=get_correlation_id() or container.ids.new_id("corr"),
         kind_id=request.kind_id,
         detail=request.detail,
         approval_id=request.approval_id,

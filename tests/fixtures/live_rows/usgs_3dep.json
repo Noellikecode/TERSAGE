@@ -1,0 +1,17 @@
+{
+  "location": {
+    "x": -122.4247,
+    "y": 37.7768,
+    "spatialReference": {
+      "wkid": 4326,
+      "latestWkid": 4326
+    }
+  },
+  "locationId": 0,
+  "value": "21.817691803",
+  "rasterId": 70591,
+  "resolution": 1,
+  "attributes": {
+    "AcquisitionDate": "3/4/2023"
+  }
+}

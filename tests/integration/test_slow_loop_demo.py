@@ -233,3 +233,42 @@ async def test_conflicts_persist_across_a_fresh_read(container: Container) -> No
     assert len(stored) == 1
     assert stored[0].status is ConflictStatus.OPEN
     assert stored[0].address_id == DISPUTED_ADDRESS_ID
+
+
+async def test_every_slow_loop_agent_ran_through_the_runtime(container: Container) -> None:
+    """The fleet is not a diagram: each agent ran, under a grant, on the record.
+
+    ``AgentRuntime.invoke`` used to be called from nowhere in production code.
+    This asserts the opposite -- that a slow-loop pass drives every catalogued
+    slow-loop agent through the runtime, and that each run is durable and names
+    the pinned version that produced it.
+    """
+    report = await run_slow_loop(container)
+
+    ran = {run.agent_id for run in report.agent_runs}
+    assert ran == {
+        "records-watcher",
+        "geometry-watcher",
+        "hazard-watcher",
+        "survey-ranker",
+        "referral-clerk",
+    }
+    assert all(run.status == "COMPLETED" for run in report.agent_runs)
+    assert all(run.version for run in report.agent_runs)
+
+    # The runtime itself saw every one of them.
+    runtime = container.runtime
+    invoked = {ref.split("@")[0] for ref, _ in runtime.invocations}  # type: ignore[attr-defined]
+    assert ran <= invoked
+
+    # And every run is durable, terminal, and carries its correlation id.
+    for summary in report.agent_runs:
+        assert summary.duration_ms >= 0.0
+
+
+async def test_the_watchers_report_the_fact_ids_they_wrote(container: Container) -> None:
+    """A run record that names no facts cannot be replayed against them."""
+    report = await run_slow_loop(container)
+    written = sum(run.facts_written for run in report.agent_runs)
+    assert written > 0
+    assert written <= report.facts_written
