@@ -33,6 +33,7 @@
    "roles/datastore.user"
   ],
   "write:utility-shutoff": [],
+  "write:road-closure": [],
   "notify:agency": []
  },
  "agents": {
@@ -41,6 +42,7 @@
    "scopes": [
     "notify:agency",
     "read:profile",
+    "write:road-closure",
     "write:utility-shutoff"
    ],
    "pubsub": [

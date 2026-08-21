@@ -12,7 +12,10 @@ dependencies = [
   "pydantic-settings>=2.5,<3",
   "uvicorn[standard]>=0.30,<0.31",
   "sse-starlette>=2.1,<3",
-  "httpx>=0.27,<0.28",
+  # 0.28 is the floor the Gen AI SDK requires. The only httpx surface this
+  # project uses is `timeout=`, `headers=`, and `base_url=`, none of which
+  # changed -- 0.28 dropped the deprecated `app=` and `proxies=` shortcuts.
+  "httpx>=0.28,<0.29",
   "tenacity>=9.0,<10",
 ]
 
@@ -20,6 +23,11 @@ dependencies = [
 # Live-mode Google clients. Fake mode -- the default, and the whole test suite --
 # needs none of them, which is why they are an extra rather than a dependency.
 google = [
+  # The Google Gen AI SDK. This is the agent framework the fleet's model calls
+  # go through -- Gemini for extract/compose/explain, Gemma for triage -- and it
+  # talks to Vertex AI rather than the public Gemini API, so the same project,
+  # location, and service-account identity govern every call.
+  "google-genai>=2.0,<3",
   "google-cloud-firestore>=2.19,<3",
   "google-cloud-pubsub>=2.23,<3",
   "google-auth>=2.35,<3",
@@ -45,9 +53,13 @@ dev = [
   "ruff>=0.6,<0.7",
   "mypy>=1.11,<2",
   # The Google clients are dev dependencies as well as an optional extra, so the
-  # Firestore and Pub/Sub adapters are type-checked against the real client API
-  # rather than against an `ignore_missing_imports` hole. No credentials needed
-  # to install them, and fake mode still never imports them.
+  # Firestore, Pub/Sub, and Gen AI adapters are type-checked against the real
+  # client API rather than against an `ignore_missing_imports` hole. No
+  # credentials are needed to install them, and fake mode still never imports
+  # them. The Gen AI SDK is here for the same reason and one more: it is the
+  # agent framework, so a change that breaks the model seam should break the
+  # type check rather than the first live call.
+  "google-genai>=2.0,<3",
   "google-cloud-firestore>=2.19,<3",
   "google-cloud-pubsub>=2.23,<3",
 ]

@@ -215,7 +215,24 @@ AGENCY_NOTIFIER = _agent(
     loop=Loop.INCIDENT,
     role_summary="Notifies mutual-aid, utility, and OEM partners of incident conditions.",
     capabilities={Capability.READ, Capability.NOTIFY, Capability.WRITE},
-    scopes={Scope.READ_PROFILE, Scope.NOTIFY_AGENCY, Scope.REQUEST_UTILITY_SHUTOFF},
+    # Both commitment scopes, because this agent exercises both. Five resource
+    # kinds are approval-gated and they split across the two: gas and electric
+    # shutoff are `write:utility-shutoff`; road closure, a county hazmat team,
+    # and collapse rescue are `write:road-closure`.
+    #
+    # Only the first was declared. It worked, because the runtime checks that
+    # the *grant* covers what the descriptor declares -- not that what the
+    # agent exercises is declared -- and the incident grant carries both. So
+    # the catalog under-stated this agent's authority: a department reading the
+    # descriptor would not learn it can ask police to close a street. It would
+    # also have broken the day anyone narrowed the incident grant to the
+    # declared scopes, which is the obvious least-privilege hardening.
+    scopes={
+        Scope.READ_PROFILE,
+        Scope.NOTIFY_AGENCY,
+        Scope.REQUEST_UTILITY_SHUTOFF,
+        Scope.REQUEST_ROAD_CLOSURE,
+    },
     classifications={Classification.PUBLIC, Classification.RESTRICTED},
     write_targets=("agency-notifications",),
     # Telling an agency is autonomous; cutting their gas is not.

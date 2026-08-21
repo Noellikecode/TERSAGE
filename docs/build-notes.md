@@ -789,3 +789,104 @@ asserts, and deliberately its opposite. Optimistic concurrency on a profile may
 abort every writer and leave them to retry; nothing is lost, because the next
 attempt recomputes the same result. A lock cannot do that. **Safety is "never
 two holders"; liveness is "not zero holders", and only a lock owes both.**
+
+---
+
+## Phase 9 — The agent framework, and two things the tests found on the way
+
+**Date:** 2026-08-21
+
+The submission requires at least one Google agent framework: ADK, the Gen AI
+SDK, the Antigravity SDK, or GenKit. **None of them was a dependency.** The
+model adapter reached Vertex through `vertexai.generative_models` from
+`google-cloud-aiplatform`, which is a Vertex client and not on that list. This
+was pass/fail rather than scored, and it had been mis-recorded as satisfied.
+
+### What was built
+
+The Gen AI SDK (`google-genai`) now sits behind the same `ModelClient` port.
+`genai.Client(vertexai=True, project=…, location=…)` reaches Vertex AI under
+the deployment's own service account rather than the public Gemini API under an
+API key -- a distinction worth keeping: a key is a credential that travels and
+that nothing can attribute, and a municipal system should only ever hold the
+kind a platform can audit and revoke.
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | Swap the SDK underneath the existing policy rather than rewrite the adapter | Retries, deadlines, parsing, rejection semantics, and telemetry are transport-independent and already tested. The seam was two methods wide, which is the whole reason this was a swap and not a migration. |
+| 2 | One client, model named per call | The old code built a second `GenerativeModel` for the triage model. The Gen AI SDK takes the model as an argument, so "which model" stopped being a connection and became a parameter, and `triage_client` disappeared. |
+| 3 | Consume the SDK's async iterator directly in `_stream` | The previous implementation pumped a blocking iterator through a worker thread into a queue, because the old SDK had no async surface. That machinery is gone, and with it a cancellation race where a timed-out stream left a thread writing into a queue nobody would read. |
+| 4 | Remove `# pragma: no cover` from `_call` and `_stream` | "Live mode only" meant the two methods most likely to break on an SDK upgrade were the two nothing checked. A stub cannot prove the remote service behaves; it can prove we call it with the arguments we think we do, which is the half that breaks silently. |
+| 5 | Assert against the **installed SDK's real signature**, not just the stub | A hand-written stub drifts: the SDK renames a parameter, the stub keeps accepting the old one, every test stays green, and the first real call fails. Reading `inspect.signature` needs no credentials and no network, so an upgrade that moves the seam fails in CI. |
+| 6 | Bump `httpx` to `>=0.28,<0.29` | The Gen AI SDK's floor. The only httpx surface this project uses is `timeout=`, `headers=`, and `base_url=`; 0.28 dropped the deprecated `app=` and `proxies=` shortcuts, neither of which appears here. Full suite green before and after. |
+
+### A defect the new consistency test found
+
+`AgentDescriptor.approval_threshold` is published metadata; the gateway's
+`APPROVAL_THRESHOLDS` is enforcement. Nothing connected them, so a test now
+does -- and it immediately failed, on its second assertion rather than the one
+it was written for.
+
+**`agency-notifier` under-declared its authority.** Five resource kinds are
+approval-gated and they split across two scopes: gas and electric shutoff are
+`write:utility-shutoff`; road closure, a county hazmat team, and collapse
+rescue are `write:road-closure`. The descriptor declared only the first.
+
+It worked, which is why nobody noticed. The runtime checks that the *grant*
+covers what the descriptor *declares* -- not that what the agent *exercises* is
+declared -- and the incident grant carries both scopes. So three of the five
+commitments ran on authority the catalog never mentioned. Two consequences, and
+the second is worse than the first: a department reading the descriptor would
+not learn this agent can ask police to close a street, and the day anyone
+narrowed the incident grant to the declared scopes -- the obvious
+least-privilege hardening -- road closure, hazmat, and collapse rescue would
+all have started failing at once, in an incident.
+
+Fixed by declaring both scopes. `infra/terraform/policy/agents.json` is derived
+from the descriptors and Terraform reads it, so the infra conformance tests
+failed until the policy file and the scope-to-role map were regenerated. That
+is the mechanism working exactly as phase 8 intended.
+
+### A larger finding, deliberately left open
+
+Chasing a contradiction between the README and the gateway table turned up
+something neither document says.
+
+**`PolicyEngine.decide` has exactly one caller in the entire system:** the
+incident resource request. Nothing in the slow loop calls it. So:
+
+* the incident thresholds are genuinely enforced by the gateway;
+* the referral gate is real but lives in `ActionFlow._stage_referral`, not in
+  the gateway;
+* the work order has **no gate at all** -- and that is deliberate, matches the
+  README's argument, and is pinned by two tests.
+
+The behaviour is right. What is wrong is that two *declarations* over-state it:
+`survey-ranker` publishes `SUPERVISOR`, and `APPROVAL_THRESHOLDS` maps
+`write:work-order` to `SUPERVISOR`, while nothing evaluates either on that path.
+The catalog claims a human approves work orders when no human does.
+
+That is the same failure as rendering an absent record as "none present": a
+safeguard asserted rather than held. It is also a **design decision about the
+security posture**, with three defensible resolutions, so it was written up in
+`CONTEXT.md` rather than settled unilaterally. The consistency test states
+plainly in its docstring that it compares two declarations and proves neither
+is reached.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `uv run pytest` | **880 passed**, 47 skipped (860 before) |
+| `uv run ruff check . && ruff format --check .` | clean, 205 files |
+| `uv run mypy` (strict) | no issues, 150 source files |
+| `npm run test` (console) | 87 passed |
+| OpenAPI drift | none |
+| `firstdue seed && firstdue verify-seed` | deterministic, hash unchanged |
+| New SDK seam tests, mutation-checked | 3 deliberate mutations (wrong triage model, dropped `vertexai=True`, temperature drift) each produced exactly one failure |
+
+**Not verified: any call against a real Vertex endpoint.** This machine has no
+credentials and `gcloud` is not installed. What is proven is that the client is
+constructed with the arguments intended and that the installed SDK accepts
+them. Whether `gemini-3.5-flash` and `gemma-3-4b-it` resolve against a real
+project is still the first thing to check before a live run.

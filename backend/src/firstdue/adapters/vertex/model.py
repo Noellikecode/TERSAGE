@@ -1,9 +1,24 @@
-"""Gemini on Vertex AI, behind the three-verb model contract.
+"""Gemini and Gemma on Vertex AI, behind the four-verb model contract.
 
-The contract does not change here. `ModelClient` offers ``extract``,
-``compose`` and ``explain`` and nothing else, and this class implements exactly
-those -- so swapping it in at the composition root changes where the values come
-from and nothing about what the system will act on.
+The contract does not change here. :class:`ModelClient` offers ``triage``,
+``extract``, ``compose`` and ``explain`` and nothing else, and this class
+implements exactly those -- so swapping it in at the composition root changes
+where the values come from and nothing about what the system will act on.
+
+**The SDK.** Every model call in the fleet goes through the Google Gen AI SDK
+(``google-genai``), constructed with ``vertexai=True`` so it reaches Vertex AI
+rather than the public Gemini API. That matters for more than a package name:
+the call is then governed by the same project, location, and service-account
+identity as the rest of the deployment, and it is auditable in the same place.
+The SDK is reached in exactly two methods -- :meth:`_call` and :meth:`_stream`.
+Everything else in this file is policy that would be identical against any
+transport, which is the property that let the SDK be swapped underneath it
+without a single test changing.
+
+The client is built lazily and cached. A process that never makes a model call
+never constructs one, so fake mode does not need the package installed and an
+import error surfaces as a :class:`ConfigurationError` naming the extra to
+install rather than as a crash at startup.
 
 Four properties, each of which exists because of a specific failure:
 
@@ -123,6 +138,33 @@ Document:
 """
 
 
+def _text_of(response: Any) -> str:
+    """The text of a response, or empty string.
+
+    Read defensively on purpose. ``response.text`` is ``None`` rather than
+    empty whenever a candidate carried no text part -- a safety block, a stop
+    reason, a stream frame that only advanced usage counts. Every one of those
+    is a legitimate thing to receive and none of them should raise here: the
+    caller's parse step is what decides whether an empty answer is acceptable,
+    and it already reports that as a rejection rather than an exception.
+    """
+    return str(getattr(response, "text", "") or "")
+
+
+def _tokens_of(response: Any) -> dict[str, int]:
+    """Token counts for the span. Counts only -- never content.
+
+    Absent usage metadata reads as zero rather than raising. A missing counter
+    is a gap in telemetry; it is not a reason to fail a call that succeeded.
+    """
+    usage = getattr(response, "usage_metadata", None)
+    return {
+        "prompt": int(getattr(usage, "prompt_token_count", 0) or 0),
+        "completion": int(getattr(usage, "candidates_token_count", 0) or 0),
+        "total": int(getattr(usage, "total_token_count", 0) or 0),
+    }
+
+
 def extraction_response_schema(schema_keys: tuple[str, ...]) -> dict[str, Any]:
     """The JSON schema Gemini is constrained to.
 
@@ -174,7 +216,6 @@ class VertexModelClient:
         triage_model: str = "",
         policy: RetryPolicy = DEFAULT_POLICY,
         client: Any | None = None,
-        triage_client: Any | None = None,
     ) -> None:
         if not project_id:
             raise ConfigurationError("Vertex AI requires GCP_PROJECT_ID")
@@ -188,8 +229,10 @@ class VertexModelClient:
         # configured, and the local classifier answers instead.
         self._triage_model_name = triage_model
         self._policy = policy
+        #: One Gen AI client serves both models. The SDK takes the model name
+        #: per call, so the expensive model and the cheap one differ by an
+        #: argument rather than by a second connection.
         self._client = client
-        self._triage_client = triage_client
         self.calls = 0
         self.triage_calls = 0
         self.rejections = 0
@@ -202,36 +245,37 @@ class VertexModelClient:
     def triage_model_ref(self) -> str:
         return f"vertex/{self._triage_model_name or self._model_name}"
 
-    def _model(self) -> Any:  # pragma: no cover - live mode only
+    def _genai(self) -> Any:
+        """The Gen AI SDK client, built once and cached.
+
+        ``vertexai=True`` is the whole point: it routes to Vertex AI in this
+        project and location, under the deployment's own service account,
+        rather than to the public Gemini API under an API key. A key is a
+        credential that travels; a service account is one the platform can
+        audit and revoke, and a municipal system should only ever use the
+        second kind.
+        """
         if self._client is None:
             try:
-                import vertexai
-                from vertexai.generative_models import GenerativeModel
+                from google import genai
             except ImportError as exc:
                 raise ConfigurationError(
-                    "google-cloud-aiplatform is not installed; install the 'google' extra "
+                    "google-genai is not installed; install the 'google' extra "
                     "or run with USE_FAKE_AGENTS=true",
-                    details={"package": "google-cloud-aiplatform"},
+                    details={"package": "google-genai"},
                 ) from exc
-            vertexai.init(project=self._project_id, location=self._location)
-            self._client = GenerativeModel(self._model_name)
+            self._client = genai.Client(
+                vertexai=True, project=self._project_id, location=self._location
+            )
         return self._client
 
-    def _triage_generative_model(self) -> Any:  # pragma: no cover - live mode only
-        """The cheap model, built separately from the expensive one."""
-        if self._triage_client is None:
-            try:
-                import vertexai
-                from vertexai.generative_models import GenerativeModel
-            except ImportError as exc:
-                raise ConfigurationError(
-                    "google-cloud-aiplatform is not installed; install the 'google' extra "
-                    "or run with USE_FAKE_AGENTS=true",
-                    details={"package": "google-cloud-aiplatform"},
-                ) from exc
-            vertexai.init(project=self._project_id, location=self._location)
-            self._triage_client = GenerativeModel(self._triage_model_name)
-        return self._triage_client
+    def _triage_model_or_none(self) -> str | None:
+        """The cheap model's name, or ``None`` when none is configured.
+
+        A name rather than a second client: the SDK takes the model per call,
+        so "which model" is an argument here and not a connection.
+        """
+        return self._triage_model_name or None
 
     # ------------------------------------------------------------- the verbs
 
@@ -268,7 +312,7 @@ class VertexModelClient:
                     deadline_ms=deadline_ms,
                     span=span,
                     response_schema=TRIAGE_RESPONSE_SCHEMA,
-                    model=self._triage_generative_model(),
+                    model=self._triage_model_or_none(),
                 )
                 span.set_tokens(tokens)
         except Exception as exc:
@@ -419,44 +463,36 @@ class VertexModelClient:
                 # already shown is complete and may be kept.
                 yield ProseChunk(text="", final=True, model_ref=self.model_ref)
 
-    async def _stream(
-        self, prompt: str, *, deadline_ms: int
-    ) -> AsyncIterator[str]:  # pragma: no cover - live mode only
+    async def _stream(self, prompt: str, *, deadline_ms: int) -> AsyncIterator[str]:
         """The single streaming vendor call, bounded by the caller's deadline.
 
         Unlike ``_generate`` there is no retry here. A retry would have to
         re-emit prose the consumer already rendered, and a narrative that
         restarts mid-sentence on a fireground display is worse than one that
         stops.
+
+        The SDK's async iterator is consumed directly. The previous
+        implementation pumped a blocking iterator through a worker thread and a
+        queue, because the SDK it used had no async surface; that machinery is
+        gone, and with it the cancellation race where a timed-out stream left a
+        thread still writing into a queue nobody would read.
         """
-        queue: asyncio.Queue[str | None] = asyncio.Queue()
-
-        def pump() -> None:
-            try:
-                for piece in self._model().generate_content(
-                    prompt, generation_config={"temperature": 0.0}, stream=True
-                ):
-                    text = str(getattr(piece, "text", "") or "")
-                    if text:
-                        queue.put_nowait(text)
-            finally:
-                queue.put_nowait(None)
-
         self.calls += 1
-        worker = asyncio.create_task(asyncio.to_thread(pump))
         try:
             async with asyncio.timeout(deadline_ms / 1000.0):
-                while True:
-                    item = await queue.get()
-                    if item is None:
-                        return
-                    yield item
+                stream = await self._genai().aio.models.generate_content_stream(
+                    model=self._model_name,
+                    contents=prompt,
+                    config={"temperature": 0.0},
+                )
+                async for piece in stream:
+                    text = _text_of(piece)
+                    if text:
+                        yield text
         except TimeoutError as exc:
             raise UpstreamTimeoutError(
                 "model deadline elapsed", details={"model_ref": self.model_ref}
             ) from exc
-        finally:
-            worker.cancel()
 
     async def explain(
         self,
@@ -524,7 +560,7 @@ class VertexModelClient:
         deadline_ms: int,
         span: Any,
         response_schema: dict[str, Any] | None = None,
-        model: Any | None = None,
+        model: str | None = None,
     ) -> tuple[str, dict[str, int]]:
         """One generation, retried within the deadline.
 
@@ -580,25 +616,24 @@ class VertexModelClient:
         self,
         prompt: str,
         response_schema: dict[str, Any] | None,
-        model: Any | None = None,
-    ) -> tuple[str, dict[str, int]]:  # pragma: no cover - live mode only
-        """The single vendor call. Everything else here is policy."""
+        model: str | None = None,
+    ) -> tuple[str, dict[str, int]]:
+        """The single vendor call. Everything else in this file is policy.
+
+        Natively async: the Gen AI SDK exposes ``client.aio``, so there is no
+        thread hop between the event loop and the request. That matters under
+        an incident deadline -- a thread pool that is busy is latency nobody
+        budgeted for and nobody can see.
+        """
         config: dict[str, Any] = {"temperature": 0.0}
         if response_schema is not None:
             config["response_mime_type"] = "application/json"
             config["response_schema"] = response_schema
 
-        target = model if model is not None else self._model()
-        response = await asyncio.to_thread(
-            target.generate_content, prompt, generation_config=config
+        response = await self._genai().aio.models.generate_content(
+            model=model or self._model_name, contents=prompt, config=config
         )
-        usage = getattr(response, "usage_metadata", None)
-        tokens = {
-            "prompt": int(getattr(usage, "prompt_token_count", 0) or 0),
-            "completion": int(getattr(usage, "candidates_token_count", 0) or 0),
-            "total": int(getattr(usage, "total_token_count", 0) or 0),
-        }
-        return str(getattr(response, "text", "") or ""), tokens
+        return _text_of(response), _tokens_of(response)
 
     def _parse_extraction(
         self, raw: str, schema_keys: tuple[str, ...], *, span: Any

@@ -103,6 +103,88 @@ def test_resource_committing_agents_require_a_human() -> None:
         assert descriptor_for(agent_id).approval_threshold is not ApprovalThreshold.NONE
 
 
+# ------------------------------------- the descriptor agrees with the gateway
+#
+# A descriptor's ``approval_threshold`` is *published metadata*: it is what the
+# catalog shows a subscribing department, and what the console renders next to
+# an agent. The gateway's ``APPROVAL_THRESHOLDS`` is the *enforcement*: it is
+# what actually stages a write for a human.
+#
+# Nothing connected the two. They agree today, and the way that stops being
+# true is quiet: someone adds a write scope to an agent and does not touch the
+# descriptor, so the catalog advertises an autonomous agent that the gateway
+# gates -- or, far worse, advertises a gated one the gateway waves through. The
+# first is confusing. The second is a department believing a human signs
+# something that no human ever sees.
+
+
+#: NONE < SUPERVISOR < CHIEF. Declared here rather than on the enum because the
+#: enum is a set of names, and only this comparison needs them ordered.
+_STRICTNESS = {"NONE": 0, "SUPERVISOR": 1, "CHIEF": 2}
+
+
+def _enforced_threshold(descriptor):
+    """The strictest threshold the gateway would apply to this agent's scopes.
+
+    Strictest rather than first: an agent holding both a supervisor scope and a
+    chief scope is a chief-approval agent, because the catalog has one field
+    and it must not under-state what the gateway will demand.
+    """
+    from firstdue.domain.enums import ApprovalThreshold
+    from firstdue.gateway.engine import APPROVAL_THRESHOLDS
+
+    applicable = [
+        APPROVAL_THRESHOLDS[scope]
+        for scope in descriptor.required_scopes
+        if scope in APPROVAL_THRESHOLDS
+    ]
+    if not applicable:
+        return ApprovalThreshold.NONE
+    return max(applicable, key=lambda t: _STRICTNESS[str(t)])
+
+
+@pytest.mark.authorization
+def test_every_descriptor_publishes_the_threshold_the_gateway_declares() -> None:
+    """The two declarations must agree with each other.
+
+    Scope note, deliberately narrow: this compares two *declarations* -- the
+    catalog's published threshold and the gateway's approval table. It does not
+    prove either is reached on any given path, and for the slow loop it is not.
+    ``PolicyEngine.decide`` has exactly one caller, the incident resource
+    request, so the incident thresholds are enforced by the gateway and the
+    slow-loop ones are not: the referral gate lives in ``ActionFlow`` and the
+    work order has no gate at all, by design and under test.
+
+    Whether the catalog should therefore publish NONE for ``survey-ranker`` is
+    an open question and not one a test should settle by fiat -- see
+    docs/build-notes.md. What this test does settle is that the two
+    declarations cannot drift apart without somebody noticing.
+    """
+    for descriptor in FLEET:
+        assert descriptor.approval_threshold is _enforced_threshold(descriptor), (
+            f"{descriptor.agent_id} publishes {descriptor.approval_threshold} "
+            f"but the gateway enforces {_enforced_threshold(descriptor)} "
+            f"for scopes {sorted(str(s) for s in descriptor.required_scopes)}"
+        )
+
+
+@pytest.mark.authorization
+def test_no_approval_rule_guards_a_scope_no_agent_holds() -> None:
+    """A rule nothing can trigger is a rule nobody maintains.
+
+    It reads as coverage in the policy table and protects nothing, and the day
+    an agent does take the scope, the stale entry is what everyone trusts
+    instead of reading it.
+    """
+    from firstdue.gateway.engine import APPROVAL_THRESHOLDS
+
+    held = {scope for descriptor in FLEET for scope in descriptor.required_scopes}
+    assert set(APPROVAL_THRESHOLDS) <= held, (
+        "these approval rules guard scopes no published agent holds: "
+        f"{sorted(str(s) for s in set(APPROVAL_THRESHOLDS) - held)}"
+    )
+
+
 def test_at_least_one_agent_is_published_by_another_department() -> None:
     """The registry exists because departments publish for each other."""
     from firstdue.registry.descriptors import HOME_DEPARTMENT
