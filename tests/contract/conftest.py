@@ -27,7 +27,6 @@ stop it.
 
 from __future__ import annotations
 
-import asyncio
 import os
 import uuid
 from collections.abc import Iterator
@@ -119,12 +118,38 @@ def stores(backend: str) -> Iterator[Stores]:
 def _purge(project_id: str, database: str, namespace: str) -> None:
     """Delete every document this test wrote.
 
+    **Synchronous on purpose.** The obvious implementation -- ``asyncio.run``
+    over the same ``AsyncClient`` the repositories use -- runs inside a fixture
+    finaliser, which is a place where the loop the test ran on is already being
+    torn down. Creating a second loop there and handing it a gRPC channel
+    produced ``RuntimeError: Event loop is closed`` at teardown of every
+    Firestore test: 80 assertions passing and 39 errors, from cleanup alone.
+    A blocking client has no loop to lose.
+
     Best effort, and deliberately so: a cleanup failure must not turn a passing
     contract test into a failing one. What it must not do is fail *silently*,
-    so it warns -- an accumulating namespace is a thing somebody should notice.
+    so it warns -- an accumulating namespace is something somebody should
+    notice.
     """
     try:
-        asyncio.run(_purge_async(project_id, database, namespace))
+        from google.cloud.firestore import Client
+
+        client = Client(project=project_id, database=database)
+        for name in COLLECTION_NAMES:
+            collection = client.collection(f"{namespace}{name}")
+            # Batched: a per-document round trip over ~23 collections is slower
+            # than the test it is cleaning up after.
+            batch = client.batch()
+            pending = 0
+            for document in collection.stream():
+                batch.delete(document.reference)
+                pending += 1
+                if pending == 400:  # Firestore caps a batch at 500 writes.
+                    batch.commit()
+                    batch = client.batch()
+                    pending = 0
+            if pending:
+                batch.commit()
     except Exception as exc:  # pragma: no cover - cleanup is best effort
         import warnings
 
@@ -132,27 +157,3 @@ def _purge(project_id: str, database: str, namespace: str) -> None:
             f"could not purge Firestore namespace {namespace}: {type(exc).__name__}",
             stacklevel=2,
         )
-
-
-async def _purge_async(project_id: str, database: str, namespace: str) -> None:
-    from google.cloud.firestore import AsyncClient
-
-    client = AsyncClient(project=project_id, database=database)
-    try:
-        for name in COLLECTION_NAMES:
-            collection = client.collection(f"{namespace}{name}")
-            # Batched: a per-document round trip over ~23 collections is slower
-            # than the test it is cleaning up after.
-            batch = client.batch()
-            pending = 0
-            async for document in collection.stream():
-                batch.delete(document.reference)
-                pending += 1
-                if pending == 400:  # Firestore caps a batch at 500 writes.
-                    await batch.commit()
-                    batch = client.batch()
-                    pending = 0
-            if pending:
-                await batch.commit()
-    finally:
-        client.close()

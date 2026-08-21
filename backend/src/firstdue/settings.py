@@ -166,9 +166,19 @@ class Settings(BaseSettings):
     firestore_database: str = "(default)"
     pubsub_topic_prefix: str = "firstdue"
     gcs_plans_bucket: str | None = None
-    vertex_location: str = "us-central1"
+    #: ``global``, not a region. Verified 2026-08-21 against a real project:
+    #: ``gemini-3.5-flash`` and ``gemma-4-26b-a4b-it-maas`` both 404 in
+    #: ``us-central1`` and both answer on ``global``. Only ``gemini-2.5-flash``
+    #: resolves regionally, and 2.5 does not satisfy the Gemini-3.5-or-newer
+    #: requirement, so the region is not a fallback worth keeping.
+    vertex_location: str = "global"
     gemini_model: str = "gemini-3.5-flash"
-    gemma_model: str = "gemma-3-4b-it"
+    #: Verified against the live publisher catalogue. ``gemma-3-4b-it``, which
+    #: this defaulted to until it was checked, does not exist on Vertex at all:
+    #: the deployable Model Garden entries (``gemma3``, ``gemma4``) are not
+    #: callable through ``generateContent``, and the ``-maas`` suffix is what
+    #: marks the managed endpoint that is.
+    gemma_model: str = "gemma-4-26b-a4b-it-maas"
     vector_search_index: str | None = None
     model_armor_template: str | None = None
 
