@@ -410,3 +410,111 @@ class TestTheFakeVisionClientIsDeterministic:
         result = await client.observe(image=b"", mime_type="image/jpeg", deadline_ms=1000)
         assert not result.accepted
         assert result.rejection_reason
+
+
+class TestTheHeatMapIsRegisteredToTheFace:
+    """Cells land where the camera saw them, on the wall the geometry names."""
+
+    async def test_image_y_is_flipped_into_face_v(self) -> None:
+        """The failure this test exists for is an inverted heat map.
+
+        Image y grows downward; face v grows up from the ground. A renderer
+        handed raw image coordinates paints the cockloft onto the foundation --
+        exactly inverted from the one thing the overlay exists to show, and
+        entirely plausible on screen.
+        """
+        # Hottest region at the TOP of the frame (y near 0).
+        fusion = SensorFusion(vision=StubVision(thermal((0.0, 340.0), (0.7, 20.0))))
+        analysis = await fusion.analyze_frame(
+            incident_id="inc-1",
+            image=b"jpegbytes",
+            mime_type="image/jpeg",
+            camera_bearing_deg=180.0,
+            observed_at=NOW,
+            spec=spec(),
+        )
+        assert analysis.frame is not None
+        cells = analysis.frame.cells
+        assert len(cells) == 2
+        # Ground up: the first cell is the cool one, low on the wall.
+        assert cells[0].temperature_c == 20.0
+        assert cells[0].v_from < 0.5
+        # The hot one is high on the wall.
+        assert cells[1].temperature_c == 340.0
+        assert cells[1].v_to > 0.9
+
+    async def test_cells_reach_the_massing_model_on_the_resolved_face(self) -> None:
+        fusion = SensorFusion(vision=StubVision(thermal((0.0, 340.0), (0.7, 20.0))))
+        await fusion.analyze_frame(
+            incident_id="inc-1",
+            image=b"jpegbytes",
+            mime_type="image/jpeg",
+            camera_bearing_deg=180.0,
+            observed_at=NOW,
+            spec=spec(),
+        )
+        amended = fusion.apply_to_geometry(spec(), "inc-1", now=NOW)
+        alpha = next(f for f in amended.faces if f.label is FaceLabel.ALPHA)
+        bravo = next(f for f in amended.faces if f.label is FaceLabel.BRAVO)
+        assert len(alpha.thermal_cells) == 2
+        assert alpha.peak_cell is not None
+        assert alpha.peak_cell.temperature_c == 340.0
+        # Only the face that was flown gets a heat map.
+        assert bravo.thermal_cells == ()
+        assert isinstance(bravo.thermal, UnscannedValue)
+
+    async def test_a_lapsed_frame_takes_its_heat_map_with_it(self) -> None:
+        """A stale overlay is the most convincing wrong thing on a screen."""
+        fusion = SensorFusion(vision=StubVision(thermal((0.0, 340.0))))
+        await fusion.analyze_frame(
+            incident_id="inc-1",
+            image=b"jpegbytes",
+            mime_type="image/jpeg",
+            camera_bearing_deg=180.0,
+            observed_at=NOW,
+            spec=spec(),
+        )
+        later = NOW + timedelta(minutes=30)
+        amended = fusion.apply_to_geometry(spec(), "inc-1", now=later)
+        alpha = next(f for f in amended.faces if f.label is FaceLabel.ALPHA)
+        assert alpha.thermal_cells == ()
+        assert isinstance(alpha.thermal, UnscannedValue)
+
+    def test_an_unscanned_face_cannot_be_given_cells_at_all(self) -> None:
+        """The type refuses it, so no renderer can shade an unmeasured wall."""
+        from firstdue.domain.geometry import ThermalCell
+        from firstdue.errors import ValidationError as DomainValidationError
+
+        with pytest.raises(DomainValidationError):
+            Face(
+                label=FaceLabel.ALPHA,
+                thermal_cells=(
+                    ThermalCell(u_from=0.0, u_to=1.0, v_from=0.0, v_to=0.5, temperature_c=300.0),
+                ),
+            )
+
+    async def test_partial_coverage_does_not_read_as_a_whole_wall(self) -> None:
+        """A frame that saw a strip must not render as a fully-measured face."""
+        result = VisionResult(
+            observations=(
+                VisionObservation(
+                    kind=ObservationKind.THERMAL_REGION,
+                    region=ImageRegion(x=0.0, y=0.4, width=0.5, height=0.2),
+                    raw_value="300C",
+                    model_confidence=0.8,
+                ),
+            ),
+            model_ref="stub/vision",
+        )
+        fusion = SensorFusion(vision=StubVision(result))
+        await fusion.analyze_frame(
+            incident_id="inc-1",
+            image=b"jpegbytes",
+            mime_type="image/jpeg",
+            camera_bearing_deg=180.0,
+            observed_at=NOW,
+            spec=spec(),
+        )
+        amended = fusion.apply_to_geometry(spec(), "inc-1", now=NOW)
+        alpha = next(f for f in amended.faces if f.label is FaceLabel.ALPHA)
+        assert alpha.scanned_fraction == pytest.approx(0.1, abs=0.01)

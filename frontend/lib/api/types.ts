@@ -267,6 +267,21 @@ export interface ObstructionView {
   status: AssertionStatus;
 }
 
+/**
+ * One measured patch of a face, in face-plane coordinates.
+ *
+ * `u` runs across the face width, `v` runs UP from the ground. Every cell is a
+ * rectangle a camera actually measured -- the gaps between cells are gaps on
+ * purpose, and nothing here was interpolated or predicted.
+ */
+export interface ThermalCellView {
+  u_from: number;
+  u_to: number;
+  v_from: number;
+  v_to: number;
+  temperature_c: number;
+}
+
 /** A face carries a measured temperature, no coverage, or an outage. */
 export interface FaceView {
   label: 'ALPHA' | 'BRAVO' | 'CHARLIE' | 'DELTA' | 'ROOF';
@@ -275,6 +290,8 @@ export interface FaceView {
     | { kind: 'UNSCANNED'; surface: string | null }
     | { kind: 'UNAVAILABLE'; source_id: string; reason: string };
   observed_at: string | null;
+  /** The registered heat map. Empty unless this face is actually scanned. */
+  thermal_cells: ThermalCellView[];
 }
 
 export interface GeometrySpecView {

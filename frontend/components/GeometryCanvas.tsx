@@ -21,7 +21,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import type { GeometryView } from '@/lib/api/types';
+import type { FaceView, GeometryView } from '@/lib/api/types';
 
 export type ViewAngle = 'ALPHA' | 'BRAVO' | 'CHARLIE' | 'DELTA' | 'ISO';
 
@@ -44,6 +44,43 @@ const COLORS = {
   collapse: 0xfbbf24,
   ground: 0x0a0c0f,
 };
+
+/**
+ * The thermal ramp: **one hue, monotonic lightness**, ambient to hot.
+ *
+ * Single-hue rather than the classic black-red-yellow-white ironbow, because a
+ * multi-hue ramp makes magnitude a hue comparison and readers cannot order hues
+ * reliably. Lightness carries the magnitude here and it is monotonic across all
+ * five steps.
+ *
+ * The coolest step keeps real chroma on purpose: a desaturated dark step would
+ * read as this system's `unknown` grey, and "cool wall" must never be
+ * confusable with "no data". Validated against the #12161c surface.
+ *
+ * Colour is never the only encoding -- every cell is labelled with its
+ * temperature, and the two darkest steps fall below 3:1 against the surface,
+ * which makes those labels required rather than decorative.
+ */
+const THERMAL_RAMP = [0x8a4410, 0xb25a10, 0xd97410, 0xf5a02a, 0xffce68] as const;
+
+/** Domain of the ramp, Celsius. Stated so the legend can say what it means. */
+const THERMAL_MIN_C = 20;
+const THERMAL_MAX_C = 400;
+
+export function thermalStep(celsius: number): number {
+  const span = THERMAL_MAX_C - THERMAL_MIN_C;
+  const t = Math.max(0, Math.min(1, (celsius - THERMAL_MIN_C) / span));
+  return Math.min(
+    THERMAL_RAMP.length - 1,
+    Math.floor(t * THERMAL_RAMP.length),
+  );
+}
+
+export function thermalColor(celsius: number): number {
+  // `thermalStep` is clamped into range, so the lookup always hits; the
+  // fallback exists only to satisfy noUncheckedIndexedAccess.
+  return THERMAL_RAMP[thermalStep(celsius)] ?? THERMAL_RAMP[0];
+}
 
 export function prefersReducedMotion(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false;
@@ -171,6 +208,68 @@ export function GeometryCanvas({
           base += level.height_m;
         });
 
+        // The heat map, registered onto the faces the mass was extruded from.
+        //
+        // Each cell names a rectangle of one wall in face coordinates: u across
+        // the width, v UP from the ground. The quad is placed on that wall at
+        // exactly those bounds, so the overlay lands on the building rather
+        // than floating near it. Total height is `base`, which the level loop
+        // above just finished accumulating.
+        //
+        // A face with no cells gets no quads at all. UNSCANNED is drawn as
+        // nothing, never as a cool wall.
+        const totalHeight = base;
+        const FACE_PLACEMENT: Record<
+          string,
+          { axis: 'x' | 'z'; sign: 1 | -1 }
+        > = {
+          ALPHA: { axis: 'z', sign: 1 },
+          BRAVO: { axis: 'x', sign: 1 },
+          CHARLIE: { axis: 'z', sign: -1 },
+          DELTA: { axis: 'x', sign: -1 },
+        };
+
+        geometry.spec.faces.forEach((face) => {
+          const placement = FACE_PLACEMENT[face.label];
+          if (!placement || !face.thermal_cells?.length) return;
+          const spanAcross = placement.axis === 'z' ? widthX : depthZ;
+
+          face.thermal_cells.forEach((cell) => {
+            const cellWidth = (cell.u_to - cell.u_from) * spanAcross;
+            const cellHeight = (cell.v_to - cell.v_from) * totalHeight;
+            if (cellWidth <= 0 || cellHeight <= 0) return;
+
+            const quad = new THREE.Mesh(
+              new THREE.PlaneGeometry(cellWidth, cellHeight),
+              new THREE.MeshBasicMaterial({
+                color: thermalColor(cell.temperature_c),
+                side: THREE.DoubleSide,
+                transparent: true,
+                // Translucent so the mass beneath still reads as confirmed or
+                // disputed. The overlay adds information; it does not replace
+                // what the slow loop established.
+                opacity: 0.82,
+              }),
+            );
+
+            // Centre of the cell, in face coordinates, mapped to world space.
+            const across =
+              ((cell.u_from + cell.u_to) / 2 - 0.5) * spanAcross * placement.sign;
+            const up = ((cell.v_from + cell.v_to) / 2) * totalHeight;
+            // A hair proud of the wall so it does not z-fight with the mass.
+            const out = (placement.axis === 'z' ? depthZ : widthX) / 2 + 0.03;
+
+            if (placement.axis === 'z') {
+              quad.position.set(across, up, out * placement.sign);
+              if (placement.sign === -1) quad.rotation.y = Math.PI;
+            } else {
+              quad.position.set(out * placement.sign, up, across);
+              quad.rotation.y = (Math.PI / 2) * placement.sign;
+            }
+            scene.add(quad);
+          });
+        });
+
         // Roof segments, pitched as the Solar API measured them.
         geometry.spec.roof_segments.forEach((segment, index) => {
           const plane = new THREE.Mesh(
@@ -273,6 +372,7 @@ export function GeometryCanvas({
           className="h-[360px] w-full border border-line bg-ground"
         />
       )}
+      <ThermalLegend faces={geometry.spec.faces} />
       <figcaption className="mt-2 space-y-1 text-micro text-muted">
         <span className="block">{describeGeometry(geometry, view)}</span>
         {useSvg && (
@@ -286,6 +386,56 @@ export function GeometryCanvas({
         )}
       </figcaption>
     </figure>
+  );
+}
+
+/**
+ * The heat map read as numbers, per face, ground up.
+ *
+ * The overlay on the model is colour; this is the same data as text, so the
+ * reading survives colourblindness, a washed-out tablet in daylight, and the
+ * SVG fallback. The two darkest ramp steps sit below 3:1 against the surface,
+ * which makes these labels required rather than a nicety.
+ *
+ * A face with no cells contributes no row. UNSCANNED is stated in the caption
+ * as absence, never rendered here as a temperature.
+ */
+export function ThermalLegend({ faces }: { faces: FaceView[] }) {
+  const scanned = faces.filter((f) => f.thermal_cells?.length);
+  if (scanned.length === 0) return null;
+
+  return (
+    <div className="mt-2 border border-line p-2">
+      <p className="text-micro uppercase tracking-wide text-muted">
+        Measured surface temperature, ground up
+      </p>
+      <ul className="mt-1 space-y-1">
+        {scanned.map((face) => (
+          <li key={face.label} className="flex items-center gap-2 text-micro">
+            <span className="w-16 shrink-0 text-ink">{face.label}</span>
+            <span className="flex flex-wrap gap-1">
+              {face.thermal_cells.map((cell, index) => (
+                <span
+                  key={`${face.label}-${index}`}
+                  className="border border-line px-1.5 py-0.5 tabular-nums text-ink"
+                  style={{
+                    backgroundColor: `#${thermalColor(cell.temperature_c)
+                      .toString(16)
+                      .padStart(6, '0')}`,
+                  }}
+                >
+                  {Math.round(cell.temperature_c)} C
+                </span>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1 text-micro text-muted">
+        Thermal imaging measures exterior surface temperature and cannot see
+        through walls. Faces not listed are UNSCANNED, not cool.
+      </p>
+    </div>
   );
 }
 
@@ -317,6 +467,15 @@ export function describeGeometry(geometry: GeometryView, view: ViewAngle): strin
     parts.push(`${spec.obstructions.length} roof obstruction marked.`);
   }
   parts.push(`Collapse zone ${spec.collapse_zone_radius_m} m, the 1.5x measured-height convention.`);
+  for (const face of spec.faces) {
+    if (!face.thermal_cells?.length) continue;
+    const readings = face.thermal_cells
+      .map((c) => `${Math.round(c.temperature_c)} C`)
+      .join(', ');
+    parts.push(
+      `${face.label} measured ground up: ${readings}. Surface temperature only.`,
+    );
+  }
   if (unscanned.length > 0) {
     parts.push(`Faces with no thermal coverage: ${unscanned.join(', ')} -- UNSCANNED, not cool.`);
   }

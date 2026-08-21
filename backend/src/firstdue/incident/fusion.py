@@ -38,6 +38,7 @@ from firstdue.domain.geometry import (
     Level,
     Obstruction,
     ObstructionType,
+    ThermalCell,
     collapse_zone_radius,
     resolve_face,
 )
@@ -90,8 +91,13 @@ class ThermalFrame(BaseModel):
     incident_id: str = Field(min_length=1, max_length=120)
     face: FaceLabel
     observed_at: datetime
-    #: Region temperatures across the face, in reading order. Celsius.
+    #: Region temperatures across the face, ground up. Celsius.
     region_temps_c: tuple[float, ...] = Field(min_length=1)
+    #: The same readings, registered to the face plane. Empty when the frame
+    #: arrived pre-extracted from a ground station, which sends numbers and no
+    #: geometry -- so the heat map is drawn only where a frame actually located
+    #: its readings on the wall.
+    cells: tuple[ThermalCell, ...] = ()
     #: Fraction of the face the frame actually covers.
     coverage: float = Field(ge=0.0, le=1.0, default=1.0)
     #: Recorded footage or a synthetic pass. Never presented as a live flight.
@@ -277,6 +283,7 @@ class SensorFusion:
                     face=face_geometry.label,
                     observed_at=observed_at,
                     region_temps_c=temps,
+                    cells=register_cells(result),
                     coverage=_coverage_of(result),
                     source=source,
                 )
@@ -397,13 +404,20 @@ class SensorFusion:
         for face in spec.faces:
             report = by_face.get(face.label)
             if report is None or not report.scanned or report.peak_c is None:
-                faces.append(face.model_copy(update={"thermal": UnscannedValue()}))
+                # Cells are cleared with the reading. A lapsed frame must not
+                # leave a heat map behind on a face that is UNSCANNED again --
+                # a stale overlay is the most convincing wrong thing on screen.
+                faces.append(
+                    face.model_copy(update={"thermal": UnscannedValue(), "thermal_cells": ()})
+                )
                 continue
+            frame = self._frames.get((incident_id, face.label))
             faces.append(
                 face.model_copy(
                     update={
                         "thermal": QuantityValue(magnitude=report.peak_c, unit="C"),
                         "observed_at": report.observed_at,
+                        "thermal_cells": frame.cells if frame is not None else (),
                     }
                 )
             )
@@ -476,6 +490,7 @@ class SensorFusion:
                         update={
                             "thermal": UnavailableValue(source_id=source_id, reason=reason),
                             "observed_at": None,
+                            "thermal_cells": (),
                         }
                     )
                     for face in spec.faces
@@ -486,6 +501,50 @@ class SensorFusion:
     @property
     def frame_count(self) -> int:
         return len(self._frames)
+
+
+def register_cells(result: VisionResult) -> tuple[ThermalCell, ...]:
+    """Map image regions onto the face plane. The registration step.
+
+    Two coordinate systems, and one flip between them. Image ``y`` grows
+    **downward** from the top of the frame; face ``v`` grows **upward** from the
+    ground. So ``v_from = 1 - (y + height)``. Getting this backwards paints the
+    cockloft onto the foundation -- inverted from the single thing a thermal
+    overlay exists to show -- and it would look entirely plausible on screen.
+
+    ``u`` passes through unchanged: image x and face u both run left to right
+    across the wall as the camera sees it.
+
+    **The assumption, stated.** This treats the frame as a rectilinear view of
+    one face -- a drone holding station square to the wall, which is what an
+    orbit pass produces. There is no homography and no perspective correction,
+    so a steeply oblique frame registers its cells with a skew this does not
+    model. That is a real limit of the overlay and not a claim it corrects for.
+    """
+    cells: list[ThermalCell] = []
+    for observation in result.of_kind(ObservationKind.THERMAL_REGION):
+        celsius = observation.temperature_c
+        if celsius is None:
+            continue
+        region = observation.region
+        v_from = max(0.0, min(1.0, 1.0 - (region.y + region.height)))
+        v_to = max(0.0, min(1.0, 1.0 - region.y))
+        u_to = max(0.0, min(1.0, region.x + region.width))
+        if v_to <= v_from or u_to <= region.x:
+            continue
+        cells.append(
+            ThermalCell(
+                u_from=region.x,
+                u_to=u_to,
+                v_from=v_from,
+                v_to=v_to,
+                temperature_c=celsius,
+            )
+        )
+    # Ground up, then left to right. Deterministic, and it is the order a
+    # renderer wants: later cells paint over earlier ones where they overlap.
+    cells.sort(key=lambda c: (c.v_from, c.u_from))
+    return tuple(cells)
 
 
 def _temperatures_bottom_up(result: VisionResult) -> tuple[float, ...]:

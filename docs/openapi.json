@@ -946,6 +946,14 @@
               }
             ],
             "title": "Thermal"
+          },
+          "thermal_cells": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ThermalCell"
+            },
+            "title": "Thermal Cells",
+            "type": "array"
           }
         },
         "required": [
@@ -2749,6 +2757,51 @@
           "text"
         ],
         "title": "TextValue",
+        "type": "object"
+      },
+      "ThermalCell": {
+        "additionalProperties": false,
+        "description": "One measured patch of a face, in face-plane coordinates.\n\nThis is the heat map, and it is **registered** rather than decorative: a\ncell names the rectangle of the wall it was measured on, so a renderer maps\nit onto the extruded face quad at exactly the place the camera saw it.\n\nCoordinates are fractions of the face itself, which the renderer already\nknows the real size of -- the width comes from the footprint edge the\nGeometry Watcher measured, the height from the levels it derived. So the\nspec stays small and the overlay still lands in metres.\n\n* ``u`` runs across the face width, 0 at the first corner of the edge.\n* ``v`` runs **up** the face, 0 at the ground and 1 at the eaves.\n\n``v`` is deliberately not image ``y``. Image y grows downward and a renderer\nhanded raw image coordinates would paint the cockloft onto the foundation,\nwhich is precisely inverted from the one thing this overlay exists to show.",
+        "properties": {
+          "temperature_c": {
+            "maximum": 1500.0,
+            "minimum": -50.0,
+            "title": "Temperature C",
+            "type": "number"
+          },
+          "u_from": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "U From",
+            "type": "number"
+          },
+          "u_to": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "U To",
+            "type": "number"
+          },
+          "v_from": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "V From",
+            "type": "number"
+          },
+          "v_to": {
+            "exclusiveMinimum": 0.0,
+            "maximum": 1.0,
+            "title": "V To",
+            "type": "number"
+          }
+        },
+        "required": [
+          "u_from",
+          "u_to",
+          "v_from",
+          "v_to",
+          "temperature_c"
+        ],
+        "title": "ThermalCell",
         "type": "object"
       },
       "ThermalFrameRequest": {

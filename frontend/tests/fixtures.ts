@@ -233,10 +233,30 @@ export const GEOMETRY: GeometryView = {
     ],
     obstructions: [{ type: 'SOLAR_ARRAY', segment_index: 0, provenance: 'SOLAR_API', status: 'CONFIRMED' }],
     faces: [
-      { label: 'ALPHA', thermal: { kind: 'UNSCANNED', surface: null }, observed_at: null },
-      { label: 'BRAVO', thermal: { kind: 'UNSCANNED', surface: null }, observed_at: null },
-      { label: 'CHARLIE', thermal: { kind: 'UNSCANNED', surface: null }, observed_at: null },
-      { label: 'DELTA', thermal: { kind: 'UNSCANNED', surface: null }, observed_at: null },
+      {
+        label: 'ALPHA',
+        thermal: { kind: 'UNSCANNED', surface: null },
+        observed_at: null,
+        thermal_cells: [],
+      },
+      {
+        label: 'BRAVO',
+        thermal: { kind: 'UNSCANNED', surface: null },
+        observed_at: null,
+        thermal_cells: [],
+      },
+      {
+        label: 'CHARLIE',
+        thermal: { kind: 'UNSCANNED', surface: null },
+        observed_at: null,
+        thermal_cells: [],
+      },
+      {
+        label: 'DELTA',
+        thermal: { kind: 'UNSCANNED', surface: null },
+        observed_at: null,
+        thermal_cells: [],
+      },
     ],
     collapse_zone_radius_m: 14.27,
   },
@@ -437,4 +457,32 @@ export const LOG: IncidentLogView = {
     },
   ],
   unflushed: 2,
+};
+
+
+/**
+ * The same geometry after a drone pass on Alpha: hot cockloft over a cool
+ * ground floor. Kept separate from `GEOMETRY` on purpose -- the default
+ * fixture is the standby state where nothing has been flown, and the
+ * never-colour-alone test depends on all four faces being UNSCANNED there.
+ */
+export const GEOMETRY_SCANNED: GeometryView = {
+  ...GEOMETRY,
+  spec: {
+    ...GEOMETRY.spec,
+    faces: GEOMETRY.spec.faces.map((face) =>
+      face.label === 'ALPHA'
+        ? {
+            ...face,
+            thermal: { kind: 'QUANTITY' as const, magnitude: 340, unit: 'C' },
+            observed_at: '2026-08-20T08:12:00+00:00',
+            thermal_cells: [
+              { u_from: 0.05, u_to: 0.95, v_from: 0.0, v_to: 0.33, temperature_c: 22 },
+              { u_from: 0.05, u_to: 0.95, v_from: 0.33, v_to: 0.66, temperature_c: 120 },
+              { u_from: 0.05, u_to: 0.95, v_from: 0.66, v_to: 0.95, temperature_c: 340 },
+            ],
+          }
+        : face,
+    ),
+  },
 };
