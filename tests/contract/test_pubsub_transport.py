@@ -1,18 +1,28 @@
-"""The Pub/Sub transport, against the emulator.
+"""The Pub/Sub transport, against a broker.
 
 The codec is proved by pure tests; what this file proves is the part only a
 broker can: that :class:`PubSubEventBus` publishes a real message to a real
 topic, with the ordering key and attributes intact, and that what comes back out
 decodes to the envelope that went in.
 
-Skips loudly unless ``PUBSUB_EMULATOR_HOST`` is set. A skipped transport has
-proved nothing.
+Two brokers satisfy it, and the tests do not care which they got:
+``PUBSUB_EMULATOR_HOST`` for a local emulator, or ``PUBSUB_TEST_PROJECT`` for
+real Pub/Sub reached through Application Default Credentials. The real broker is
+the stronger evidence -- message ordering is the property under test here, and
+it is exactly the kind of thing an emulator approximates.
+
+Skips loudly unless one of them is configured. A skipped transport has proved
+nothing, and CI fails the job if this suite reports a skip.
+
+Every test creates its own topic and subscription under a unique prefix and
+deletes both afterwards, so a real project does not accumulate them.
 """
 
 from __future__ import annotations
 
 import os
 import uuid
+import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
@@ -24,20 +34,36 @@ from firstdue.domain.events import EventEnvelope, Topic
 from firstdue.eventing.pubsub_codec import decode, subscription_name, topic_name
 
 EMULATOR_ENV = "PUBSUB_EMULATOR_HOST"
+PROJECT_ENV = "PUBSUB_TEST_PROJECT"
+
 EMULATOR_HOST = os.environ.get(EMULATOR_ENV)
-PROJECT = "firstdue-local"
+REAL_PROJECT = os.environ.get(PROJECT_ENV)
+
+#: The emulator accepts any project id; this one names where the data came from.
+EMULATOR_PROJECT = "firstdue-local"
+
+# The emulator wins when both are set, for the same reason it does in
+# conftest.py: publishing a test suite's throwaway messages into a real
+# project by accident is not a mistake that should be quiet.
+PROJECT = EMULATOR_PROJECT if EMULATOR_HOST else (REAL_PROJECT or EMULATOR_PROJECT)
 NOW = datetime(2026, 8, 20, 8, 0, tzinfo=UTC)
 
 
 @pytest.fixture(autouse=True)
-def _restore_emulator_host(monkeypatch: pytest.MonkeyPatch) -> None:
+def _restore_broker_env(monkeypatch: pytest.MonkeyPatch) -> None:
     if EMULATOR_HOST:
         monkeypatch.setenv(EMULATOR_ENV, EMULATOR_HOST)
+    if REAL_PROJECT:
+        monkeypatch.setenv(PROJECT_ENV, REAL_PROJECT)
 
 
-def _require_emulator() -> None:
-    if not EMULATOR_HOST:
-        pytest.skip(f"{EMULATOR_ENV} is not set; run `make up` then `make test-emulator`")
+def _require_broker() -> None:
+    if not EMULATOR_HOST and not REAL_PROJECT:
+        pytest.skip(
+            f"neither {EMULATOR_ENV} nor {PROJECT_ENV} is set; run "
+            "`make up && make test-emulator` for the emulator, or set "
+            "PUBSUB_TEST_PROJECT for a real broker"
+        )
     pytest.importorskip("google.cloud.pubsub_v1")
 
 
@@ -49,7 +75,7 @@ def prefix() -> str:
 
 @pytest.fixture
 def pubsub(prefix: str) -> Iterator[tuple[Any, Any, str, str]]:
-    _require_emulator()
+    _require_broker()
     import google.cloud.pubsub_v1 as pubsub_v1
 
     publisher = pubsub_v1.PublisherClient(
@@ -72,8 +98,20 @@ def pubsub(prefix: str) -> Iterator[tuple[Any, Any, str, str]]:
     try:
         yield publisher, subscriber, topic_path, subscription_path
     finally:
-        subscriber.delete_subscription(subscription=subscription_path)
-        publisher.delete_topic(topic=topic_path)
+        # Best effort, in this order: a subscription outlives its topic and
+        # would keep the project cluttered. A cleanup failure must not turn a
+        # passing transport test into a failing one.
+        for delete in (
+            lambda: subscriber.delete_subscription(subscription=subscription_path),
+            lambda: publisher.delete_topic(topic=topic_path),
+        ):
+            try:
+                delete()
+            except Exception as exc:  # pragma: no cover - cleanup is best effort
+                warnings.warn(
+                    f"could not clean up Pub/Sub resource: {type(exc).__name__}",
+                    stacklevel=2,
+                )
         subscriber.close()
 
 

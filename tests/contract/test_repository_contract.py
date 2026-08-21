@@ -428,6 +428,40 @@ async def test_a_lock_is_held_by_exactly_one_owner(stores: Stores) -> None:
 
 
 @pytest.mark.concurrency
+async def test_simultaneous_contenders_produce_exactly_one_holder(stores: Stores) -> None:
+    """A lock nobody wins is a livelock, not a lock.
+
+    This is the liveness property a lock *does* promise, and it is the opposite
+    of the safety property above. Optimistic concurrency on a profile may
+    legitimately abort every writer and leave them to retry -- nothing is lost,
+    because the next attempt recomputes the same result. A lock cannot do that:
+    every contender standing down means the work behind it never happens at
+    all. Two Cloud Run instances polling one district would both decline and
+    the profile would go unmaterialized until the next scheduler tick.
+
+    The Firestore implementation used to read "my transaction exhausted its
+    attempts" as "somebody else holds it", which under real contention made
+    *every* contender lose. Exhaustion now re-reads the document and asks
+    whether anybody actually holds it.
+
+    Eight contenders, because that is where the old behaviour reproduced: at
+    two it livelocked about a third of the time and at eight about half, so a
+    smaller number would be a test that passed either way and protected
+    nothing.
+    """
+    lease = timedelta(minutes=5)
+
+    async def contend(name: str) -> object | None:
+        return await stores.locks.acquire("district:contended", owner=name, now=NOW, lease=lease)
+
+    results = await asyncio.gather(*(contend(f"instance-{i}") for i in range(8)))
+    holders = [lease_ for lease_ in results if lease_ is not None]
+
+    assert len(holders) == 1, "a lock that nobody acquires is a livelock"
+    assert holders[0].fence == 1
+
+
+@pytest.mark.concurrency
 async def test_an_expired_lock_is_reclaimable_and_the_fence_advances(stores: Stores) -> None:
     lease = timedelta(minutes=5)
     first = await stores.locks.acquire("district:03", owner="instance-a", now=NOW, lease=lease)

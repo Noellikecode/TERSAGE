@@ -130,6 +130,107 @@ make test-emulator
 says so. CI fails the job if they skip there — a skipped backend has proved
 nothing.
 
+## The contract suite against a real database
+
+The same suite runs against a real Firestore and real Pub/Sub, and **that is
+what CI does**. The emulators remain the credential-free local path; the real
+project is the stronger evidence, because what this suite asserts is precisely
+what an emulator is most likely to approximate — that a transaction serialises
+a read-compare-write, that `create` on an existing document fails at the
+database, that a fence counter survives a release, that ordered delivery stays
+ordered.
+
+```bash
+gcloud auth application-default login
+make test-cloud GCP_TEST_PROJECT_ID=your-test-project
+```
+
+Each test gets its own collection namespace and its own topic prefix, and both
+are deleted afterwards — a real database does not forget when you stop it.
+Emulator variables win when both are set, so an emulator running in your shell
+cannot be bypassed into writing at a real project by accident.
+
+### What the project needs
+
+A **test** project, separate from staging and prod. It holds nothing but
+throwaway documents.
+
+```bash
+PROJECT=your-test-project
+
+gcloud services enable firestore.googleapis.com pubsub.googleapis.com \
+  --project="$PROJECT"
+
+# Native mode. The repositories use transactions, which Datastore mode
+# exposes differently.
+gcloud firestore databases create --location=nam5 --type=firestore-native \
+  --project="$PROJECT"
+```
+
+Nothing else is created ahead of time: the suite makes its own topics and
+subscriptions per test and deletes them.
+
+### What CI needs
+
+Set these as repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Required | What it is |
+|---|---|---|
+| `GCP_TEST_PROJECT_ID` | yes | the test project id |
+| `GCP_WIF_PROVIDER` | preferred | full resource name of a Workload Identity provider |
+| `GCP_WIF_SERVICE_ACCOUNT` | preferred | the service account CI impersonates |
+| `GCP_TEST_SA_KEY` | fallback | a service account JSON key, if not using federation |
+| `GCP_TEST_FIRESTORE_DATABASE` | no | a named database; the default is used when unset |
+
+With `GCP_TEST_PROJECT_ID` unset the job **skips and says so in the run
+summary**, so a fork stays green without proving anything it did not prove. The
+in-memory half of the contract suite still runs, in the backend job.
+
+The service account needs `roles/datastore.user` and `roles/pubsub.editor` on
+the test project, and nothing else.
+
+**Federation is preferred over a key.** A long-lived JSON key in a repository
+secret is a credential that exists until somebody rotates it; a federated
+token expires in minutes and there is no key to leak:
+
+```bash
+PROJECT=your-test-project
+REPO=Noellikecode/TERSAGE
+SA=firstdue-ci-tests
+
+gcloud iam service-accounts create "$SA" --project="$PROJECT"
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${SA}@${PROJECT}.iam.gserviceaccount.com" \
+  --role="roles/datastore.user"
+gcloud projects add-iam-policy-binding "$PROJECT" \
+  --member="serviceAccount:${SA}@${PROJECT}.iam.gserviceaccount.com" \
+  --role="roles/pubsub.editor"
+
+gcloud iam workload-identity-pools create github --location=global \
+  --project="$PROJECT"
+gcloud iam workload-identity-pools providers create-oidc github \
+  --location=global --workload-identity-pool=github \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository=='${REPO}'" \
+  --project="$PROJECT"
+
+# Only this repository may impersonate the service account.
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')"
+gcloud iam service-accounts add-iam-policy-binding \
+  "${SA}@${PROJECT}.iam.gserviceaccount.com" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/attribute.repository/${REPO}" \
+  --project="$PROJECT"
+
+# GCP_WIF_PROVIDER is this value:
+echo "projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/github/providers/github"
+```
+
+The `attribute-condition` is what stops any other repository on GitHub from
+minting a token for this service account. Without it the provider trusts every
+repository that asks.
+
 ## Containers
 
 ```bash

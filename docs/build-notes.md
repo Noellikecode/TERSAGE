@@ -676,3 +676,116 @@ Two further honest notes:
 | Address normalisation against real DataSF rows is unproven at scale | The assessor's fixed-width location field is parsed and tested against real rows; the city adapter still drops what it cannot resolve, and the drop is counted but not surfaced |
 | PHMSA, Tier II, and SF hydrants have no public feed | Catalogued as `UNCONFIGURED` with a stated reason each, rendered verbatim. "Unavailable" and "withheld by statute" are different statements and the console shows which |
 | The in-memory vector index is lexical, not semantic | It is a real second implementation of the port with the same refusals, and it is what fake mode runs. A query needing true semantic distance needs the live index |
+
+---
+
+## CI: the emulator job became a real-database job
+
+**Date:** 2026-08-20
+
+The emulator job failed on three consecutive runs and was replaced rather than
+repaired. Both halves of that decision matter.
+
+**Why it was failing.** `gcloud components install` cannot work on a
+GitHub-hosted runner: the preinstalled SDK comes from a package whose component
+manager is disabled, so the step exited immediately. Installing an SDK that
+*can* install components (`google-github-actions/setup-gcloud`) got past that
+and the emulators then failed to accept a connection within 120 seconds.
+
+**Why it was replaced rather than repaired.** An emulator is a reimplementation
+of Firestore's semantics, and this suite exists to check semantics: that a
+transaction serialises a read-compare-write, that `create` on an existing
+document fails at the database rather than at a Python guard a concurrent
+instance could race past, that a fence counter survives a release, that ordered
+delivery stays ordered. Those are the properties an emulator is most likely to
+approximate. Against a real project, a pass means what it says.
+
+| Decision | Why |
+|---|---|
+| The emulators stay as the local path; CI uses a real project | `make demo` and `make test` must keep needing no credentials. What changed is what *CI* treats as evidence. |
+| Emulator environment variables win when both are set | A developer with live credentials in their shell who starts an emulator meant to use the emulator. Writing a test's throwaway documents into a real project should not be a quiet mistake. |
+| Every test purges its own namespace and deletes its own topics | An emulator forgets when it stops. A real database does not, and a suite that left a namespace behind on every run would turn a test project into a landfill and then into a bill. |
+| Cleanup failures warn, they do not fail the test | A cleanup error must not turn a passing contract test red. It must not be silent either — an accumulating namespace is something somebody should notice. |
+| The job skips loudly when no project is configured | A fork has no credentials and must not fail for it. The skip is a run-summary warning, because a green tick on a job that proved nothing is worse than a red one. |
+| Workload Identity Federation preferred, service-account key as fallback | Phase 7 already recorded the long-lived-key risk on the staging job. A federated token expires in minutes and there is no key to leak. The provider carries an `attribute-condition` pinning it to this repository — without one it trusts every repository on GitHub. |
+
+**Two other CI failures, fixed in the same pass.**
+
+`gitleaks` was reporting four leaks, all of them **test idempotency keys** like
+`"abcdef1234567890"` that the generic-api-key rule reads as high-entropy
+secrets. An idempotency key is not a credential: in this system it is *derived*
+from the content of the work it guards (ADR 0005), it is written into audit
+records and API responses on purpose, and it authorises nothing. It is now
+allowlisted **by field**, with `regexTarget = "match"`. Exempting `tests/`
+wholesale would have been wrong — a real credential in a test file is still a
+leak, and a planted Google API key, service-account JSON, and Stripe key were
+each confirmed still caught. CI now runs the pinned binary rather than the
+action, so `make secret-scan` reproduces a CI finding exactly and no licensing
+check can fail a job for a reason unrelated to secrets.
+
+The console job failed on `npm run test` while passing locally. The cause was a
+Node version difference, not a configuration one: `tests/command-center.test.tsx`
+asserted on an `aria-live` region that a follow-up `useEffect` fills, and the
+helper it awaited waits for the banner rather than the announcement. Node 24
+had flushed the effect by assert time and CI's Node 20 had not. Wrapped in
+`waitFor`; verified against a locally installed Node 20, three runs clean.
+
+**What is verified, and what is not.** The emulator path still passes locally
+(78 contract tests, both backends). The real-project path is **written and
+unrun** — this machine has no ADC, so what has been confirmed is that setting
+`FIRESTORE_TEST_PROJECT` stops the suite skipping and makes it attempt a real
+connection, failing only on absent credentials. Whether a real Firestore
+satisfies the same contract the in-memory repositories do is exactly the
+question the job exists to answer, and it has not been answered yet.
+
+### A livelock the move to a real database exposed
+
+Running the contract suite repeatedly, to be sure the new job would not be
+flaky against real Firestore, surfaced a defect that had been there since
+phase 2. `test_a_second_instance_does_not_repeat_the_work` failed about one run
+in three, and the failure was not the one the name suggests: *both* instances
+reported they had not run.
+
+`FirestoreLockRepository.acquire` treated an exhausted transaction as a clean
+loss. The reasoning was recorded in the docstring and was half right --
+contention on the lock document does mean somebody is taking the lock, and
+raising would turn "another instance is polling this district" into an
+exception a caller cannot use. What it missed is that exhaustion and a clean
+loss are different facts:
+
+* a **clean loss** means somebody else holds the lease, so standing down is
+  correct -- their pass produces the result ours would have;
+* **exhaustion** means nobody could commit, and if every contender reads that
+  as a loss, every contender stands down and the work never happens.
+
+Two Cloud Run instances polling one district would both decline, and the
+profile would go unmaterialized until the next scheduler tick.
+
+`acquire` now re-reads the lock on exhaustion and asks the question that
+actually matters -- is it held *now*? If it is, this was a loss. If it is free,
+nobody won, and this contender retries after a delay derived from its own owner
+id, so two contenders do not retry in lockstep and collide forever. Derived
+rather than random, for the reason phase 2 gave for the event backoff: a replay
+has to reproduce the timing it recorded.
+
+Measured against the emulator, before and after, as simultaneous contenders on
+one lock:
+
+| Contenders | Before | After |
+|---|---|---|
+| 2 | livelocked 3 runs in 8 | 8/8 settle on one holder |
+| 4 | 0 in 8 | 8/8 |
+| 8 | 4 in 8 | 8/8 |
+| 16 | 7 in 8 | 8/8 |
+
+The regression test uses **eight** contenders because that is where the old
+behaviour reproduced about half the time. It was first written with four, where
+it passed with the fix stashed -- a test that passes either way protects
+nothing, and asserting otherwise in its docstring would have been worse than
+not having it. With eight it fails five runs in six against the old code.
+
+It is a distinct property from the one `test_concurrent_writers_never_both_succeed`
+asserts, and deliberately its opposite. Optimistic concurrency on a profile may
+abort every writer and leave them to retry; nothing is lost, because the next
+attempt recomputes the same result. A lock cannot do that. **Safety is "never
+two holders"; liveness is "not zero holders", and only a lock owes both.**

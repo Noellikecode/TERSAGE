@@ -47,59 +47,89 @@ jobs:
           uv run firstdue seed
           uv run firstdue verify-seed
 
-  emulators:
-    name: Durable memory and event transport (emulators)
+  durable-memory:
+    name: Durable memory and event transport (real Firestore and Pub/Sub)
     runs-on: ubuntu-latest
+    # The emulators used to run here and were replaced. Two reasons, and the
+    # second is the one that matters: they were fragile to start on a hosted
+    # runner, and they are a reimplementation of the semantics this suite
+    # exists to check. What it asserts -- that a transaction serialises a
+    # read-compare-write, that `create` on an existing document fails at the
+    # database rather than at a Python guard, that a fence counter survives a
+    # release, that ordered delivery stays ordered -- is exactly what an
+    # emulator is most likely to approximate. Against a real project, a pass
+    # means the thing it says it means.
+    permissions:
+      contents: read
+      # Workload Identity Federation mints a short-lived token from this.
+      id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Is a test project configured for this repository?
+        # A fork, or this repository before anybody set the secrets up, has no
+        # credentials and must not fail for it. The skip is loud: a green tick
+        # on a job that proved nothing is worse than a red one.
+        id: guard
+        env:
+          PROJECT: ${{ secrets.GCP_TEST_PROJECT_ID }}
+          WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
+          WIF_SA: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+          SA_KEY: ${{ secrets.GCP_TEST_SA_KEY }}
+        run: |
+          if [ -z "$PROJECT" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Durable memory not verified::GCP_TEST_PROJECT_ID is not set, so the Firestore and Pub/Sub half of the contract suite did not run. The in-memory half runs in the Backend job."
+            exit 0
+          fi
+          if [ -n "$WIF_PROVIDER" ] && [ -n "$WIF_SA" ]; then
+            echo "method=wif" >> "$GITHUB_OUTPUT"
+          elif [ -n "$SA_KEY" ]; then
+            echo "method=key" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error title=Incomplete credentials::GCP_TEST_PROJECT_ID is set but no authentication method is. Set GCP_WIF_PROVIDER and GCP_WIF_SERVICE_ACCOUNT (preferred), or GCP_TEST_SA_KEY."
+            exit 1
+          fi
+          echo "configured=true" >> "$GITHUB_OUTPUT"
+
+      # Federated identity: no long-lived key exists to leak, and the token
+      # this mints expires in minutes. Preferred whenever it is configured.
+      - uses: google-github-actions/auth@v2
+        if: steps.guard.outputs.method == 'wif'
+        with:
+          project_id: ${{ secrets.GCP_TEST_PROJECT_ID }}
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/auth@v2
+        if: steps.guard.outputs.method == 'key'
+        with:
+          project_id: ${{ secrets.GCP_TEST_PROJECT_ID }}
+          credentials_json: ${{ secrets.GCP_TEST_SA_KEY }}
+
       - uses: astral-sh/setup-uv@v3
+        if: steps.guard.outputs.configured == 'true'
         with:
           enable-cache: true
       - run: uv python install 3.12
+        if: steps.guard.outputs.configured == 'true'
       - run: uv sync --frozen || uv sync
-      # The gcloud preinstalled on a GitHub runner comes from a package whose
-      # component manager is disabled, so `gcloud components install` fails
-      # outright. This action installs an SDK that can install components.
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: google-github-actions/setup-gcloud@v2
-        with:
-          install_components: cloud-firestore-emulator,pubsub-emulator,beta
-      - name: Start the Firestore and Pub/Sub emulators
-        run: |
-          nohup gcloud emulators firestore start \
-            --host-port=127.0.0.1:8081 --project=firstdue-local \
-            >/tmp/firestore.log 2>&1 &
-          nohup gcloud beta emulators pubsub start \
-            --host-port=127.0.0.1:8085 --project=firstdue-local \
-            >/tmp/pubsub.log 2>&1 &
-          # A port that accepts a connection is the only signal that matters;
-          # both emulators answer non-2xx on `/`, so an HTTP status check would
-          # be reading the wrong thing.
-          for _ in $(seq 1 60); do
-            if (exec 3<>/dev/tcp/127.0.0.1/8081) 2>/dev/null \
-               && (exec 4<>/dev/tcp/127.0.0.1/8085) 2>/dev/null; then
-              echo "emulators up"; exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::the emulators did not come up within 120s"
-          cat /tmp/firestore.log /tmp/pubsub.log || true
-          exit 1
+        if: steps.guard.outputs.configured == 'true'
+
       - name: Contract suite, both backends
         # The same tests run in-memory and against Firestore. A skip means the
-        # emulator never came up, which would let the run pass on half the
-        # coverage -- so a skip fails the job.
+        # real backend was never reached, which would let the run pass on half
+        # the coverage -- so a skip fails the job.
+        if: steps.guard.outputs.configured == 'true'
         env:
-          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8081
-          PUBSUB_EMULATOR_HOST: 127.0.0.1:8085
+          FIRESTORE_TEST_PROJECT: ${{ secrets.GCP_TEST_PROJECT_ID }}
+          FIRESTORE_TEST_DATABASE: ${{ secrets.GCP_TEST_FIRESTORE_DATABASE }}
+          PUBSUB_TEST_PROJECT: ${{ secrets.GCP_TEST_PROJECT_ID }}
         run: |
           set -o pipefail
           uv run pytest tests/contract -v -rs | tee /tmp/contract.txt
-          if grep -qi "skipped" /tmp/contract.txt; then
-            echo "::error::a backend was skipped; the emulator did not come up"
+          if grep -qiE "^SKIPPED|[0-9]+ skipped" /tmp/contract.txt; then
+            echo "::error title=A backend was skipped::The Firestore or Pub/Sub backend was not reached, so the contract suite proved only half of what it claims."
             exit 1
           fi
 

@@ -13,6 +13,7 @@ difference between them is a bug in one of them.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any, TypeVar
@@ -59,6 +60,8 @@ from firstdue.errors import (
     ValidationError,
     WriteContentionError,
 )
+from firstdue.observability.logging import get_logger
+from firstdue.reliability.retry import RetryPolicy, backoff_ms
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -69,7 +72,23 @@ _SEQUENCE_WIDTH = 9
 #: How many times the client retries a transaction aborted by a concurrent
 #: write before giving up. Its default; named here because the exhaustion path
 #: is translated below and the number appears in the error.
+logger = get_logger(__name__)
+
 TRANSACTION_ATTEMPTS = 5
+
+#: How many times a contender re-attempts a lock whose transaction could not
+#: commit and whose document nobody holds. This is a tie-break between
+#: instances, not a retry policy for an outage -- but it has to be deep enough
+#: that a realistic fleet resolves. Measured against the emulator: two, four,
+#: and eight simultaneous contenders always settle on exactly one holder.
+LOCK_ACQUIRE_ATTEMPTS = 7
+
+#: Short delays, widening fast. The work behind the lock takes milliseconds, so
+#: a contender that waited a second would be standing down in all but name;
+#: but the spread has to grow or contenders keep colliding on the same retry.
+LOCK_RETRY_POLICY: RetryPolicy = RetryPolicy(
+    max_attempts=LOCK_ACQUIRE_ATTEMPTS, base_delay_ms=15, max_delay_ms=500, multiplier=2.5
+)
 
 
 def _transactional(func: Any) -> Any:
@@ -826,12 +845,21 @@ class FirestoreLockRepository(_Repository):
     process that slept through its lease could wake up holding a fence that
     looks current.
 
-    Contention on the lock document *is* the answer, not an error. When several
-    instances hammer one lock and a transaction exhausts its attempts, that
-    means somebody else is taking the lock -- so it returns ``None`` (or
-    ``False``) exactly as a clean loss would. Raising here would turn "another
-    instance is polling this district" into an exception in a caller that has
-    nothing useful to do with one.
+    **Exhausted attempts is not the same as a clean loss**, and reading it as
+    one is a livelock. A clean loss means somebody else holds the lock, so
+    standing down is correct: their pass produces the result ours would have.
+    Exhaustion means *nobody* could commit -- and if every contender reads that
+    as a loss, every contender stands down and the work never happens. Two
+    instances polling one district would both decline and the profile would go
+    unmaterialized until the next scheduler tick.
+
+    So exhaustion re-reads the lock and asks the question that actually
+    matters: is it held now? If it is, this was a loss. If it is free, nobody
+    won and this contender tries again, after a delay derived from its own
+    owner id so two contenders do not retry in lockstep and collide forever.
+
+    Found by the concurrency contract tests failing about one run in three
+    against the emulator, with *both* instances reporting they had not run.
     """
 
     async def acquire(
@@ -862,16 +890,46 @@ class FirestoreLockRepository(_Repository):
             transaction.set(ref, document)
             return granted
 
-        try:
-            result: LockLease | None = await _commit(
-                _acquire, store=store, entity=f"lock {lock_id}"
-            )
-        except WriteContentionError:
-            # Contention on the lock document is the answer: somebody else is
-            # taking it. A clean loss and an exhausted transaction mean the same
-            # thing to the caller.
-            return None
-        return result
+        for attempt in range(1, LOCK_ACQUIRE_ATTEMPTS + 1):
+            try:
+                granted: LockLease | None = await _commit(
+                    _acquire, store=store, entity=f"lock {lock_id}"
+                )
+                return granted
+            except WriteContentionError:
+                # Somebody else holds it: a real loss, and standing down is the
+                # correct response.
+                if await self._is_held_by_another(store, lock_id, owner=owner, now=now):
+                    logger.info(
+                        "lock_lost_to_holder",
+                        extra={"lock_id": lock_id, "attempt": attempt},
+                    )
+                    return None
+                if attempt == LOCK_ACQUIRE_ATTEMPTS:
+                    # Nobody holds it and nobody can commit. Refusing is still
+                    # better than a caller that believes it holds a lock it
+                    # does not, and the next tick will try again.
+                    logger.warning(
+                        "lock_contention_unresolved",
+                        extra={"lock_id": lock_id, "attempts": attempt},
+                    )
+                    return None
+                # Derived from the owner, not drawn from a PRNG: two contenders
+                # get different delays, and a replay reproduces the timing it
+                # recorded.
+                delay_ms = backoff_ms(attempt + 1, policy=LOCK_RETRY_POLICY, seed=owner)
+                await asyncio.sleep(delay_ms / 1000.0)
+        return None  # pragma: no cover - the loop always returns
+
+    async def _is_held_by_another(
+        self, store: DocumentStore, lock_id: str, *, owner: str, now: datetime
+    ) -> bool:
+        """Whether a live lease belonging to somebody else exists right now."""
+        data = await store.get(lock_id)
+        if not data or not data.get("payload") or data.get("released"):
+            return False
+        held = decode(LockLease, data)
+        return not held.is_expired(now) and held.owner != owner
 
     async def renew(
         self, lock_id: str, *, owner: str, now: datetime, lease: timedelta

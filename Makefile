@@ -108,6 +108,18 @@ test-emulator: ## Contract tests against the Firestore and Pub/Sub emulators
 	PUBSUB_EMULATOR_HOST=$(PUBSUB_EMULATOR_HOST) \
 	$(UV) run pytest tests/contract -v
 
+test-cloud: ## Contract tests against a real Firestore and Pub/Sub. Needs GCP_TEST_PROJECT_ID.
+	@if [ -z "$(GCP_TEST_PROJECT_ID)" ]; then \
+	  echo "GCP_TEST_PROJECT_ID is not set."; \
+	  echo "usage: make test-cloud GCP_TEST_PROJECT_ID=your-project"; \
+	  echo "auth:  gcloud auth application-default login"; \
+	  exit 1; \
+	fi
+	FIRESTORE_TEST_PROJECT=$(GCP_TEST_PROJECT_ID) \
+	PUBSUB_TEST_PROJECT=$(GCP_TEST_PROJECT_ID) \
+	FIRESTORE_TEST_DATABASE=$(GCP_TEST_FIRESTORE_DATABASE) \
+	$(UV) run pytest tests/contract -v
+
 .PHONY: test-cov
 test-cov: ## Backend tests with coverage
 	$(UV) run pytest --cov --cov-report=term-missing
