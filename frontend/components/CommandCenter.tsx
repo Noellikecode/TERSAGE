@@ -19,6 +19,7 @@ import { AuditConsole } from '@/components/audit/AuditConsole';
 import { BackendStatus } from '@/components/BackendStatus';
 import { GeometryCanvas, type ViewAngle } from '@/components/GeometryCanvas';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
+import { IntakePanel } from '@/components/incident/IntakePanel';
 import { IncidentBanner } from '@/components/incident/IncidentBanner';
 import { ResourcePanel } from '@/components/incident/ResourcePanel';
 import { ThermalPanel } from '@/components/incident/ThermalPanel';
@@ -27,6 +28,7 @@ import { ConflictPanel, type ResolutionSubmission } from '@/components/profile/C
 import { Timeline } from '@/components/profile/Timeline';
 import { ActivityStream, toStreamItems } from '@/components/standby/ActivityStream';
 import { AgentRail } from '@/components/standby/AgentRail';
+import { DispatchPanel } from '@/components/standby/DispatchPanel';
 import { DistrictStrip } from '@/components/standby/DistrictStrip';
 import { SurveyQueue } from '@/components/standby/SurveyQueue';
 import { StatusPill } from '@/components/StatusPill';
@@ -41,10 +43,13 @@ import type {
   CloseIncidentResponse,
   DistrictStatsView,
   GeometryView,
+  IncidentReplayView,
+  IntakeChannel,
   IncidentLogView,
   OpenIncidentResponse,
   PolicyDecisionView,
   QueueView,
+  ReferralSummary,
   Readiness,
   ResolutionResponse,
   ResourceOutcomeView,
@@ -94,6 +99,24 @@ export function CommandCenter({
   const [agentList, setAgentList] = useState<AgentDescriptorView[]>(initialAgents);
 
   const [selected, setSelected] = useState<string | null>(null);
+  /** The transcript this incident was dispatched with, if any. */
+  const [narrative, setNarrative] = useState('');
+  const [replay, setReplay] = useState<IncidentReplayView | null>(null);
+  const [replayBusy, setReplayBusy] = useState(false);
+  /** Survives `setIncident(null)` on close, because replay is what somebody
+   *  opens *after* an incident, not during one. */
+  const [replayableIncidentId, setReplayableIncidentId] = useState<string | null>(null);
+  /** Referrals staged in this session.
+   *
+   * The profile carries `open_referrals` only once a referral has been
+   * *filed* -- the backend writes it back with the case number the building
+   * department returned. A referral that is staged and awaiting a captain
+   * exists in the referral store and on no profile, so the console would have
+   * nothing to offer a captain to approve. Holding it here closes that gap
+   * without changing what a profile means. A reload loses it; the filed ones
+   * come back from the profile, which is the half that has to survive.
+   */
+  const [staged, setStaged] = useState<ReferralSummary[]>([]);
   const [profile, setProfile] = useState<BuildingProfileView | null>(null);
   const [timeline, setTimeline] = useState<TimelineEventView[]>([]);
   const [geometry, setGeometry] = useState<GeometryView | null>(null);
@@ -166,13 +189,17 @@ export function CommandCenter({
   }, []);
 
   const dispatch = useCallback(
-    async (addressId: string) => {
+    async (addressId: string, narrative = '', channel: IntakeChannel = 'CALL_911') => {
       setBusy(true);
       setNotice(null);
+      // The narrative is kept so the intake panel can check a quote against
+      // the offsets it claims. Without the source text, a span is unverifiable.
+      setNarrative(narrative);
       const result = await browserPost<OpenIncidentResponse>('/api/v1/incidents', {
         address: addressId,
         cad_ref: `CAD-${Date.now().toString().slice(-6)}`,
         alarm_level: 2,
+        ...(narrative ? { intake_narrative: narrative, intake_channel: channel } : {}),
       });
       setBusy(false);
       if (!result.ok) {
@@ -180,6 +207,8 @@ export function CommandCenter({
         return;
       }
       setIncident(result.data);
+      setReplayableIncidentId(result.data.incident_id);
+      setReplay(null);
       setOutcomes([]);
       announcedRef.current = 0;
       await openProfile(result.data.address_id);
@@ -188,6 +217,76 @@ export function CommandCenter({
     },
     [openProfile],
   );
+
+  /** Draft a referral from a conflict. The agent stops here, by design. */
+  const stageReferral = useCallback(
+    async (conflictId: string) => {
+      setBusy(true);
+      setNotice(null);
+      const result = await browserPost<{ referral_id: string; status: string }>(
+        `/api/v1/conflicts/${conflictId}/referral`,
+      );
+      setBusy(false);
+      if (!result.ok) {
+        setNotice(`Could not draft a referral: ${result.error.message}`);
+        return;
+      }
+      setStaged((current) => [
+        ...current.filter((r) => r.referral_id !== result.data.referral_id),
+        {
+          referral_id: result.data.referral_id,
+          status: result.data.status,
+          case_number: null,
+          conflict_id: conflictId,
+        },
+      ]);
+      setNotice('Referral drafted and staged. A captain files it.');
+    },
+    [],
+  );
+
+  /** The one human tap. This is the step an agent is not allowed to take. */
+  const approveReferral = useCallback(
+    async (referralId: string) => {
+      setBusy(true);
+      setNotice(null);
+      const result = await browserPost<{ case_number?: string }>(
+        `/api/v1/referrals/${referralId}/approve`,
+        { approved_by: 'captain' },
+      );
+      setBusy(false);
+      if (!result.ok) {
+        setNotice(`Could not file the referral: ${result.error.message}`);
+        return;
+      }
+      const caseNumber = result.data?.case_number;
+      // Filed referrals come back on the profile, so drop the staged copy.
+      setStaged((current) => current.filter((r) => r.referral_id !== referralId));
+      setNotice(
+        caseNumber
+          ? `Referral filed. The building department returned case ${caseNumber}.`
+          : 'Referral filed.',
+      );
+      if (selected) await openProfile(selected);
+    },
+    [openProfile, selected],
+  );
+
+  /** Re-read the sealed record and re-hash it. Answers a different question
+   *  from the log: not what happened, but whether the record still says so. */
+  const runReplay = useCallback(async () => {
+    if (!replayableIncidentId) return;
+    setReplayBusy(true);
+    const result = await browserGet<IncidentReplayView>(
+      `/api/v1/internal/audit/incidents/${replayableIncidentId}/replay`,
+    );
+    setReplayBusy(false);
+    if (!result.ok) {
+      setNotice(`Could not replay the incident: ${result.error.message}`);
+      return;
+    }
+    setReplay(result.data);
+  }, [replayableIncidentId]);
 
   const resolve = useCallback(
     async (submission: ResolutionSubmission) => {
@@ -436,10 +535,25 @@ export function CommandCenter({
                   selectedAddressId={selected}
                 />
               </div>
+              {profile && (
+                <div className="mt-4">
+                  <DispatchPanel
+                    addressId={profile.address_id}
+                    busy={busy}
+                    onDispatch={dispatch}
+                  />
+                </div>
+              )}
             </>
           )}
 
           {incident && <BriefPanel emission={latest} />}
+
+          {incident?.intake && (
+            <div className="mt-4">
+              <IntakePanel intake={incident.intake} narrative={narrative} />
+            </div>
+          )}
 
           {(geometry || incident) && (
             <div className="mt-4">
@@ -505,16 +619,7 @@ export function CommandCenter({
                 profile v{profile.profile_version}
               </span>
             </h2>
-            {!incident && (
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => dispatch(profile.address_id)}
-                className="border border-alarm px-3 py-1 text-micro uppercase tracking-wide text-alarm disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
-              >
-                Simulate CAD dispatch
-              </button>
-            )}
+
           </div>
 
           <div className="mt-3 grid gap-4 lg:grid-cols-3">
@@ -524,8 +629,10 @@ export function CommandCenter({
             <div className="space-y-4">
               <ConflictPanel
                 conflicts={profile.conflicts}
-                referrals={profile.open_referrals}
+                referrals={[...profile.open_referrals, ...staged]}
                 onResolve={resolve}
+                onStageReferral={stageReferral}
+                onApproveReferral={approveReferral}
                 busy={busy}
                 disabledReason={
                   incident
@@ -548,7 +655,15 @@ export function CommandCenter({
         <h2 id="audit-heading" className="mb-3 text-micro uppercase tracking-widest text-muted">
           Audit
         </h2>
-        <AuditConsole events={events} decisions={decisions} log={log} emissions={emissions} />
+        <AuditConsole
+          events={events}
+          decisions={decisions}
+          log={log}
+          emissions={emissions}
+          replay={replay}
+          onReplay={replayableIncidentId ? runReplay : undefined}
+          replayBusy={replayBusy}
+        />
       </section>
 
       <footer className="border-t border-line bg-surface px-4 py-3 text-micro leading-5 text-muted">

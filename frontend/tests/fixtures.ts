@@ -13,6 +13,7 @@ import type {
   DistrictStatsView,
   GeometryView,
   IncidentLogView,
+  IntakeResponse,
   OpenIncidentResponse,
   PolicyDecisionView,
   QueueView,
@@ -433,7 +434,51 @@ export const INCIDENT: OpenIncidentResponse = {
   brief: emission(),
   instant_brief_ms: 0.19,
   event_id: 'evt-1',
+  intake: null,
 };
+
+/** A 911 call that reported two things and woke two agents.
+ *
+ * The offsets index into `SAMPLE_NARRATIVE` below, so a test can assert the
+ * console actually checks a quote rather than trusting the backend's word.
+ */
+export const SAMPLE_NARRATIVE =
+  'Caller reports heavy smoke on the third floor. Two people are still inside.';
+
+export const INTAKE: IntakeResponse = {
+  incident_id: 'inc-1',
+  channel: 'CALL_911',
+  source_ref: 'call/inc-1',
+  accepted: true,
+  rejection_reason: null,
+  model_ref: 'vertex/gemini-3.5-flash',
+  screened: true,
+  screen: 'local+armor',
+  screen_findings: [],
+  reported: [
+    {
+      intake_key: 'intake.people_trapped',
+      reported_value: '2',
+      quoted_text: 'Two people are still inside.',
+      start_offset: 47,
+      end_offset: 75,
+    },
+  ],
+  unknowns: ['intake.access_obstruction'],
+  brief_version: 2,
+  woken: [
+    {
+      agent_ref: 'sensor-fusion@1.0.0',
+      intake_keys: ['intake.entrapment_reported'],
+      rule_ids: ['route.people-reported-inside'],
+      started: true,
+    },
+  ],
+  fired_rule_ids: ['route.people-reported-inside'],
+  unmatched_rule_ids: [],
+  withheld: [],
+};
+
 
 export const LOG: IncidentLogView = {
   incident_id: 'inc-1',

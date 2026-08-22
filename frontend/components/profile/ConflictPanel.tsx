@@ -25,12 +25,18 @@ export function ConflictPanel({
   conflicts,
   referrals,
   onResolve,
+  onStageReferral,
+  onApproveReferral,
   busy = false,
   disabledReason,
 }: {
   conflicts: ConflictView[];
   referrals: ReferralSummary[];
   onResolve?: (submission: ResolutionSubmission) => void;
+  /** Draft a referral from a conflict. Staged, never filed, until approved. */
+  onStageReferral?: (conflictId: string) => void;
+  /** The one human tap. A referral accuses a property owner, so a captain signs it. */
+  onApproveReferral?: (referralId: string) => void;
   busy?: boolean;
   /** Set when resolution is not available -- e.g. no incident is open. */
   disabledReason?: string;
@@ -66,6 +72,20 @@ export function ConflictPanel({
           <p className="mt-1 text-micro text-muted">
             Both records are retained. Only a human observation closes this.
           </p>
+
+          {/* A referral accuses a property owner and commits another agency,
+              so the agent drafts it and stops. Staging is not filing. */}
+          {onStageReferral && !referrals.some((r) => r.conflict_id === conflict.conflict_id) && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onStageReferral(conflict.conflict_id)}
+              className="mt-2 border border-line px-2 py-1 text-micro uppercase tracking-wide text-muted hover:text-ink disabled:opacity-50"
+              data-testid={`stage-referral-${conflict.conflict_id}`}
+            >
+              Draft building-department referral
+            </button>
+          )}
 
           {disabledReason ? (
             <p className="mt-3 border-l-2 border-line pl-2 text-micro text-muted">
@@ -166,16 +186,32 @@ export function ConflictPanel({
           <ul className="mt-2 space-y-1">
             {referrals.map((referral) => (
               <li key={referral.referral_id} className="text-micro">
-                <span className="font-mono text-ink">{referral.referral_id}</span>
-                <span className="mx-1 text-muted">·</span>
-                <span className={referral.case_number ? 'text-confirmed' : 'text-disputed'}>
-                  {referral.status}
-                </span>
-                {referral.case_number && (
-                  <>
-                    <span className="mx-1 text-muted">·</span>
-                    <span className="font-mono text-ink">case {referral.case_number}</span>
-                  </>
+                <div className="flex flex-wrap items-baseline gap-1">
+                  <span className="font-mono text-ink">{referral.referral_id}</span>
+                  <span className="text-muted">·</span>
+                  <span className={referral.case_number ? 'text-confirmed' : 'text-disputed'}>
+                    {referral.status}
+                  </span>
+                  {referral.case_number && (
+                    <>
+                      <span className="text-muted">·</span>
+                      <span className="font-mono text-ink">case {referral.case_number}</span>
+                    </>
+                  )}
+                </div>
+                {/* Awaiting approval is the whole point of the referral: an
+                    agent drafted it, a captain files it. The control only
+                    exists while that is true. */}
+                {!referral.case_number && onApproveReferral && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onApproveReferral(referral.referral_id)}
+                    className="mt-1 border border-alarm px-2 py-1 text-micro uppercase tracking-wide text-alarm disabled:opacity-50"
+                    data-testid={`approve-referral-${referral.referral_id}`}
+                  >
+                    Approve and file
+                  </button>
                 )}
               </li>
             ))}

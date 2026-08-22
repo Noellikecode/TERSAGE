@@ -203,7 +203,7 @@ describe('the dispatch transition', () => {
     renderConsole();
     fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
     await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /simulate cad dispatch/i }));
+    fireEvent.click(screen.getByTestId('dispatch-button'));
     await waitFor(() => expect(screen.getByLabelText('Active incident')).toBeInTheDocument());
   }
 
@@ -321,7 +321,7 @@ describe('degraded states', () => {
     renderConsole();
     fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
     await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /simulate cad dispatch/i }));
+    fireEvent.click(screen.getByTestId('dispatch-button'));
 
     await waitFor(() =>
       expect(

@@ -37,9 +37,18 @@ export function AgentRail({
   loop?: 'SLOW' | 'INCIDENT';
 }) {
   const pinned = new Map(subscriptions.map((s) => [s.agent_id, s.pinned_version]));
-  const shown = loop ? agents.filter((a) => a.loop === loop) : agents;
+  const inLoop = loop ? agents.filter((a) => a.loop === loop) : agents;
 
-  if (shown.length === 0) {
+  // Superseded agents stay in the catalog on purpose: a brief recorded two
+  // years ago names the agent version that produced it, and an id deleted
+  // from the registry turns that record into a reference to something this
+  // build has never heard of. But they are not the running fleet, and a rail
+  // that shows a retired agent as "idle" says the department runs thirteen
+  // agents when it schedules nine.
+  const shown = inLoop.filter((a) => !a.deprecated_at);
+  const superseded = inLoop.filter((a) => a.deprecated_at);
+
+  if (shown.length === 0 && superseded.length === 0) {
     return (
       <p className="border border-dashed border-line p-4 text-micro text-muted">
         No agents published. The registry reported an empty catalog.
@@ -111,6 +120,30 @@ export function AgentRail({
           </li>
         );
       })}
+
+      {superseded.length > 0 && (
+        <li className="border border-dashed border-line p-3" data-testid="superseded-agents">
+          <p className="text-micro uppercase tracking-widest text-muted">
+            Superseded · still catalogued
+          </p>
+          <ul className="mt-2 flex flex-wrap gap-1.5">
+            {superseded.map((agent) => (
+              <li key={agent.ref}>
+                <StatusPill
+                  tone="muted"
+                  label={`${agent.agent_id} @${agent.version}`}
+                  title={`${agent.role_summary} Superseded, no longer scheduled.`}
+                />
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-micro leading-5 text-muted">
+            Not scheduled and given no worker. They stay resolvable because a brief recorded
+            two years ago names the agent version that produced it, and an id deleted from the
+            catalog would make that record unreadable.
+          </p>
+        </li>
+      )}
     </ul>
   );
 }
