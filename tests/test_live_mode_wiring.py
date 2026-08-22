@@ -27,6 +27,7 @@ from firstdue.container import (
     build_live_clock_and_ids,
     build_memory_stores,
 )
+from firstdue.errors import ConfigurationError
 from firstdue.settings import AppEnv, Settings, WorkspaceWrites
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -202,3 +203,56 @@ class TestWorkspaceWritesIsItsOwnSwitch:
         assert isinstance(calendar, FakeCalendar)
         assert isinstance(mail, FakeMailer)
         assert isinstance(plans, FakeObjectStore)
+
+
+class TestADeployedEnvironmentCannotQuietlyServeFixtures:
+    """`use_fake_agents` defaults from `app_env`, not to a constant.
+
+    The failure this prevents is specific and silent: a Cloud Run service that
+    lost one environment variable comes up in fake mode, with real dispatches
+    arriving, a real console in front of an officer, and synthetic permits
+    behind it. Nothing errors. The brief is confident and invented.
+    """
+
+    @pytest.mark.parametrize("env", [AppEnv.STAGING, AppEnv.PRODUCTION])
+    def test_a_deployed_environment_refuses_to_start_unconfigured(
+        self, env: AppEnv, tmp_path: Path
+    ) -> None:
+        """Not "falls back to fake" -- refuses, naming what is missing."""
+        with pytest.raises(ConfigurationError) as raised:
+            Settings(
+                app_env=env,
+                fixtures_dir=REPO_ROOT / "fixtures",
+                demo_state_dir=tmp_path / ".demo-state",
+                log_json=False,
+            )
+        assert "GCP_PROJECT_ID" in str(raised.value.details["missing"])
+
+    @pytest.mark.parametrize("env", [AppEnv.LOCAL, AppEnv.TEST])
+    def test_a_developer_environment_still_needs_no_credentials(
+        self, env: AppEnv, tmp_path: Path
+    ) -> None:
+        """`make demo` and the suite must keep working with no Google auth."""
+        settings = Settings(
+            app_env=env,
+            fixtures_dir=REPO_ROOT / "fixtures",
+            demo_state_dir=tmp_path / ".demo-state",
+            log_json=False,
+        )
+        assert settings.use_fake_agents is True
+
+    def test_an_explicit_choice_wins_in_both_directions(self, tmp_path: Path) -> None:
+        """Deliberate is always allowed; accidental is what this guards against.
+
+        A staging environment brought up in fake mode on purpose -- to rehearse
+        a demo, say -- is legitimate, and the console labels it fake so nobody
+        mistakes it for the real thing.
+        """
+        deliberate = Settings(
+            app_env=AppEnv.STAGING,
+            use_fake_agents=True,
+            fixtures_dir=REPO_ROOT / "fixtures",
+            demo_state_dir=tmp_path / ".demo-state",
+            log_json=False,
+        )
+        assert deliberate.use_fake_agents is True
