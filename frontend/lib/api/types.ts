@@ -373,6 +373,8 @@ export interface OpenIncidentResponse {
   brief: BriefEmissionView;
   instant_brief_ms: number;
   event_id: string;
+  /** Present only when a 911 transcript or CAD narrative came with the call. */
+  intake: IntakeResponse | null;
 }
 
 export interface IncidentLogEntryView {
@@ -444,4 +446,113 @@ export interface PolicyDecisionView {
   decided_at: string;
   /** A constant. A model can explain a decision; it can never make one. */
   decided_by: string;
+}
+
+// ---------------------------------------------------------------- 911 intake
+
+/** What a caller said about one attribute, bound to where they said it.
+ *
+ * The offsets are not decoration. A reported value nobody can trace back to
+ * the transcript is a claim, so the console renders the quote and the console
+ * can therefore be checked against the call.
+ */
+export interface ReportedLine {
+  intake_key: string;
+  reported_value: string;
+  quoted_text: string;
+  start_offset: number;
+  end_offset: number;
+}
+
+export type IntakeChannel = 'CALL_911' | 'CAD_NARRATIVE';
+
+/** The result of reading a 911 transcript or a CAD narrative.
+ *
+ * `accepted: false` is the normal degraded case, not an error: the screen was
+ * down, the model was down, or the answer was malformed. The instant brief is
+ * already on screen by the time any of this runs, so the worst outcome is that
+ * it stays as it was — which is why nothing here throws.
+ */
+export interface IntakeResponse {
+  incident_id: string;
+  channel: IntakeChannel;
+  source_ref: string;
+  accepted: boolean;
+  rejection_reason: string | null;
+  model_ref: string;
+  /** Screened before the model saw it. Same screen ingested permits get. */
+  screened: boolean;
+  screen: string;
+  screen_findings: string[];
+  reported: ReportedLine[];
+  /** Attributes the call did not settle. Required, may be empty. */
+  unknowns: string[];
+  brief_version: number | null;
+  /** Agents this narrative woke, and the routing rules that fired.
+   *
+   * `agent_ref` is `agent-id@version`, not a bare id: which *version* woke is
+   * what a replay two years later has to be able to state.
+   */
+  woken: HandoffLine[];
+  fired_rule_ids: string[];
+  unmatched_rule_ids: string[];
+  /** Wakes the incident grant could not cover, naming the missing scopes.
+   *
+   * Withheld rather than fired-and-denied: a denial an officer cannot
+   * distinguish from a real one is worse than an honest absence.
+   */
+  withheld: WithheldLine[];
+}
+
+/** One agent the narrative woke. */
+export interface HandoffLine {
+  agent_ref: string;
+  intake_keys: string[];
+  rule_ids: string[];
+  started: boolean;
+}
+
+/** One agent the narrative would have woken, had the grant carried the scope. */
+export interface WithheldLine {
+  agent_ref: string;
+  missing_scopes: string[];
+  rule_ids: string[];
+}
+
+// --------------------------------------------------------------------- replay
+
+/** One log entry as the replay reconstructs it.
+ *
+ * `intact` is per entry: a replay that could only say "something changed"
+ * would not tell an investigator which record to distrust.
+ */
+export interface ReplayedEntryView {
+  sequence: number;
+  entry_id: string;
+  entry_type: string;
+  occurred_at: string;
+  content_hash: string;
+  content: Record<string, unknown>;
+  intact: boolean;
+  agent_versions: Record<string, string>;
+  profile_snapshot_id: string;
+}
+
+/** An incident reconstructed from its own record.
+ *
+ * This is the NIOSH view: two years after a fatal fire, what was the commander
+ * told, by which agent version, under which policy version. `intact` is the
+ * whole point — a replay that cannot detect tampering is not evidence.
+ */
+export interface IncidentReplayView {
+  incident_id: string;
+  entries: ReplayedEntryView[];
+  digest: string;
+  intact: boolean;
+  tampered_sequences: number[];
+  agent_versions: Record<string, string>;
+  policy_versions: string[];
+  profile_snapshot_id: string;
+  snapshot_available: boolean;
+  sealed_at: string | null;
 }

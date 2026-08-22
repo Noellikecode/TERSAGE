@@ -17,6 +17,7 @@ import { StatusPill } from '@/components/StatusPill';
 import type {
   AuditEventView,
   BriefEmissionView,
+  IncidentReplayView,
   IncidentLogView,
   PolicyDecisionView,
 } from '@/lib/api/types';
@@ -71,12 +72,19 @@ export function AuditConsole({
   decisions,
   log,
   emissions,
+  replay,
+  onReplay,
+  replayBusy = false,
 }: {
   events: AuditEventView[];
   decisions: PolicyDecisionView[];
   /** The ordered incident record, when an incident has run. */
   log: IncidentLogView | null;
   emissions: BriefEmissionView[];
+  /** The incident reconstructed from its own record. Null until requested. */
+  replay?: IncidentReplayView | null;
+  onReplay?: () => void;
+  replayBusy?: boolean;
 }) {
   const [action, setAction] = useState('ALL');
   const [kind, setKind] = useState('ALL');
@@ -200,9 +208,9 @@ export function AuditConsole({
         )}
       </section>
 
-      <section aria-labelledby="replay-heading">
-        <h3 id="replay-heading" className="text-micro uppercase tracking-widest text-muted">
-          Incident replay
+      <section aria-labelledby="log-heading">
+        <h3 id="log-heading" className="text-micro uppercase tracking-widest text-muted">
+          Incident log
         </h3>
         {log ? (
           <>
@@ -232,9 +240,96 @@ export function AuditConsole({
           </>
         ) : (
           <p className="mt-2 border border-dashed border-line p-3 text-micro leading-5 text-muted">
-            No incident log to replay. Opening an incident produces one, and every
-            brief version is written to it before it is displayed.
+            No incident log. Opening an incident produces one, and every brief
+            version is written to it before it is displayed.
           </p>
+        )}
+      </section>
+
+      {/* Replay is not the log. The log is what this process holds; the replay
+          is the incident reconstructed from its own record and re-hashed, so
+          it can say whether the record was altered. That distinction is the
+          reason version pinning exists here at all: a NIOSH investigator two
+          years on has to know not just what the commander was told, but that
+          nothing has been edited since. */}
+      <section aria-labelledby="replay-heading">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 id="replay-heading" className="text-micro uppercase tracking-widest text-muted">
+            Replay from the record
+          </h3>
+          {onReplay && (
+            <button
+              type="button"
+              disabled={replayBusy}
+              onClick={onReplay}
+              className="border border-line px-2 py-1 text-micro uppercase tracking-wide text-muted hover:text-ink disabled:opacity-50"
+              data-testid="replay-button"
+            >
+              {replayBusy ? 'Replaying…' : 'Replay incident'}
+            </button>
+          )}
+        </div>
+
+        {!replay ? (
+          <p className="mt-2 border border-dashed border-line p-3 text-micro leading-5 text-muted">
+            Not replayed. A replay re-reads the sealed record and re-computes every
+            content hash, so it answers a different question from the log above:
+            whether what is stored is still what was written.
+          </p>
+        ) : (
+          <div className="mt-2" data-testid="replay-result">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill
+                tone={replay.intact ? 'confirmed' : 'alarm'}
+                label={replay.intact ? 'record intact' : 'record altered'}
+              />
+              <span className="font-mono text-micro text-muted">
+                digest {replay.digest.slice(0, 12)}
+              </span>
+              <span className="text-micro text-muted">{replay.entries.length} entries</span>
+            </div>
+
+            {!replay.intact && (
+              <p className="mt-2 border border-alarm/40 bg-alarm/10 p-2 text-micro text-alarm">
+                Sequences {replay.tampered_sequences.join(', ')} do not match their recorded
+                hash. Those entries cannot be relied on.
+              </p>
+            )}
+
+            <dl className="mt-2 space-y-1 text-micro">
+              <div className="flex flex-wrap gap-2">
+                <dt className="uppercase tracking-widest text-muted">agent versions</dt>
+                <dd className="font-mono text-ink">
+                  {Object.entries(replay.agent_versions)
+                    .map(([agent, version]) => `${agent}@${version}`)
+                    .join('  ') || 'none recorded'}
+                </dd>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <dt className="uppercase tracking-widest text-muted">policy versions</dt>
+                <dd className="font-mono text-ink">
+                  {replay.policy_versions.join(', ') || 'none recorded'}
+                </dd>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <dt className="uppercase tracking-widest text-muted">profile snapshot</dt>
+                <dd className="font-mono text-ink">
+                  {replay.profile_snapshot_id}
+                  {/* An unavailable snapshot means the brief cannot be
+                      re-derived, only re-read. Say which. */}
+                  <span className={replay.snapshot_available ? 'text-confirmed' : 'text-disputed'}>
+                    {replay.snapshot_available ? ' · available' : ' · no longer available'}
+                  </span>
+                </dd>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <dt className="uppercase tracking-widest text-muted">sealed</dt>
+                <dd className="font-mono text-ink">
+                  {replay.sealed_at ?? 'not sealed — the incident is still open'}
+                </dd>
+              </div>
+            </dl>
+          </div>
         )}
       </section>
 

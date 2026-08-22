@@ -58,7 +58,7 @@ describe('the audit console', () => {
 
   it('says plainly when there is nothing to replay', () => {
     render(<AuditConsole events={EVENTS} decisions={DECISIONS} log={null} emissions={[]} />);
-    expect(screen.getByText(/No incident log to replay/)).toBeInTheDocument();
+    expect(screen.getByText(/No incident log\./)).toBeInTheDocument();
   });
 
   it('compares two brief versions field by field', () => {

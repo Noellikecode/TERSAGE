@@ -47,6 +47,9 @@ const CALLED: Array<[string, string]> = [
   ['/api/v1/incidents/{incident_id}/resources', 'post'],
   ['/api/v1/incidents/{incident_id}/approvals/{approval_id}', 'post'],
   ['/api/v1/incidents/{incident_id}/close', 'post'],
+  ['/api/v1/conflicts/{conflict_id}/referral', 'post'],
+  ['/api/v1/referrals/{referral_id}/approve', 'post'],
+  ['/api/v1/internal/audit/incidents/{incident_id}/replay', 'get'],
 ];
 
 describe('the console calls paths the backend actually serves', () => {
@@ -132,6 +135,46 @@ describe('the fields the console reads are declared', () => {
       'cold_start',
       'brief',
       'instant_brief_ms',
+    ]) {
+      expect(fields).toContain(field);
+    }
+  });
+  it('IntakeResponse carries everything the intake panel renders', () => {
+    const fields = properties('IntakeResponse');
+    for (const field of [
+      'accepted',
+      'rejection_reason',
+      'channel',
+      'model_ref',
+      'screen_findings',
+      'reported',
+      'unknowns',
+      'woken',
+      'fired_rule_ids',
+      'withheld',
+    ]) {
+      expect(fields).toContain(field);
+    }
+  });
+
+  it('ReportedLine carries the offsets that make a quote checkable', () => {
+    const fields = properties('ReportedLine');
+    for (const field of ['intake_key', 'reported_value', 'quoted_text', 'start_offset', 'end_offset']) {
+      expect(fields).toContain(field);
+    }
+  });
+
+  it('IncidentReplayView carries what an investigator has to be able to see', () => {
+    const fields = properties('IncidentReplayView');
+    for (const field of [
+      'intact',
+      'tampered_sequences',
+      'digest',
+      'agent_versions',
+      'policy_versions',
+      'profile_snapshot_id',
+      'snapshot_available',
+      'sealed_at',
     ]) {
       expect(fields).toContain(field);
     }

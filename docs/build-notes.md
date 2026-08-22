@@ -1228,3 +1228,101 @@ should install the extra; it does not yet.
 Cloud Run remains empty and the Model Armor API is enabled on `firstdue-dev`
 only. `VECTOR_SEARCH_ENABLED` is off, so semantic recall is still the in-memory
 lexical index — no Vector Search index has been created.
+
+---
+
+## Phase 13 — The console catches up with the backend
+
+**Date:** 2026-08-22
+
+Three capabilities existed in the API and on no screen, and a fourth was
+displayed under the wrong name. None of them would have been visible to a judge
+watching the demo, and two of them are beats the video storyboard already
+called for — so the shot list described a demo that could not be filmed.
+
+### What was built
+
+| # | Was | Now |
+|---|---|---|
+| 1 | Referrals rendered as read-only text; no way to draft or approve one | `Draft building-department referral` on an open conflict, `Approve and file` on a staged one, and the returned case number on screen |
+| 2 | The panel headed "Incident replay" showed the **live log** and never called the replay endpoint | The log is headed "Incident log"; a real `Replay from the record` section re-reads the sealed record and reports `intact`, the digest, the tampered sequences, the agent and policy versions, and whether the snapshot survives |
+| 3 | Dispatch sent an address; the 911 intake path had no way in | A transcript box, a channel selector, four synthetic sample calls, and a panel that renders every reported line with the caller's own quote and its offsets |
+| 4 | The fleet rail listed all thirteen descriptors as `IDLE` | Nine scheduled agents; the four superseded ones in their own group, with the NIOSH reason for keeping them |
+
+### Three defects found by running it rather than by reading it
+
+**`woken` is not a list of strings.** The typed client declared
+`woken: string[]`; the API returns `HandoffLine` objects. Every test passed --
+the contract test asserts a field *exists*, not its shape -- and the panel would
+have rendered `[object Object]` on screen. Found by making one real dispatch
+against the running backend. The types now carry `HandoffLine` and
+`WithheldLine`, and the rail shows `agent-id@version`, which is what a replay
+has to name.
+
+**A staged referral is on no profile.** `BuildingProfile.open_referrals` is
+written by `_write_back_case_number`, which runs **after** a referral is
+approved and filed. A referral that is staged and waiting for a captain exists
+in the referral store and nowhere else, so the console had nothing to offer a
+captain to approve -- the gate was real and unreachable. Worked around in the
+console, which holds referrals staged in this session and merges them with the
+profile's filed ones. **This is a backend gap, not a console one**: a reload
+loses a staged referral. The durable fix is either a `GET` that lists referrals
+for an address, or writing the record at staging time; both touch domain
+semantics and neither should be decided at 3am.
+
+**Replay was unreachable while it mattered.** The button was gated on the
+incident log, which the console fetches only on close. Replay is an
+investigator's view and the investigator arrives afterwards -- but the endpoint
+answers for an open incident too, and correctly reports `not sealed`. Now gated
+on an incident id that survives close.
+
+### Verified live, in a browser, against the running stack
+
+Not asserted from the tests. The console was served on :3000 against the API on
+:8000 in fake mode, and each flow was driven and read back:
+
+| Flow | Result |
+|---|---|
+| Draft → approve referral | `AWAITING_APPROVAL` → filed, case `REF-00001` returned and rendered, approve control gone |
+| Dispatch with a 911 transcript | five reported lines, each with quote and offsets, all marked `REPORTED`, `agency-notifier@1.0.0` and four others woken with their rule ids, `reported alarm level` named as unsettled |
+| Replay | `RECORD INTACT`, digest, 3 entries, agent versions, snapshot available, `not sealed — the incident is still open` |
+
+### Three real model calls, and what they settled
+
+Budgeted at 10–15; three were enough, and they are counted here because a
+"verified live" claim with no number behind it is the kind of thing this
+project's own notes refuse.
+
+| # | Call | Result |
+|---|---|---|
+| 1 | `triage` a permit that speaks to the keys | `EXTRACT`, accepted |
+| 2 | `triage` a delinquent-revenue notice that does not | **`SKIP`, accepted** |
+| 3 | `extract` a 911 transcript | accepted, **no values**, both keys returned as unknown |
+
+Call 2 is the one that matters. Phase 11 recorded that Gemma answered in the
+wrong shape, so every triage failed open and the cost saving Gemma exists for
+was not happening. The one-token contract now reaches a real `SKIP` against the
+real model -- the saving is real, and the claim "Gemma decides whether Gemini
+runs" is now true rather than aspirational.
+
+Call 3 is a quieter confirmation. The transcript says "third floor", which is
+the floor of *origin*, and the model was asked for `structure.stories`. It
+returned **unknown for both keys** rather than inferring a storey count from a
+floor number. That is the model declining to fill an UNKNOWN, observed rather
+than assumed.
+
+### Verification actually run
+
+| Check | Result |
+|---|---|
+| `npm run test` (console) | **132 passed** (87 before; +45) |
+| `npm run lint` / `typecheck` / `build` | clean; production build succeeds |
+| `uv run pytest` | 1001 passed, 47 skipped — unchanged |
+| Live browser walkthrough | all three flows driven and read back |
+| Real Vertex calls | **3**, itemised above |
+
+### Not done
+
+The 3D massing model needed no work: `GeometryCanvas` already extrudes the
+levels, registers the thermal ramp onto the faces, and offers ISO and the four
+face views. Verified rendering with a live WebGL2 context at 960×716.
