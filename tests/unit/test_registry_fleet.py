@@ -1,10 +1,12 @@
-"""The eight agent descriptors.
+"""The agent descriptors: nine scheduled, four superseded but still catalogued.
 
 A descriptor is a contract the gateway and the console read, so these tests are
 about the contract being complete and consistent -- not about the prose.
 """
 
 from __future__ import annotations
+
+from datetime import UTC, datetime
 
 import pytest
 
@@ -13,30 +15,65 @@ from firstdue.domain.enums import Capability, Loop
 from firstdue.domain.identity import WRITE_SCOPES
 from firstdue.errors import NotFoundError
 from firstdue.registry.descriptors import (
+    ACTIVE_FLEET,
     FLEET,
     FLEET_VERSION,
     descriptor_for,
     fleet_descriptors,
 )
 
-EXPECTED_AGENTS = {
+#: The agents that are scheduled and given a worker.
+EXPECTED_ACTIVE = {
     "records-watcher",
     "hazard-watcher",
     "geometry-watcher",
-    "conflict-detector",
-    "survey-ranker",
+    "structure-watch",
     "referral-clerk",
-    "incident-controller",
-    "brief-reconciler",
+    "incident-interceptor",
     "sensor-fusion",
     "agency-notifier",
     "incident-recorder",
 }
 
+#: Superseded, still catalogued. Four agents merged into two.
+EXPECTED_DEPRECATED = {
+    "conflict-detector",
+    "survey-ranker",
+    "incident-controller",
+    "brief-reconciler",
+}
+
 
 def test_the_fleet_is_the_declared_agents() -> None:
-    assert {d.agent_id for d in FLEET} == EXPECTED_AGENTS
-    assert len(FLEET) == 11
+    assert {d.agent_id for d in ACTIVE_FLEET} == EXPECTED_ACTIVE
+    assert len(ACTIVE_FLEET) == 9
+    assert {d.agent_id for d in FLEET} == EXPECTED_ACTIVE | EXPECTED_DEPRECATED
+
+
+def test_a_superseded_agent_stays_resolvable_for_replay() -> None:
+    """Version pinning exists for NIOSH, so a retired id must still resolve.
+
+    Every brief records the agent versions that produced it. An ``agent_id``
+    deleted from the catalog turns a two-year-old recorded run into a reference
+    to something this build has never heard of -- the replay could not say what
+    produced the brief a commander acted on.
+    """
+    for agent_id in EXPECTED_DEPRECATED:
+        descriptor = descriptor_for(agent_id)
+        assert descriptor.deprecated_at is not None
+        assert descriptor.is_deprecated(datetime(2026, 8, 22, tzinfo=UTC))
+
+
+def test_nothing_deprecated_is_routed_or_given_a_worker() -> None:
+    """Catalogued is not scheduled. A retired agent gets no subscription.
+
+    A push subscription pointed at an agent nobody runs dead-letters forever
+    while every dashboard looks healthy -- phase 2 flagged exactly this.
+    """
+    from firstdue.registry.routing import CONSUMES
+
+    for agent_id in EXPECTED_DEPRECATED:
+        assert agent_id not in CONSUMES
 
 
 def test_tier_two_is_read_by_the_county_agent_the_department_pins() -> None:
@@ -160,7 +197,7 @@ def test_every_descriptor_publishes_the_threshold_the_gateway_declares() -> None
     docs/build-notes.md. What this test does settle is that the two
     declarations cannot drift apart without somebody noticing.
     """
-    for descriptor in FLEET:
+    for descriptor in ACTIVE_FLEET:
         assert descriptor.approval_threshold is _enforced_threshold(descriptor), (
             f"{descriptor.agent_id} publishes {descriptor.approval_threshold} "
             f"but the gateway enforces {_enforced_threshold(descriptor)} "
@@ -200,3 +237,86 @@ def test_descriptors_are_returned_in_deterministic_order() -> None:
 def test_an_unknown_agent_is_not_guessed_at() -> None:
     with pytest.raises(NotFoundError):
         descriptor_for("thermal-oracle")
+
+
+def test_no_live_code_path_stamps_a_superseded_agent_id() -> None:
+    """A retired id must not be written onto a record being produced today.
+
+    Found for real during the merge: `services/surveys.py` still stamped
+    ``survey-ranker`` as `produced_by_agent` on the fact a physical survey
+    produces -- a **human-verified** value, the most authoritative thing this
+    system holds, with its provenance pointing at an agent nothing runs any
+    more. `services/materialization.py` had the same problem with
+    ``conflict-detector`` on every conflict timeline event.
+
+    Nothing failed, which is why it survived: a deprecated descriptor still
+    resolves, so the id was valid and merely untrue. This test reads the source
+    rather than the behaviour, because the behaviour is indistinguishable.
+    """
+    import re
+    from pathlib import Path
+
+    source_root = Path(__file__).resolve().parents[2] / "backend" / "src" / "firstdue"
+    # String literals only: prose in docstrings and comments explaining the
+    # supersession is exactly what this file wants people to write.
+    literal = re.compile(r"""["']([a-z-]+)["']""")
+    offenders: list[str] = []
+    for path in sorted(source_root.rglob("*.py")):
+        if path.name == "descriptors.py":
+            continue  # the catalog is where a retired id is supposed to appear
+        for number, line in enumerate(path.read_text().splitlines(), start=1):
+            stripped = line.lstrip()
+            if stripped.startswith("#") or stripped.startswith(('"""', "'''")):
+                continue
+            for match in literal.findall(line):
+                if match in EXPECTED_DEPRECATED:
+                    offenders.append(f"{path.name}:{number} -> {match}")
+    assert not offenders, "superseded agent ids on live paths: " + "; ".join(offenders)
+
+
+def test_no_agent_declares_a_budget_tighter_than_the_work_it_runs() -> None:
+    """`latency_target_ms` is a hard cap, so under-declaring it times work out.
+
+    `budget_seconds` takes `min(declared, remaining)`, which makes a
+    descriptor's latency target a ceiling on every run of that agent rather
+    than an aspiration. `incident-interceptor` shipped at 500 ms for one
+    release -- the instant brief's budget -- while the two model-bearing stages
+    it owns ask for 4 s and 6 s. Fake adapters answer in microseconds, so the
+    entire suite passed and the failure would have arrived on the first live
+    Vertex call, as a timeout on every incident with a narrative.
+    """
+    from firstdue.incident.intake import INTAKE_DEADLINE_MS
+    from firstdue.incident.reconciler import NARRATIVE_DEADLINE_MS
+
+    interceptor = descriptor_for("incident-interceptor")
+    slowest = max(INTAKE_DEADLINE_MS, NARRATIVE_DEADLINE_MS)
+    assert interceptor.latency_target_ms >= slowest, (
+        f"incident-interceptor declares {interceptor.latency_target_ms} ms but runs a "
+        f"{slowest} ms stage; budget_seconds would cap and time it out"
+    )
+
+
+def test_every_incident_agent_can_be_covered_by_an_incident_grant() -> None:
+    """A declared scope the grant cannot carry is a run that always denies.
+
+    The runtime checks `descriptor.required_scopes <= grant.scopes`, so an
+    incident agent declaring anything outside `INCIDENT_SCOPES` is refused on
+    every incident -- correctly, and indistinguishably in a log from a denial
+    worth investigating.
+
+    Both directions of this have now bitten: `agency-notifier` under-declared
+    and worked by accident until someone narrowed the grant, and
+    `incident-recorder` declared `read:audit`, which it never reads, and failed
+    the moment routing sent work to it.
+    """
+    from firstdue.domain.enums import Loop
+    from firstdue.services.grants import INCIDENT_SCOPES
+
+    for descriptor in ACTIVE_FLEET:
+        if descriptor.loop is not Loop.INCIDENT:
+            continue
+        uncovered = descriptor.required_scopes - INCIDENT_SCOPES
+        assert not uncovered, (
+            f"{descriptor.agent_id} declares {sorted(str(s) for s in uncovered)}, "
+            "which an incident grant cannot carry"
+        )

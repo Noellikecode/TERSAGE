@@ -1,6 +1,6 @@
 """Brief emissions.
 
-Two invariants live here and are enforced by the type, not by discipline:
+Three invariants live here and are enforced by the type, not by discipline:
 
 1. **The instant stage contains no model call.** ``model_invoked`` must be
    ``False`` when ``stage is INSTANT``. Speed and safety point the same way: the
@@ -9,6 +9,10 @@ Two invariants live here and are enforced by the type, not by discipline:
 2. **Every emission is persisted before it is transmitted.** ``persisted_at`` is
    set by the log writer; :meth:`BriefEmission.require_persisted` is the only
    sanctioned gate in front of a transport, and it raises otherwise.
+3. **Reported is not observed.** A line carrying ``reported_note`` -- something
+   a 911 caller or a dispatcher said -- can never be ``CONFIRMED``, can never
+   cite a fact id, and can never claim a source type. A caller's "three floors"
+   and a surveyed storey count must not render alike.
 
 Unknowns are never omitted. An emission always carries its ``unknowns``,
 ``unavailable`` and ``withheld`` lists, so "we could not check" is on screen
@@ -66,6 +70,42 @@ class BriefItem(BaseModel):
     derivation_note: str | None = Field(default=None, max_length=300)
     #: Present when a source was withheld by jurisdiction or statute.
     withheld_note: str | None = Field(default=None, max_length=300)
+    #: Present when a person *reported* this rather than a record stating it --
+    #: a 911 caller, a dispatcher's narrative. Names who said it and what is on
+    #: file instead, and its presence is what :meth:`_check_reported` keys on.
+    reported_note: str | None = Field(default=None, max_length=300)
+
+    @model_validator(mode="after")
+    def _check_reported(self) -> Self:
+        """A reported line can never look like a confirmed one.
+
+        Three clauses, one rule. Somebody under stress on a phone said this:
+
+        * it is not ``CONFIRMED``, because nothing confirmed it;
+        * it carries no ``fact_id``, because no fact was written -- the intake
+          does not author structural facts (section 6), so a fact id here would
+          be a reference to something that does not exist;
+        * it carries no ``provenance`` source type, because the source types are
+          the merge tiers, and a caller report that had one would sort against
+          filed records instead of standing beside them.
+
+        Without this rule the failure is silent and specific: a caller's "three
+        floors" renders identically to a surveyed storey count, and the officer
+        reading the brief has no way to tell which one they are looking at.
+        """
+        if self.reported_note is None:
+            return self
+        if self.status is AssertionStatus.CONFIRMED:
+            raise ValidationError(
+                "a reported brief item may not be rendered as confirmed",
+                details={"label": self.label},
+            )
+        if self.fact_id is not None or self.provenance is not None:
+            raise ValidationError(
+                "a reported brief item carries no fact id and no source type",
+                details={"label": self.label},
+            )
+        return self
 
 
 class BriefSection(BaseModel):

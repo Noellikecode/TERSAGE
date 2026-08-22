@@ -1224,6 +1224,41 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HandoffLine": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_ref": {
+            "title": "Agent Ref",
+            "type": "string"
+          },
+          "intake_keys": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Intake Keys",
+            "type": "array"
+          },
+          "rule_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rule Ids",
+            "type": "array"
+          },
+          "started": {
+            "title": "Started",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "agent_ref",
+          "rule_ids",
+          "intake_keys",
+          "started"
+        ],
+        "title": "HandoffLine",
+        "type": "object"
+      },
       "IncidentReplayView": {
         "additionalProperties": false,
         "description": "What a commander was shown, reconstructed from what was recorded.",
@@ -1299,6 +1334,171 @@
           "digest"
         ],
         "title": "IncidentReplayView",
+        "type": "object"
+      },
+      "IntakeChannel": {
+        "description": "How the narrative reached us.\n\nRecorded on every reported item, because \"the caller said\" and \"the\ndispatcher wrote\" are different claims with different failure modes, and a\ncommander reading the brief is entitled to know which one they are looking\nat.",
+        "enum": [
+          "CALL_911",
+          "CAD_NARRATIVE"
+        ],
+        "title": "IntakeChannel",
+        "type": "string"
+      },
+      "IntakeRequest": {
+        "additionalProperties": false,
+        "description": "A narrative arriving after the dispatch: a callback, a CAD update.",
+        "properties": {
+          "channel": {
+            "$ref": "#/components/schemas/IntakeChannel",
+            "default": "CALL_911"
+          },
+          "narrative": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Narrative",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          }
+        },
+        "required": [
+          "narrative"
+        ],
+        "title": "IntakeRequest",
+        "type": "object"
+      },
+      "IntakeResponse": {
+        "additionalProperties": false,
+        "description": "What the intake was read as, and where it was routed.\n\nDeliberately explicit rather than a dump of the internal result: the\ndifference between what was *reported* and what the fleet then *did* is the\nthing a console has to render distinctly, so the API states both.",
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "brief_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brief Version"
+          },
+          "channel": {
+            "title": "Channel",
+            "type": "string"
+          },
+          "fired_rule_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Fired Rule Ids",
+            "type": "array"
+          },
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "model_ref": {
+            "title": "Model Ref",
+            "type": "string"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          },
+          "reported": {
+            "items": {
+              "$ref": "#/components/schemas/ReportedLine"
+            },
+            "title": "Reported",
+            "type": "array"
+          },
+          "screen": {
+            "title": "Screen",
+            "type": "string"
+          },
+          "screen_findings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Screen Findings",
+            "type": "array"
+          },
+          "screened": {
+            "title": "Screened",
+            "type": "boolean"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          },
+          "unknowns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unknowns",
+            "type": "array"
+          },
+          "unmatched_rule_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Unmatched Rule Ids",
+            "type": "array"
+          },
+          "withheld": {
+            "items": {
+              "$ref": "#/components/schemas/WithheldLine"
+            },
+            "title": "Withheld",
+            "type": "array"
+          },
+          "woken": {
+            "items": {
+              "$ref": "#/components/schemas/HandoffLine"
+            },
+            "title": "Woken",
+            "type": "array"
+          }
+        },
+        "required": [
+          "incident_id",
+          "channel",
+          "source_ref",
+          "accepted",
+          "model_ref",
+          "screen",
+          "screen_findings",
+          "screened",
+          "reported",
+          "unknowns",
+          "fired_rule_ids",
+          "unmatched_rule_ids",
+          "woken",
+          "withheld"
+        ],
+        "title": "IntakeResponse",
         "type": "object"
       },
       "IntegerValue": {
@@ -1567,6 +1767,22 @@
             ],
             "title": "Dispatched At"
           },
+          "intake_channel": {
+            "$ref": "#/components/schemas/IntakeChannel",
+            "default": "CALL_911"
+          },
+          "intake_narrative": {
+            "anyOf": [
+              {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Intake Narrative"
+          },
           "mutual_aid_agreement_id": {
             "anyOf": [
               {
@@ -1633,6 +1849,16 @@
           "instant_brief_ms": {
             "title": "Instant Brief Ms",
             "type": "number"
+          },
+          "intake": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IntakeResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "profile_snapshot_id": {
             "title": "Profile Snapshot Id",
@@ -2076,6 +2302,41 @@
           "intact"
         ],
         "title": "ReplayedEntryView",
+        "type": "object"
+      },
+      "ReportedLine": {
+        "additionalProperties": false,
+        "description": "One thing the narrative said, as the API renders it.",
+        "properties": {
+          "end_offset": {
+            "title": "End Offset",
+            "type": "integer"
+          },
+          "intake_key": {
+            "title": "Intake Key",
+            "type": "string"
+          },
+          "quoted_text": {
+            "title": "Quoted Text",
+            "type": "string"
+          },
+          "reported_value": {
+            "title": "Reported Value",
+            "type": "string"
+          },
+          "start_offset": {
+            "title": "Start Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "intake_key",
+          "reported_value",
+          "start_offset",
+          "end_offset",
+          "quoted_text"
+        ],
+        "title": "ReportedLine",
         "type": "object"
       },
       "ResolutionRequest": {
@@ -3042,6 +3303,36 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "WithheldLine": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_ref": {
+            "title": "Agent Ref",
+            "type": "string"
+          },
+          "missing_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing Scopes",
+            "type": "array"
+          },
+          "rule_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Rule Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agent_ref",
+          "rule_ids",
+          "missing_scopes"
+        ],
+        "title": "WithheldLine",
+        "type": "object"
+      },
       "WithheldValue": {
         "additionalProperties": false,
         "description": "Statutorily or jurisdictionally withheld. The requester learns it exists.",
@@ -3589,7 +3880,7 @@
     },
     "/api/v1/incidents": {
       "post": {
-        "description": "Open an incident and return the instant brief.\n\nThe brief in this response is already in the incident log -- it is persisted\nbefore it is returned, exactly as it is before it is streamed.",
+        "description": "Open an incident and return the instant brief.\n\nThe brief in this response is already in the incident log -- it is persisted\nbefore it is returned, exactly as it is before it is streamed.\n\nA narrative sent with the dispatch is read **after** that, never before.\n``brief`` is version 1 and model-free whatever the intake does, and the\nbudget measured against ``instant_brief_budget_ms`` covers stage one alone,\nbecause stage one is the only thing with nothing to wait for.",
         "operationId": "open_incident_api_v1_incidents_post",
         "requestBody": {
           "content": {
@@ -3971,6 +4262,59 @@
           }
         },
         "summary": "Analyse a frame: imagery in, thermal and massing model out",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/intake": {
+      "post": {
+        "description": "Read a narrative that arrived after the dispatch.\n\nA callback, a second caller, a dispatcher updating the CAD comment. It goes\nthrough exactly the same path the dispatch narrative does: screened, read\ninto a closed key set with every value bound to a span in the transcript,\nrendered as a **marked amendment** whose lines can never read as confirmed,\nand routed to the other incident agents by their declared capabilities.\n\nA write, not a read: it amends the brief and appends to the incident log.\n\n202 rather than 201, and deliberately so. Nothing here creates a resource of\nits own -- the narrative was accepted and what it produced is an amendment\nto a document that already exists.",
+        "operationId": "read_intake_api_v1_incidents__incident_id__intake_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IntakeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntakeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Read a 911 or CAD narrative and route the incident",
         "tags": [
           "incident"
         ]

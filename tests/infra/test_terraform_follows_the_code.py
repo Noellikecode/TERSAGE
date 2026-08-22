@@ -26,7 +26,7 @@ import pytest
 from firstdue.adapters.firestore.client import COLLECTION_NAMES
 from firstdue.domain.enums import Scope
 from firstdue.domain.events import Topic
-from firstdue.registry.descriptors import FLEET
+from firstdue.registry.descriptors import ACTIVE_FLEET
 
 TERRAFORM = Path(__file__).resolve().parents[2] / "infra" / "terraform"
 POLICY = TERRAFORM / "policy"
@@ -77,7 +77,7 @@ def test_every_topic_has_terraform() -> None:
 def test_every_agent_has_a_service_account_entry() -> None:
     agents = _load("agents.json")["agents"]
 
-    assert set(agents) == {descriptor.agent_id for descriptor in FLEET}
+    assert set(agents) == {descriptor.agent_id for descriptor in ACTIVE_FLEET}
 
 
 def test_agent_scopes_match_their_descriptors() -> None:
@@ -88,7 +88,7 @@ def test_agent_scopes_match_their_descriptors() -> None:
     """
     agents = _load("agents.json")["agents"]
 
-    for descriptor in FLEET:
+    for descriptor in ACTIVE_FLEET:
         assert agents[descriptor.agent_id]["scopes"] == sorted(
             scope.value for scope in descriptor.required_scopes
         ), descriptor.agent_id
@@ -99,7 +99,7 @@ def test_every_scope_maps_to_roles() -> None:
     policy = _load("agents.json")
     mapped = set(policy["scope_roles"])
 
-    for descriptor in FLEET:
+    for descriptor in ACTIVE_FLEET:
         for scope in descriptor.required_scopes:
             assert scope.value in mapped, f"{scope.value} has no role mapping"
 
@@ -296,10 +296,10 @@ def test_the_routing_policy_matches_the_code() -> None:
 
 
 def test_every_fleet_agent_has_a_worker_and_no_others_do() -> None:
-    from firstdue.registry.descriptors import FLEET
+    from firstdue.registry.descriptors import ACTIVE_FLEET
 
     agents = set(_subscriptions_policy()["agents"])
-    assert agents == {d.agent_id for d in FLEET}
+    assert agents == {d.agent_id for d in ACTIVE_FLEET}
 
 
 def test_every_routed_topic_exists() -> None:

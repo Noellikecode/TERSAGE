@@ -8,21 +8,6 @@
     "incident.opened"
    ]
   },
-  "brief-reconciler": {
-   "loop": "incident",
-   "topics": [
-    "conflict.detected",
-    "fact.observed",
-    "incident.opened"
-   ]
-  },
-  "conflict-detector": {
-   "loop": "slow",
-   "topics": [
-    "fact.observed",
-    "fact.written"
-   ]
-  },
   "geometry-watcher": {
    "loop": "slow",
    "topics": [
@@ -36,9 +21,11 @@
     "source.poll"
    ]
   },
-  "incident-controller": {
+  "incident-interceptor": {
    "loop": "incident",
    "topics": [
+    "conflict.detected",
+    "fact.observed",
     "incident.closed",
     "incident.opened"
    ]
@@ -74,10 +61,12 @@
     "thermal.frame.received"
    ]
   },
-  "survey-ranker": {
+  "structure-watch": {
    "loop": "slow",
    "topics": [
     "conflict.detected",
+    "fact.observed",
+    "fact.written",
     "profile.materialized"
    ]
   }

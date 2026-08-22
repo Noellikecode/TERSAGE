@@ -18,7 +18,7 @@ from collections.abc import AsyncIterator, Mapping
 from typing import Any, Final
 
 from firstdue.domain.facts import SourceSpan
-from firstdue.domain.keys import Keys
+from firstdue.domain.keys import IntakeKeys, Keys
 from firstdue.errors import UpstreamTimeoutError
 from firstdue.extraction.triage import NARRATIVE_KEYS
 from firstdue.extraction.triage import triage as local_triage
@@ -58,6 +58,60 @@ _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
         re.compile(r"\b(stairwell\s+(?:partially\s+)?obstructed)\b", re.IGNORECASE),
     ),
     (Keys.HAZARD_SOLAR_ARRAY, re.compile(r"\b(solar\s+(?:array|panels?))\b", re.IGNORECASE)),
+    # ---- what a 911 caller or a CAD dispatcher says ----
+    #
+    # Separate rows rather than a second client, because the intake asks the
+    # same verb the same way: a document, a closed key set, and a span per
+    # value. A key is only tried when the caller asked for it, so these never
+    # fire on a permit and the structural rows never fire on a transcript.
+    (
+        IntakeKeys.REPORTED_OCCUPANCY,
+        re.compile(
+            r"\b(apartment building|apartment|single[- ]family home|duplex|row house|"
+            r"restaurant|warehouse|office building|school|hotel|corner store|garage)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        IntakeKeys.ENTRAPMENT_REPORTED,
+        re.compile(
+            r"\b((?:two|three|four|several|some)?\s?(?:people|persons?|kids|children|"
+            r"residents?)\s+(?:are\s+)?still inside|still inside|somebody is inside|"
+            r"someone is inside|trapped)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        IntakeKeys.HAZMAT_REPORTED,
+        re.compile(
+            r"\b(propane cylinders|propane tanks?|propane|acetylene|gasoline|diesel|"
+            r"natural gas|chlorine|ammonia|pool chemicals|paint thinner)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        IntakeKeys.REPORTED_FLOOR_OF_ORIGIN,
+        re.compile(
+            r"\b((?:ground|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|"
+            r"tenth|eleventh|twelfth|\d{1,2}(?:st|nd|rd|th)?)\s+floor)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        IntakeKeys.REPORTED_ALARM_LEVEL,
+        re.compile(
+            r"\b((?:second|third|fourth|fifth|\d)\s+alarm)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        IntakeKeys.ACCESS_NOTE,
+        re.compile(
+            r"\b(driveway is blocked|street is blocked|gate is locked|locked gate|"
+            r"narrow alley|hydrant is blocked|no rear access)\b",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 

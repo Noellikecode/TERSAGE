@@ -43,7 +43,7 @@ from firstdue.ports.repositories import (
 logger = get_logger(__name__)
 
 #: The agent this service acts as. Recorded on every timeline event it writes.
-ACTOR = "conflict-detector"
+ACTOR = "structure-watch"
 
 
 class MaterializationOutcome(BaseModel):

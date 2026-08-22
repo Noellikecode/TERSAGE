@@ -33,19 +33,31 @@ CONSUMES: Final[dict[str, frozenset[Topic]]] = {
     # Geometry re-derives when a permit invalidates what it measured, which is
     # the dependency that keeps the two watchers from both polling blindly.
     "geometry-watcher": frozenset({Topic.SOURCE_POLL, Topic.GEOMETRY_STALE}),
-    # The engine runs on every new fact, which is what makes a disagreement
-    # surface within one pass rather than at the next sweep.
-    "conflict-detector": frozenset({Topic.FACT_WRITTEN, Topic.FACT_OBSERVED}),
-    # Ranking is a sweep, and a new conflict is worth re-ranking for.
-    "survey-ranker": frozenset({Topic.CONFLICT_DETECTED, Topic.PROFILE_MATERIALIZED}),
+    # Detection runs on every new fact, so a disagreement surfaces within one
+    # pass rather than at the next sweep; ranking then re-runs on what it just
+    # found. One agent, one reading of the corpus, so the severity and the rank
+    # cannot disagree about what it said.
+    "structure-watch": frozenset(
+        {
+            Topic.FACT_WRITTEN,
+            Topic.FACT_OBSERVED,
+            Topic.CONFLICT_DETECTED,
+            Topic.PROFILE_MATERIALIZED,
+        }
+    ),
     # A referral is drafted from a queue row and filed when a human approves.
     "referral-clerk": frozenset({Topic.QUEUE_RANKED, Topic.APPROVAL_STAGED}),
-    # The incident loop opens on a CAD dispatch, which arrives over HTTP.
-    "incident-controller": frozenset({Topic.INCIDENT_OPENED, Topic.INCIDENT_CLOSED}),
-    # The brief is rebuilt when the incident opens and amended when anything
-    # observed about the building changes.
-    "brief-reconciler": frozenset(
-        {Topic.INCIDENT_OPENED, Topic.FACT_OBSERVED, Topic.CONFLICT_DETECTED}
+    # The incident loop opens on a CAD dispatch, which arrives over HTTP. The
+    # brief is then rebuilt on open and amended whenever anything observed
+    # about the building changes -- one agent for both, because stage one and
+    # the stages after it are the same document.
+    "incident-interceptor": frozenset(
+        {
+            Topic.INCIDENT_OPENED,
+            Topic.INCIDENT_CLOSED,
+            Topic.FACT_OBSERVED,
+            Topic.CONFLICT_DETECTED,
+        }
     ),
     "sensor-fusion": frozenset({Topic.THERMAL_FRAME_RECEIVED}),
     "agency-notifier": frozenset({Topic.INCIDENT_OPENED, Topic.APPROVAL_STAGED}),

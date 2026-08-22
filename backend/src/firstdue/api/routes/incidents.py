@@ -37,8 +37,10 @@ from firstdue.domain.enums import BenchmarkType
 from firstdue.errors import NotFoundError, ValidationError
 from firstdue.incident.controller import IncidentController
 from firstdue.incident.fusion import ThermalFrame
+from firstdue.incident.intake import MAX_NARRATIVE_CHARS, IntakeChannel
+from firstdue.incident.interceptor import InterceptResult
 from firstdue.incident.reconciler import NarrativeChunk
-from firstdue.incident.session import get_session, sessions
+from firstdue.incident.session import IncidentSession, get_session, sessions
 from firstdue.observability.context import get_correlation_id
 from firstdue.observability.logging import get_logger
 from firstdue.observability.metrics import METRICS
@@ -58,10 +60,97 @@ class OpenIncidentRequest(BaseModel):
     #: normalises it; this endpoint does not guess.
     address: str = Field(min_length=1, max_length=200)
     cad_ref: str = Field(min_length=1, max_length=120)
+    #: CAD's alarm level, and the only one that counts. A level the caller
+    #: reported is recorded beside it and applied to nothing -- this number
+    #: bounds the incident grant.
     alarm_level: int = Field(default=1, ge=1, le=5)
     dispatched_at: datetime | None = None
     responding_agency_id: str = Field(default="sffd", max_length=120)
     mutual_aid_agreement_id: str | None = Field(default=None, max_length=120)
+    #: The 911 transcript or CAD narrative, if one came with the dispatch. It is
+    #: read **after** the instant brief has been persisted and is in this
+    #: response, so a slow or unavailable model costs the amendment and never
+    #: the brief.
+    intake_narrative: str | None = Field(default=None, max_length=MAX_NARRATIVE_CHARS)
+    intake_channel: IntakeChannel = IntakeChannel.CALL_911
+
+
+class IntakeRequest(BaseModel):
+    """A narrative arriving after the dispatch: a callback, a CAD update."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    narrative: str = Field(min_length=1, max_length=MAX_NARRATIVE_CHARS)
+    channel: IntakeChannel = IntakeChannel.CALL_911
+    #: What to cite the reported values against. Defaults to the incident id.
+    source_ref: str | None = Field(default=None, max_length=200)
+
+
+class ReportedLine(BaseModel):
+    """One thing the narrative said, as the API renders it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intake_key: str
+    reported_value: str
+    #: Where in the narrative it was read. A value nobody can trace back to the
+    #: transcript is a claim, so the offsets travel with it.
+    start_offset: int
+    end_offset: int
+    quoted_text: str
+
+
+class HandoffLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_ref: str
+    rule_ids: list[str]
+    intake_keys: list[str]
+    started: bool
+
+
+class WithheldLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_ref: str
+    rule_ids: list[str]
+    missing_scopes: list[str]
+
+
+class IntakeResponse(BaseModel):
+    """What the intake was read as, and where it was routed.
+
+    Deliberately explicit rather than a dump of the internal result: the
+    difference between what was *reported* and what the fleet then *did* is the
+    thing a console has to render distinctly, so the API states both.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str
+    channel: str
+    source_ref: str
+    #: False when the narrative was not read at all -- no model, screen down,
+    #: response refused. Never an error: the brief already landed.
+    accepted: bool
+    rejection_reason: str | None = None
+    model_ref: str
+    screen: str
+    screen_findings: list[str]
+    #: True when the screen removed something in the narrative that tried to
+    #: instruct the model.
+    screened: bool
+    reported: list[ReportedLine]
+    unknowns: list[str]
+    fired_rule_ids: list[str]
+    #: Rules that fired and matched no catalogued incident agent. A stated gap.
+    unmatched_rule_ids: list[str]
+    woken: list[HandoffLine]
+    #: Agents a rule matched that this incident's grant cannot cover.
+    withheld: list[WithheldLine]
+    #: The version of the marked amendment carrying the reported lines, if the
+    #: narrative reported anything at all.
+    brief_version: int | None = None
 
 
 class OpenIncidentResponse(BaseModel):
@@ -78,6 +167,9 @@ class OpenIncidentResponse(BaseModel):
     brief: dict[str, Any]
     instant_brief_ms: float
     event_id: str
+    #: Present when a narrative came with the dispatch. Everything in it landed
+    #: *after* ``brief`` above, which is version 1 and model-free regardless.
+    intake: IntakeResponse | None = None
 
 
 class ResolutionRequest(BaseModel):
@@ -138,6 +230,79 @@ def _controller(container: Container) -> IncidentController:
     return get_session(container).controller
 
 
+def _intake_response(result: InterceptResult) -> IntakeResponse:
+    """Render one intercept. Reported and routed, stated separately."""
+    reading = result.reading
+    started = set(result.woken_agent_ids)
+    return IntakeResponse(
+        incident_id=result.incident_id,
+        channel=str(reading.channel),
+        source_ref=reading.source_ref,
+        accepted=reading.accepted,
+        rejection_reason=reading.rejection_reason,
+        model_ref=reading.model_ref,
+        screen=reading.screen,
+        screen_findings=list(reading.screen_findings),
+        screened=reading.screened,
+        reported=[
+            ReportedLine(
+                intake_key=item.intake_key,
+                reported_value=item.raw_value,
+                start_offset=item.span.start_offset,
+                end_offset=item.span.end_offset,
+                quoted_text=item.span.quoted_text,
+            )
+            for item in reading.items
+        ],
+        unknowns=list(reading.unknowns),
+        fired_rule_ids=list(result.plan.fired_rule_ids),
+        unmatched_rule_ids=list(result.plan.unmatched_rule_ids),
+        woken=[
+            HandoffLine(
+                agent_ref=handoff.agent_ref,
+                rule_ids=list(handoff.rule_ids),
+                intake_keys=list(handoff.intake_keys),
+                started=handoff.agent_id in started,
+            )
+            for handoff in result.plan.handoffs
+        ],
+        withheld=[
+            WithheldLine(
+                agent_ref=entry.agent_ref,
+                rule_ids=list(entry.rule_ids),
+                missing_scopes=list(entry.missing_scopes),
+            )
+            for entry in result.plan.withheld
+        ],
+        brief_version=result.emission.version if result.emission else None,
+    )
+
+
+async def _read_intake(
+    session: IncidentSession,
+    incident_id: str,
+    *,
+    narrative: str,
+    channel: IntakeChannel,
+    source_ref: str,
+    container: Container,
+) -> IntakeResponse:
+    """Run one intake through the runtime and render it.
+
+    Called only after the instant brief is persisted. A model that is slow,
+    refusing, or unreachable produces an ``accepted=False`` response here and
+    changes nothing about the brief that already landed.
+    """
+    result = await session.run_intake(
+        incident_id,
+        narrative=narrative,
+        channel=channel,
+        source_ref=source_ref,
+        correlation_id=get_correlation_id() or container.ids.new_id("corr"),
+    )
+    return _intake_response(result)
+
+
 # --------------------------------------------------------------------- open
 
 
@@ -156,6 +321,11 @@ async def open_incident(
 
     The brief in this response is already in the incident log -- it is persisted
     before it is returned, exactly as it is before it is streamed.
+
+    A narrative sent with the dispatch is read **after** that, never before.
+    ``brief`` is version 1 and model-free whatever the intake does, and the
+    budget measured against ``instant_brief_budget_ms`` covers stage one alone,
+    because stage one is the only thing with nothing to wait for.
     """
     session = get_session(container)
     opened = await session.controller.open(
@@ -188,6 +358,17 @@ async def open_incident(
             },
         )
 
+    intake: IntakeResponse | None = None
+    if request.intake_narrative:
+        intake = await _read_intake(
+            session,
+            opened.incident.incident_id,
+            narrative=request.intake_narrative,
+            channel=request.intake_channel,
+            source_ref=f"intake/{request.cad_ref}",
+            container=container,
+        )
+
     return OpenIncidentResponse(
         incident_id=opened.incident.incident_id,
         address_id=opened.incident.address_id,
@@ -199,6 +380,44 @@ async def open_incident(
         brief=emission.model_dump(mode="json"),
         instant_brief_ms=round(elapsed_ms, 3),
         event_id=opened.event_id,
+        intake=intake,
+    )
+
+
+@router.post(
+    "/incidents/{incident_id}/intake",
+    response_model=IntakeResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Read a 911 or CAD narrative and route the incident",
+)
+async def read_intake(
+    incident_id: str,
+    request: IntakeRequest,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_profile_write)],
+) -> IntakeResponse:
+    """Read a narrative that arrived after the dispatch.
+
+    A callback, a second caller, a dispatcher updating the CAD comment. It goes
+    through exactly the same path the dispatch narrative does: screened, read
+    into a closed key set with every value bound to a span in the transcript,
+    rendered as a **marked amendment** whose lines can never read as confirmed,
+    and routed to the other incident agents by their declared capabilities.
+
+    A write, not a read: it amends the brief and appends to the incident log.
+
+    202 rather than 201, and deliberately so. Nothing here creates a resource of
+    its own -- the narrative was accepted and what it produced is an amendment
+    to a document that already exists.
+    """
+    session = get_session(container)
+    return await _read_intake(
+        session,
+        incident_id,
+        narrative=request.narrative,
+        channel=request.channel,
+        source_ref=request.source_ref or f"intake/{incident_id}",
+        container=container,
     )
 
 

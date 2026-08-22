@@ -263,7 +263,7 @@ def _conflict_views(profile: BuildingProfile) -> list[ConflictView]:
 
 
 def _action_flow(container: Container) -> ActionFlow:
-    _records, _geometry, _hazards, _ranker, actions = build_agents(container)
+    _records, _geometry, _hazards, _watch, actions = build_agents(container)
     return actions
 
 

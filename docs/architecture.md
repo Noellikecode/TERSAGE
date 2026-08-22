@@ -179,14 +179,34 @@ permanent one.
 |---|---|---|---|---|---|
 | `records-watcher` | building | slow | — | — | 120 s |
 | `geometry-watcher` | fire | slow | preincident-plan-store | — | 300 s |
-| `conflict-detector` | fire | slow | — | — | 30 s |
-| `survey-ranker` | fire | slow | inspection-work-orders | supervisor | 60 s |
+| `structure-watch` | fire | slow | inspection-work-orders | — | 60 s |
 | `referral-clerk` | fire | slow | building-referral-intake | supervisor | 60 s |
-| `incident-controller` | fire | incident | — | — | 500 ms |
-| `brief-reconciler` | fire | incident | — | — | 5 s |
+| `incident-interceptor` | fire | incident | — | — | 6 s |
 | `sensor-fusion` | fire | incident | — | — | 2 s |
 | `agency-notifier` | fire | incident | agency-notifications | chief | 5 s |
 | `incident-recorder` | fire | incident | department-rms | — | 15 s |
+
+Four agents were merged into two, and the originals are **still catalogued and
+still resolvable** — deprecated, never deleted:
+
+| Superseded | Merged into | Why they were one job |
+|---|---|---|
+| `conflict-detector` + `survey-ranker` | `structure-watch` | Ranking reads the conflicts detection just wrote, on the same profiles, in the same pass. Now severity and rank come from one reading, so they cannot describe different corpora. |
+| `incident-controller` + `brief-reconciler` | `incident-interceptor` | One produced stage one of the brief and the other produced stages two and three of the same document. |
+
+Version pinning exists for NIOSH investigations, and every brief records the
+agent versions that produced it. An `agent_id` deleted from the catalog turns a
+two-year-old recorded run into a reference to something this build has never
+heard of, so a superseded agent stays resolvable and stops being scheduled.
+`ACTIVE_FLEET` — derived from the absence of `deprecated_at`, not hand-listed —
+is what routing, workers, and service accounts come from.
+
+`structure-watch` carries **no approval threshold**, and that is a correction
+rather than a relaxation. `survey-ranker` published `SUPERVISOR` while nothing
+on the work-order path ever called the gateway: a gate asserted and never held.
+A work order commits the department's *own* morning, so the department's own
+agent may cut one. A referral accuses a property owner and still needs a
+captain; a utility shutoff or a road closure still needs a chief.
 
 `Capability.WRITE` means writing *outside* the department's own store. An agent
 that only appends facts to a profile declares the `write:profile` scope and no

@@ -143,4 +143,10 @@ CAPABILITIES: tuple[CapabilityInfo, ...] = (
         status=CapabilityStatus.AVAILABLE,
         phase=5,
     ),
+    CapabilityInfo(
+        id="incident-intake",
+        label="911 and CAD narrative intake, and capability-based agent routing",
+        status=CapabilityStatus.AVAILABLE,
+        phase=5,
+    ),
 )

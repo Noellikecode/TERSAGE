@@ -87,6 +87,12 @@ class NerisDraft(BaseModel):
     approvals: int = Field(default=0, ge=0)
     policy_decisions: int = Field(default=0, ge=0)
     observed_facts: int = Field(default=0, ge=0)
+    #: Narratives read, and agents woken off them. Counted separately from the
+    #: brief versions because an intake that was never read still produces an
+    #: entry, and a draft that only counted successful reads would round that
+    #: to zero.
+    intake_reads: int = Field(default=0, ge=0)
+    agent_handoffs: int = Field(default=0, ge=0)
     log_entries: int = Field(default=0, ge=0)
     log_sealed_at: datetime | None = None
     #: Stated on the artifact: a draft for a human to complete, not a filing.
@@ -230,6 +236,83 @@ class IncidentRecorder:
                 "policy_version": decision.policy_version,
                 "target": decision.target,
                 "decided_by": decision.decided_by,
+            },
+        )
+
+    async def record_intake(
+        self,
+        incident_id: str,
+        *,
+        channel: str,
+        source_ref: str,
+        accepted: bool,
+        reported_keys: Sequence[str],
+        unknowns: Sequence[str],
+        model_ref: str,
+        screen: str,
+        screen_findings: Sequence[str],
+        dropped_values: int,
+        rejection_reason: str | None,
+    ) -> IncidentLogEntry:
+        """What the 911 or CAD narrative was read as.
+
+        Attribute names and outcomes only. The transcript itself is a citizen's
+        words on a recorded emergency line, and the incident log is a
+        department record that is written through to the records system -- a
+        copy of the call in it would be a second, less governed home for the
+        same content.
+
+        ``accepted=False`` is recorded as loudly as a successful read, because
+        "the intake was never read" is exactly the thing an investigation needs
+        to be able to see and exactly the thing an absent log entry hides.
+        """
+        return await self._append(
+            incident_id,
+            LogEntryType.INTAKE_READ,
+            content={
+                "channel": channel,
+                "source_ref": source_ref,
+                "accepted": accepted,
+                "reported_keys": list(reported_keys),
+                "unknowns": list(unknowns),
+                "model_ref": model_ref,
+                "screen": screen,
+                "screen_findings": list(screen_findings),
+                "dropped_values": dropped_values,
+                "rejection_reason": (rejection_reason or "")[:300],
+            },
+        )
+
+    async def record_handoff(
+        self,
+        incident_id: str,
+        *,
+        agent_ref: str,
+        rule_ids: Sequence[str],
+        intake_keys: Sequence[str],
+        note: str,
+        started: bool,
+        missing_scopes: Sequence[str] = (),
+    ) -> IncidentLogEntry:
+        """Which agent was woken, under which rule, with what.
+
+        The rule ids are the point. "Who was told" is answerable from a list of
+        agent names, but "why were they told, and why was nobody else" is only
+        answerable if the rule that selected them is in the record next to them.
+        """
+        return await self._append(
+            incident_id,
+            LogEntryType.AGENT_HANDOFF,
+            content={
+                "agent_ref": agent_ref,
+                "rule_ids": list(rule_ids),
+                "intake_keys": list(intake_keys),
+                "note": note[:500],
+                "started": started,
+                # Present when a rule selected this agent and the incident grant
+                # could not cover it. Named, because "nobody told the recorder"
+                # is only answerable if the reason is beside the fact.
+                "missing_scopes": list(missing_scopes),
             },
         )
 
@@ -386,6 +469,8 @@ class IncidentRecorder:
             approvals=by_type.get(LogEntryType.APPROVAL_GRANTED, 0),
             policy_decisions=by_type.get(LogEntryType.POLICY_DECISION, 0),
             observed_facts=by_type.get(LogEntryType.FACT_OBSERVED, 0),
+            intake_reads=by_type.get(LogEntryType.INTAKE_READ, 0),
+            agent_handoffs=by_type.get(LogEntryType.AGENT_HANDOFF, 0),
             log_entries=len(log.entries),
             log_sealed_at=log.sealed_at,
         )

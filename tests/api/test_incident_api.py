@@ -110,6 +110,124 @@ def test_an_unresolvable_address_is_a_404(app_client: TestClient) -> None:
     assert response.status_code == 404
 
 
+# ------------------------------------------------------------------ intake
+
+#: A 911 call as one arrives: prose, under stress, and partly at odds with the
+#: filed record. None of it is a fact and the response has to say so.
+CALL = (
+    "Caller reports heavy smoke on the third floor of the apartment building. "
+    "Two people are still inside. The driveway is blocked by a delivery truck. "
+    "There are propane cylinders by the back door."
+)
+
+
+def test_a_narrative_sent_with_the_dispatch_is_read_after_the_instant_brief(
+    app_client: TestClient,
+) -> None:
+    """The brief in the 201 is version 1 and model-free however the call reads.
+
+    A commander gets the structural picture from the record the department
+    already had; what a caller said arrives behind it as a marked amendment. If
+    that order ever inverts, the instant brief inherits a model's latency.
+    """
+    app_client.post(f"{PREFIX}/districts/{DISTRICT}/poll")
+    response = app_client.post(
+        f"{PREFIX}/incidents",
+        json={"address": ADDRESS, "cad_ref": "CAD-0100", "intake_narrative": CALL},
+    )
+    assert response.status_code == 201
+    body = response.json()
+
+    assert body["brief"]["version"] == 1
+    assert body["brief"]["model_invoked"] is False
+
+    intake = body["intake"]
+    assert intake["accepted"] is True
+    assert intake["brief_version"] > 1
+    reported = {line["intake_key"] for line in intake["reported"]}
+    assert "intake.entrapment_reported" in reported
+    # Every reported value points at the words in the transcript it came from.
+    for line in intake["reported"]:
+        assert CALL[line["start_offset"] : line["end_offset"]] == line["quoted_text"]
+
+
+def test_an_intake_arriving_later_amends_the_brief_and_names_who_it_reached(
+    app_client: TestClient, incident: dict[str, Any]
+) -> None:
+    """A callback or a CAD update goes down the same path as the first call."""
+    incident_id = incident["incident_id"]
+    response = app_client.post(
+        f"{PREFIX}/incidents/{incident_id}/intake",
+        json={"narrative": CALL, "channel": "CAD_NARRATIVE"},
+    )
+    assert response.status_code == 202
+    body = response.json()
+
+    assert body["channel"] == "CAD_NARRATIVE"
+    woken = {line["agent_ref"].split("@")[0] for line in body["woken"]}
+    assert "agency-notifier" in woken
+    assert all(line["rule_ids"] for line in body["woken"])
+    # The gap the incident loop has, stated on every intake that hits it.
+    assert "reported-hazardous-material-is-checked-against-tier-ii" in body["unmatched_rule_ids"]
+
+
+@pytest.mark.invariant
+def test_a_reported_line_is_never_rendered_as_a_confirmed_one(
+    app_client: TestClient, incident: dict[str, Any]
+) -> None:
+    """The distinction has to survive serialisation, because a console reads JSON.
+
+    A caller's "third floor" and a surveyed storey count reaching a tablet as
+    indistinguishable objects is the failure this guards: on screen they would
+    be two lines of the same weight.
+    """
+    incident_id = incident["incident_id"]
+    app_client.post(f"{PREFIX}/incidents/{incident_id}/intake", json={"narrative": CALL})
+
+    brief = app_client.get(f"{PREFIX}/incidents/{incident_id}/brief").json()
+    lines = [item for section in brief["sections"] for item in section["items"]]
+    reported = [item for item in lines if item.get("reported_note")]
+
+    assert reported
+    for item in reported:
+        assert item["status"] != "CONFIRMED"
+        assert item["fact_id"] is None
+        assert item["provenance"] is None
+        assert "caller report" in item["reported_note"] or "reported by" in item["reported_note"]
+
+
+@pytest.mark.invariant
+def test_a_brief_carrying_a_911_call_still_contains_no_tactical_language(
+    app_client: TestClient, incident: dict[str, Any]
+) -> None:
+    """The intake widened what reaches the brief; it did not widen what it says.
+
+    Everything the interceptor writes about a call is attribution -- who said
+    it, when, and what is on file instead. There is no template here that
+    advises, and the routing notes name agents rather than actions.
+    """
+    incident_id = incident["incident_id"]
+    app_client.post(f"{PREFIX}/incidents/{incident_id}/intake", json={"narrative": CALL})
+    app_client.post(f"{PREFIX}/incidents/{incident_id}/brief/enrich")
+
+    with app_client.stream("GET", f"{PREFIX}/incidents/{incident_id}/stream") as response:
+        raw = response.read().decode().lower()
+
+    for phrase in FORBIDDEN_TACTICAL:
+        assert phrase not in raw, phrase
+
+
+@pytest.mark.degraded
+def test_an_empty_narrative_is_refused_by_the_contract_not_by_the_model(
+    app_client: TestClient, incident: dict[str, Any]
+) -> None:
+    """A request that says nothing is a bad request, not a model call."""
+    response = app_client.post(
+        f"{PREFIX}/incidents/{incident['incident_id']}/intake", json={"narrative": ""}
+    )
+    assert response.status_code == 422
+
+
 # ------------------------------------------------------------------- SSE
 
 

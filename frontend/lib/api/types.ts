@@ -327,6 +327,13 @@ export interface BriefItemView {
   provenance: string | null;
   derivation_note: string | null;
   withheld_note: string | null;
+  /**
+   * Present when this line is what a 911 caller said, not what a record holds.
+   * The backend type refuses to let such a line be CONFIRMED, carry a fact id,
+   * or carry a provenance source type -- so this field arriving is the whole
+   * reported-versus-observed distinction, and it has to be visible.
+   */
+  reported_note: string | null;
 }
 
 export interface BriefSectionView {

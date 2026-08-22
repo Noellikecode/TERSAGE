@@ -49,6 +49,19 @@ HOME_DEPARTMENT: Final[Department] = Department.FIRE
 #: Fixed publication timestamp, so seeding is byte-identical on every run.
 PUBLISHED_AT: Final[datetime] = datetime(2026, 8, 20, 8, 0, tzinfo=UTC)
 
+#: When the four superseded agents stopped being scheduled.
+#:
+#: They are **not deleted**. Version pinning in this system exists because a
+#: NIOSH line-of-duty-death investigation reconstructs what a commander knew
+#: two years later, and every brief records the agent versions that produced
+#: it. An ``agent_id`` that vanishes from the catalog turns a recorded run into
+#: an unresolvable reference -- the replay would say the brief was produced by
+#: something this build has never heard of.
+#:
+#: So they stay published and become **deprecated**: still resolvable, no
+#: longer routed, no longer given a worker or a service account.
+SUPERSEDED_AT: Final[datetime] = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
+
 _SCHEMA_ROOT: Final[str] = "firstdue.schemas"
 
 
@@ -66,6 +79,7 @@ def _agent(
     latency_ms: int,
     input_schema: str,
     output_schema: str,
+    deprecated_at: datetime | None = None,
 ) -> AgentDescriptor:
     return AgentDescriptor(
         agent_id=agent_id,
@@ -82,6 +96,7 @@ def _agent(
         output_schema_ref=f"{_SCHEMA_ROOT}.{output_schema}",
         latency_target_ms=latency_ms,
         published_at=PUBLISHED_AT,
+        deprecated_at=deprecated_at,
     )
 
 
@@ -153,6 +168,7 @@ CONFLICT_DETECTOR = _agent(
     latency_ms=30_000,
     input_schema="MaterializeRequest",
     output_schema="ConflictBatch",
+    deprecated_at=SUPERSEDED_AT,
 )
 
 SURVEY_RANKER = _agent(
@@ -168,6 +184,42 @@ SURVEY_RANKER = _agent(
     approval=ApprovalThreshold.SUPERVISOR,
     latency_ms=60_000,
     input_schema="RankRequest",
+    output_schema="SurveyQueue",
+    deprecated_at=SUPERSEDED_AT,
+)
+
+#: Supersedes ``conflict-detector`` and ``survey-ranker``.
+#:
+#: They were split because detection and ranking are different *kinds* of work,
+#: and that turned out to be a distinction without a boundary: ranking reads
+#: the conflicts detection just wrote, on the same profiles, in the same pass,
+#: and neither one was ever useful without the other. Two Cloud Run services
+#: were paying to hand a district's profiles to each other.
+#:
+#: What the merge buys is that a conflict's severity and a structure's rank are
+#: computed from one reading of one profile set, so they cannot disagree about
+#: what the corpus said.
+STRUCTURE_WATCH = _agent(
+    "structure-watch",
+    publisher=Department.FIRE,
+    loop=Loop.SLOW,
+    role_summary=(
+        "Watches profiles, runs the deterministic conflict rules, and ranks "
+        "structures and conflicts by importance into the department's queue."
+    ),
+    capabilities={Capability.READ, Capability.RANK, Capability.WRITE},
+    scopes={Scope.READ_PROFILE, Scope.WRITE_PROFILE, Scope.WRITE_WORK_ORDER},
+    classifications={Classification.PUBLIC, Classification.TIER_II_CONFIDENTIAL},
+    write_targets=("inspection-work-orders",),
+    # NONE, and this is a correction rather than a relaxation. `survey-ranker`
+    # published SUPERVISOR while nothing on the work-order path ever called the
+    # gateway -- the catalog claimed a human approved something no human
+    # approved. Work orders are autonomous by design: a work order commits the
+    # department's own morning, and the department's own agent may do that.
+    # The referral, which accuses a property owner, still needs a captain.
+    approval=ApprovalThreshold.NONE,
+    latency_ms=60_000,
+    input_schema="MaterializeRequest",
     output_schema="SurveyQueue",
 )
 
@@ -207,6 +259,7 @@ INCIDENT_CONTROLLER = _agent(
     latency_ms=500,
     input_schema="DispatchEvent",
     output_schema="BriefEmission",
+    deprecated_at=SUPERSEDED_AT,
 )
 
 AGENCY_NOTIFIER = _agent(
@@ -263,6 +316,59 @@ BRIEF_RECONCILER = _agent(
     latency_ms=5_000,
     input_schema="ProfileSnapshot",
     output_schema="BriefEmission",
+    deprecated_at=SUPERSEDED_AT,
+)
+
+#: Supersedes ``incident-controller`` and ``brief-reconciler``.
+#:
+#: The controller opened the incident and emitted the instant brief; the
+#: reconciler emitted every stage after it. One agent produced stage one and a
+#: different agent produced stages two and three of the same document, which
+#: made the 500 ms budget and the model boundary land on opposite sides of a
+#: service boundary for no reason either of them asked for.
+#:
+#: The merge also gives the intake somewhere to live. A 911 call or a CAD
+#: dispatch arrives as prose, and until now the incident loop took only the
+#: fields CAD happened to put in the envelope. This agent reads the narrative,
+#: extracts what it says, and **routes the incident to the other incident
+#: agents by their declared capabilities**.
+#:
+#: The routing is deterministic. The model extracts; a rule table matched
+#: against :class:`AgentDescriptor` capabilities decides who is woken. A model
+#: that could choose which agents run would be making an authorisation
+#: decision, which section 6 puts out of its reach.
+INCIDENT_INTERCEPTOR = _agent(
+    "incident-interceptor",
+    publisher=Department.FIRE,
+    loop=Loop.INCIDENT,
+    role_summary=(
+        "Reads the 911 or CAD intake, opens the incident on one profile "
+        "snapshot, streams the three-stage brief, and routes the incident to "
+        "the other incident agents by their declared capabilities."
+    ),
+    capabilities={Capability.READ, Capability.NOTIFY},
+    scopes={Scope.READ_PROFILE, Scope.READ_GEOMETRY, Scope.READ_EMS_DERIVED},
+    classifications={
+        Classification.PUBLIC,
+        Classification.RESTRICTED,
+        Classification.TIER_II_CONFIDENTIAL,
+        Classification.PHI,
+    },
+    # The **slowest** stage's budget, not the fastest. This was 500 ms for one
+    # release and that was a defect: `budget_seconds` treats
+    # `latency_target_ms` as a hard cap on every run of the agent, so a 500 ms
+    # target would have timed out both model-bearing stages -- the enriched
+    # prose at 4 s and the intake read at 6 s -- against a real Vertex
+    # endpoint. Fake mode answers in microseconds, so nothing failed locally
+    # and the whole incident loop would have degraded on the first live call.
+    #
+    # The instant brief does not need this number to protect it. It is emitted
+    # synchronously outside any runtime run and is already checked against
+    # `settings.instant_brief_budget_ms`, where exceeding it is logged as a
+    # defect rather than silently truncated.
+    latency_ms=6_000,
+    input_schema="DispatchEvent",
+    output_schema="BriefEmission",
 )
 
 SENSOR_FUSION = _agent(
@@ -292,7 +398,14 @@ INCIDENT_RECORDER = _agent(
     loop=Loop.INCIDENT,
     role_summary="Writes the append-only incident log through to the records system.",
     capabilities={Capability.READ, Capability.WRITE},
-    scopes={Scope.READ_PROFILE, Scope.READ_AUDIT, Scope.WRITE_RMS},
+    # No READ_AUDIT. The recorder *writes* to the audit sink -- record_event
+    # and record_decision -- and never reads it; that scope belongs to the
+    # audit console route a human opens. Declaring it meant the incident grant
+    # did not cover what the catalog claimed, so routing the recorder through
+    # the runtime produced a DENIED run. The mirror image of the
+    # agency-notifier finding: that one under-declared and worked by accident,
+    # this one over-declared and failed once anything checked.
+    scopes={Scope.READ_PROFILE, Scope.WRITE_RMS},
     classifications={Classification.PUBLIC, Classification.RESTRICTED},
     write_targets=("department-rms",),
     latency_ms=15_000,
@@ -303,24 +416,45 @@ INCIDENT_RECORDER = _agent(
 
 #: The fleet, in publication order. Eleven agents, five write targets, two
 #: loops, three publishing departments.
+#: Everything this build publishes, live and superseded alike. The catalog is
+#: the record; :data:`ACTIVE_FLEET` is what actually runs.
 FLEET: Final[tuple[AgentDescriptor, ...]] = (
     RECORDS_WATCHER,
     HAZARD_WATCHER,
     GEOMETRY_WATCHER,
-    CONFLICT_DETECTOR,
-    SURVEY_RANKER,
+    STRUCTURE_WATCH,
     REFERRAL_CLERK,
-    INCIDENT_CONTROLLER,
-    BRIEF_RECONCILER,
+    INCIDENT_INTERCEPTOR,
     SENSOR_FUSION,
     AGENCY_NOTIFIER,
     INCIDENT_RECORDER,
+    # Superseded. Still resolvable so a recorded run replays; never scheduled.
+    CONFLICT_DETECTOR,
+    SURVEY_RANKER,
+    INCIDENT_CONTROLLER,
+    BRIEF_RECONCILER,
+)
+
+#: The agents that are scheduled, routed, and given a worker and a service
+#: account. Everything else in the catalog is history.
+#:
+#: Derived rather than listed, so adding a ``deprecated_at`` is the single edit
+#: that retires an agent -- a second hand-maintained list would be a way for the
+#: catalog and the infrastructure to disagree, which is exactly what
+#: ``registry/routing.py`` exists to prevent.
+ACTIVE_FLEET: Final[tuple[AgentDescriptor, ...]] = tuple(
+    d for d in FLEET if d.deprecated_at is None
 )
 
 
 def fleet_descriptors() -> tuple[AgentDescriptor, ...]:
     """Every descriptor this build publishes, sorted for deterministic seeding."""
     return tuple(sorted(FLEET, key=lambda d: (d.agent_id, d.version)))
+
+
+def active_descriptors() -> tuple[AgentDescriptor, ...]:
+    """The scheduled agents, sorted. What routing and Terraform derive from."""
+    return tuple(sorted(ACTIVE_FLEET, key=lambda d: (d.agent_id, d.version)))
 
 
 def descriptor_for(agent_id: str, version: str = FLEET_VERSION) -> AgentDescriptor:
