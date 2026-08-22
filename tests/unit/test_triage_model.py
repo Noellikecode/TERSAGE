@@ -187,19 +187,50 @@ async def test_the_live_client_without_a_triage_model_defers_to_the_local_screen
     assert result.accepted is False
 
 
-def test_the_live_client_drops_a_key_the_triage_model_invented() -> None:
-    """A triage model cannot mint a canonical key."""
+def test_the_live_client_cannot_mint_a_canonical_key() -> None:
+    """Triage names no keys at all now, so it cannot invent one.
+
+    The answer is one word. `candidate_keys` is empty by construction rather
+    than by filtering, which is a smaller surface than the JSON contract that
+    preceded it -- there is nothing left to sanitise.
+    """
     client = VertexModelClient(project_id="p", location="us-central1", model="m", triage_model="t")
-    parsed = client._parse_triage(
-        '{"extract": true, "reason": "ok", "candidate_keys": ["structure.stories", "made.up"]}',
-        NARRATIVE_KEYS,
-    )
-    assert parsed.candidate_keys == ("structure.stories",)
+    assert client._parse_triage("EXTRACT", NARRATIVE_KEYS).candidate_keys == ()
+    assert client._parse_triage("SKIP", NARRATIVE_KEYS).candidate_keys == ()
+
+
+def test_only_a_bare_skip_can_stop_a_document() -> None:
+    """The asymmetry that justifies letting a cheap model decide at all.
+
+    A wrong EXTRACT costs one model call. A wrong SKIP means nobody ever reads
+    the filing. So SKIP has to be the entire answer: a model that replies
+    "SKIP, because the permit is about plumbing" has explained itself into an
+    extraction, which is the safe direction.
+    """
+    client = VertexModelClient(project_id="p", location="us-central1", model="m", triage_model="t")
+    assert client._parse_triage("SKIP", NARRATIVE_KEYS).extract is False
+    assert client._parse_triage("  skip \n", NARRATIVE_KEYS).extract is False
+    assert client._parse_triage("SKIP.", NARRATIVE_KEYS).extract is False
+    for hedged in ("SKIP, because it is about plumbing", "probably SKIP", "SKIP EXTRACT"):
+        assert client._parse_triage(hedged, NARRATIVE_KEYS).extract is True
 
 
 def test_the_live_client_defaults_to_extract_on_malformed_output() -> None:
+    """Including the exact shape Gemma really returns.
+
+    Verified live: asked for the documented JSON schema, Gemma answered
+    `{"answer": "Yes. The permit explicitly mentions..."}`. Well-formed JSON,
+    its own keys, prose inside. Under the old contract that parsed to "no
+    answer" on every single document.
+    """
     client = VertexModelClient(project_id="p", location="us-central1", model="m", triage_model="t")
-    for raw in ("not json", "[]", '{"reason": "no answer"}'):
+    for raw in (
+        "not json",
+        "[]",
+        '{"reason": "no answer"}',
+        '{"answer": "Yes. The permit explicitly mentions building stories."}',
+        "",
+    ):
         parsed = client._parse_triage(raw, NARRATIVE_KEYS)
         assert parsed.extract is True
         assert parsed.accepted is False

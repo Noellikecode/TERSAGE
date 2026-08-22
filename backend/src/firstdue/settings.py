@@ -122,6 +122,18 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------ modes -----
     #: The master switch. True means no Google credentials are needed anywhere.
+    #:
+    #: **Defaulted from ``app_env`` rather than to a constant.** A bare
+    #: ``true`` here meant a deployed process that forgot one environment
+    #: variable would come up serving fixtures -- with real dispatches arriving,
+    #: a real console in front of an officer, and synthetic permits behind it.
+    #: Nothing would look wrong. ``staging`` and ``production`` therefore
+    #: default to **live**, and a deployment that wants fake has to say so out
+    #: loud; ``local`` and ``test`` still default to fake, so ``make demo`` and
+    #: the suite need no credentials.
+    #:
+    #: Set explicitly, it is always honoured -- see
+    #: :meth:`_default_fake_mode_from_environment`.
     use_fake_agents: bool = True
     #: Which loop this process serves. Cloud Run sets it per service; a local
     #: process serves everything.
@@ -257,6 +269,23 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     #: Instant-brief budget. Exceeding it is a defect, not a slow day.
     instant_brief_budget_ms: int = Field(default=500, gt=0)
+
+    @model_validator(mode="after")
+    def _default_fake_mode_from_environment(self) -> Self:
+        """A deployed environment defaults to live, a developer's to fake.
+
+        Only when nobody said. ``use_fake_agents`` set explicitly -- in the
+        environment, in ``.env``, or by a test -- wins in both directions, so a
+        staging deployment can still be brought up in fake mode deliberately
+        and will say so on the console.
+        """
+        if "use_fake_agents" in self.model_fields_set:
+            return self
+        if self.app_env in (AppEnv.STAGING, AppEnv.PRODUCTION):
+            # `model_fields_set` is not updated, so a later re-validation of the
+            # same object does not treat this as an explicit choice.
+            object.__setattr__(self, "use_fake_agents", False)
+        return self
 
     @model_validator(mode="after")
     def _check_live_mode_is_fully_configured(self) -> Self:
