@@ -6,7 +6,7 @@ One command, one district, and the sequence the whole product is built around:
 2. The lidar DSM measures 9.5 m, which is **three**.
 3. Both facts are stored. Neither is corrected, averaged, or dropped.
 4. The deterministic conflict engine records the disagreement.
-5. The ranker puts that building at the top of the district's survey queue,
+5. Structure Watch puts that building at the top of the district's survey queue,
    citing the conflict as the reason.
 6. A work order, a calendar hold, a crew notification, and an NFPA 1620
    pre-incident plan are created autonomously.
@@ -30,8 +30,8 @@ from firstdue.agents.actions import ActionFlow, ApprovalResult, DispatchResult
 from firstdue.agents.fleet import FleetRun, FleetRunner, outcome
 from firstdue.agents.geometry_watcher import GeometryWatcher, GeometryWatchResult
 from firstdue.agents.hazard_watcher import HazardWatcher, HazardWatchResult
-from firstdue.agents.ranker import DeltaRanker, RankedQueue
 from firstdue.agents.records_watcher import RecordsWatcher, WatchResult
+from firstdue.agents.structure_watch import StructureWatch, StructureWatchResult
 from firstdue.container import Container
 from firstdue.errors import ConfigurationError
 from firstdue.extraction.extractor import FactExtractor
@@ -91,7 +91,7 @@ class _Pass:
         "hazard",
         "hazard_agent",
         "queue",
-        "ranker",
+        "structure_watch",
         "records",
         "sources",
         "watch",
@@ -104,7 +104,7 @@ class _Pass:
         records: RecordsWatcher,
         geometry_agent: GeometryWatcher,
         hazard_agent: HazardWatcher,
-        ranker: DeltaRanker,
+        structure_watch: StructureWatch,
         actions: ActionFlow,
         sources: list[SourceAdapter],
         company: str,
@@ -114,7 +114,7 @@ class _Pass:
         self.records = records
         self.geometry_agent = geometry_agent
         self.hazard_agent = hazard_agent
-        self.ranker = ranker
+        self.structure_watch = structure_watch
         self.actions = actions
         self.sources = sources
         self.company = company
@@ -122,7 +122,7 @@ class _Pass:
         self.watch: WatchResult | None = None
         self.geometry: GeometryWatchResult | None = None
         self.hazard: HazardWatchResult | None = None
-        self.queue: RankedQueue | None = None
+        self.queue: StructureWatchResult | None = None
         self.dispatch: DispatchResult | None = None
 
 
@@ -171,10 +171,18 @@ async def _run_hazards(payload: AgentInput, _grant: object) -> AgentOutcome:
     return outcome(facts=current.hazard.written_fact_ids)
 
 
-async def _run_ranker(payload: AgentInput, _grant: object) -> AgentOutcome:
+async def _run_structure_watch(payload: AgentInput, _grant: object) -> AgentOutcome:
+    """Detect and rank in one pass, from one reading of the district.
+
+    The conflicts this reports and the queue it produces come out of the same
+    ``list_by_district`` call, which is the whole point of the merge: a row that
+    cites a severity-4 conflict was scored on a corpus that contained it.
+    """
     current = _pass_for(payload)
-    current.queue = await current.ranker.rank(current.district)
-    return outcome()
+    current.queue = await current.structure_watch.watch(
+        current.district, correlation_id=payload.correlation_id
+    )
+    return outcome(events=current.queue.published_event_ids)
 
 
 async def _run_referral_clerk(payload: AgentInput, _grant: object) -> AgentOutcome:
@@ -201,7 +209,7 @@ SLOW_LOOP_HANDLERS: Final[dict[str, AgentHandler]] = {
     "records-watcher": _run_records,
     "geometry-watcher": _run_geometry,
     "hazard-watcher": _run_hazards,
-    "survey-ranker": _run_ranker,
+    "structure-watch": _run_structure_watch,
     "referral-clerk": _run_referral_clerk,
 }
 
@@ -255,7 +263,7 @@ class SlowLoopReport(BaseModel):
 
 def build_agents(
     container: Container,
-) -> tuple[RecordsWatcher, GeometryWatcher, HazardWatcher, DeltaRanker, ActionFlow]:
+) -> tuple[RecordsWatcher, GeometryWatcher, HazardWatcher, StructureWatch, ActionFlow]:
     """Wire the slow-loop fleet from a container. One place, so the demo, the
     API, and the tests all run the same agents."""
     materializer = ProfileMaterializer(
@@ -292,7 +300,14 @@ def build_agents(
         materializer=materializer,
         clock=container.clock,
     )
-    ranker = DeltaRanker(profiles=container.profiles, queue=container.queue, clock=container.clock)
+    structure_watch = StructureWatch(
+        profiles=container.profiles,
+        conflicts=container.conflicts,
+        queue=container.queue,
+        clock=container.clock,
+        ids=container.ids,
+        bus=container.bus,
+    )
     actions = ActionFlow(
         profiles=container.profiles,
         conflicts=container.conflicts,
@@ -309,7 +324,7 @@ def build_agents(
         ids=container.ids,
         audit=container.audit,
     )
-    return records, geometry, hazards, ranker, actions
+    return records, geometry, hazards, structure_watch, actions
 
 
 async def run_slow_loop(
@@ -331,7 +346,7 @@ async def run_slow_loop(
     """
     district = district_id or container.settings.default_district_id
     correlation_id = container.ids.new_id("corr")
-    records, geometry, hazards, ranker, actions = build_agents(container)
+    records, geometry, hazards, structure_watch, actions = build_agents(container)
     sources = list(container.source_adapters)
     fleet = build_fleet_runner(container)
 
@@ -345,7 +360,7 @@ async def run_slow_loop(
         records=records,
         geometry_agent=geometry,
         hazard_agent=hazards,
-        ranker=ranker,
+        structure_watch=structure_watch,
         actions=actions,
         sources=sources,
         company=company,
@@ -358,7 +373,7 @@ async def run_slow_loop(
             "records-watcher",
             "geometry-watcher",
             "hazard-watcher",
-            "survey-ranker",
+            "structure-watch",
         ):
             runs.append(
                 await fleet.run(
@@ -368,7 +383,7 @@ async def run_slow_loop(
                 )
             )
 
-        queue: RankedQueue = current.queue or RankedQueue(district_id=district)
+        queue: StructureWatchResult = current.queue or StructureWatchResult(district_id=district)
         if queue.entries:
             runs.append(
                 await fleet.run(

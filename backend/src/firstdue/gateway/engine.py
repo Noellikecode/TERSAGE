@@ -61,9 +61,20 @@ Grant = IncidentGrant | StandingGrant
 
 #: Writes that commit another agency's resources or affect a citizen. Each needs
 #: a human tap; the threshold says whose.
+#:
+#: ``WRITE_WORK_ORDER`` is deliberately **absent**, and its absence is a
+#: correction. It used to map to ``SUPERVISOR`` while nothing on the work-order
+#: path ever called this engine, so the table asserted a safeguard that was
+#: never reached -- the same failure as rendering an absent record as "none
+#: present", a gate claimed rather than held.
+#:
+#: The behaviour was always right: a work order commits the *department's own*
+#: morning, and the department's own agent may do that. What was wrong was the
+#: declaration. A referral accuses a property owner and still needs a captain;
+#: cutting a utility or closing a street spends another agency's authority and
+#: still needs a chief.
 APPROVAL_THRESHOLDS: Final[dict[Scope, ApprovalThreshold]] = {
     Scope.WRITE_REFERRAL: ApprovalThreshold.SUPERVISOR,
-    Scope.WRITE_WORK_ORDER: ApprovalThreshold.SUPERVISOR,
     Scope.REQUEST_UTILITY_SHUTOFF: ApprovalThreshold.CHIEF,
     Scope.REQUEST_ROAD_CLOSURE: ApprovalThreshold.CHIEF,
 }

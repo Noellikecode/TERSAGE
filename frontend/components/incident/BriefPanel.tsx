@@ -95,6 +95,17 @@ export function BriefPanel({ emission }: { emission: BriefEmissionView | null })
                 {item.derivation_note && (
                   <p className="w-full text-micro text-muted">{item.derivation_note}</p>
                 )}
+                {item.reported_note && (
+                  // Never colour alone: the glyph and the word REPORTED carry
+                  // it as well. A caller under stress at 03:00 is not a filed
+                  // record, and a line that reads like one is the failure this
+                  // whole distinction exists to prevent.
+                  <p className="w-full text-micro text-disputed">
+                    <span aria-hidden="true">▲ </span>
+                    <span className="uppercase tracking-wide">Reported</span>{' '}
+                    {item.reported_note}
+                  </p>
+                )}
                 {item.withheld_note && (
                   <p className="w-full text-micro text-disputed">{item.withheld_note}</p>
                 )}

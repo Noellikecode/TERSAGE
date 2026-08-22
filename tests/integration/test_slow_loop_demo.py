@@ -250,7 +250,7 @@ async def test_every_slow_loop_agent_ran_through_the_runtime(container: Containe
         "records-watcher",
         "geometry-watcher",
         "hazard-watcher",
-        "survey-ranker",
+        "structure-watch",
         "referral-clerk",
     }
     assert all(run.status == "COMPLETED" for run in report.agent_runs)

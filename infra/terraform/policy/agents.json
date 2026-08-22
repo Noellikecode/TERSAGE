@@ -50,29 +50,6 @@
     "roles/pubsub.subscriber"
    ]
   },
-  "brief-reconciler": {
-   "loop": "INCIDENT",
-   "scopes": [
-    "read:ems-derived",
-    "read:geometry",
-    "read:profile"
-   ],
-   "pubsub": [
-    "roles/pubsub.publisher",
-    "roles/pubsub.subscriber"
-   ]
-  },
-  "conflict-detector": {
-   "loop": "SLOW",
-   "scopes": [
-    "read:profile",
-    "write:profile"
-   ],
-   "pubsub": [
-    "roles/pubsub.publisher",
-    "roles/pubsub.subscriber"
-   ]
-  },
   "geometry-watcher": {
    "loop": "SLOW",
    "scopes": [
@@ -98,7 +75,7 @@
     "roles/pubsub.subscriber"
    ]
   },
-  "incident-controller": {
+  "incident-interceptor": {
    "loop": "INCIDENT",
    "scopes": [
     "read:ems-derived",
@@ -113,7 +90,6 @@
   "incident-recorder": {
    "loop": "INCIDENT",
    "scopes": [
-    "read:audit",
     "read:profile",
     "write:rms"
    ],
@@ -156,10 +132,11 @@
     "roles/pubsub.subscriber"
    ]
   },
-  "survey-ranker": {
+  "structure-watch": {
    "loop": "SLOW",
    "scopes": [
     "read:profile",
+    "write:profile",
     "write:work-order"
    ],
    "pubsub": [

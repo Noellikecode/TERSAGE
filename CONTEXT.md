@@ -187,7 +187,9 @@ Track requirement mapping (put a version of this table in the Devpost writeup):
 
 Eleven agent descriptors live in `backend/src/firstdue/registry/descriptors.py`. The roster, exactly as published:
 
-`records-watcher` · `geometry-watcher` · `hazard-watcher` · `conflict-detector` · `survey-ranker` · `referral-clerk` · `incident-controller` · `brief-reconciler` · `sensor-fusion` · `agency-notifier` · `incident-recorder`
+`records-watcher` · `geometry-watcher` · `hazard-watcher` · `structure-watch` · `referral-clerk` · `incident-interceptor` · `sensor-fusion` · `agency-notifier` · `incident-recorder`
+
+Nine scheduled. Four more stay catalogued and deprecated — `conflict-detector` and `survey-ranker` merged into `structure-watch`; `incident-controller` and `brief-reconciler` merged into `incident-interceptor`. They are resolvable so a recorded run still replays, and routed nowhere.
 
 Use these ids verbatim in the writeup, the diagram, and the video. Prose names that do not match the registry are the kind of thing a judge checks.
 
@@ -199,9 +201,11 @@ Use these ids verbatim in the writeup, the diagram, and the video. Prose names t
 
 **Hazard Watcher.** Collects the dangerous-stuff records: EPA RMP/TRI/FRS, PHMSA pipeline proximity, NREL EV charging infrastructure, Tier II chemical inventory. Owned by the county rather than the fire department, so it exercises the authorization layer in the slow loop rather than only during incidents.
 
-**Conflict Detector** (`conflict-detector`). Runs the deterministic conflict rules over everything the watchers wrote and records the disagreements. No model, no write capability. Every conflict it records cites the rule id that produced it and every fact it rests on, so an officer can re-derive it by hand. This is the agent that turns "permit says two, lidar says three" from two separate facts into one finding.
+**Structure Watch** (`structure-watch`). Runs the deterministic conflict rules over everything the watchers wrote, then ranks structures *and conflicts* by importance into the department's queue. No model anywhere on either path — the constructor takes no model and there is no way to reach one, which is under test. Every conflict cites the rule id and the facts it rests on; every queue row cites the reasons that surfaced it. This is the agent that turns "permit says two, lidar says three" from two separate facts into one finding, and then decides it is worth a crew's morning.
 
-**Survey Ranker** (`survey-ranker`). Looks at everything the watchers collected across thousands of structures and decides which buildings a crew should physically survey this month. Produces a queue nobody asked for, which is the clearest autonomy proof in the system. Once a row is dispatched it also cuts the work order, writes the calendar hold, notifies the crew, and generates the NFPA 1620 pre-incident plan to Cloud Storage, as one idempotent flow. **Supervisor approval on the work-order write.**
+The merge is enforced structurally, not documented: a frozen `ProfileReading` refuses to construct if its decay map is not the profile's own, a `DistrictReading` refuses readings taken at different instants, and no scoring function takes a `now` parameter. So a conflict's severity and a structure's rank cannot describe different readings of the corpus.
+
+Once a row is dispatched `structure-watch` also cuts the work order, writes the calendar hold, notifies the crew, and generates the NFPA 1620 pre-incident plan to Cloud Storage, as one idempotent flow. Producing a queue nobody asked for is the clearest autonomy proof in the system. **No approval on the work-order write** — see the resolved issue in Part 11.
 
 **Referral Clerk** (`referral-clerk`). When conflict evidence is strong enough to indicate unpermitted construction, drafts a report into the building department's intake and records the returned case number once it is filed. **Supervisor approval required.**
 
@@ -215,9 +219,15 @@ Use these ids verbatim in the writeup, the diagram, and the video. Prose names t
 
 ## Incident loop agents
 
-**Incident Controller** (`incident-controller`). On CAD dispatch, mints a credential scoped to this incident number, this address, this alarm level, with a TTL that dies at incident close. Publishes the fan-out.
+**Incident Interceptor** (`incident-interceptor`). On CAD dispatch or a 911 call, mints a credential scoped to this incident number, this address, this alarm level, with a TTL that dies at incident close. Then three things:
 
-**Brief Reconciler** (`brief-reconciler`). Loads the warm building profile, requests any sensitive additions through the gateway, and streams the brief. Hard deadline: whatever has not arrived by T-90 does not make it in, and the brief states what is missing. Late sources arrive as marked amendments to the 360 brief.
+1. **Reads the intake.** The call arrives as prose. Gemini extracts six `intake.*` keys, each re-bound to the source text — the quoted span must actually match the transcript, because a model can return a well-formed span pointing at a sentence that says the opposite. Transcripts go through the same Model Armor screen ingested permits do, and if the screen cannot run, no model call is made.
+2. **Streams the brief.** The instant stage still contains no model call and still lands if Vertex is down. Caller-reported lines arrive as marked amendments.
+3. **Routes the incident.** Seven rules, and **no rule names an agent** — each names a trigger plus the capabilities and scopes it needs, matched against the registry. The model's contribution ends at six typed booleans and ints; it can see nothing else, so it cannot influence who is woken. A wake the grant could not cover is *withheld* naming the missing scope, rather than fired to produce a denial nobody can distinguish from a real one.
+
+**A 911 report never becomes a structural fact.** A caller report is a `ReportedItem` with no source type and no merge tier, so it has no route into `StructuralFact` — a low tier would not have been enough, because "known beats absent" would have made a caller's guess the standing value on a cold-start building.
+
+Reported lines render distinctly from filed ones and the type enforces it: a `BriefItem` carrying a `reported_note` cannot be `CONFIRMED`, cannot carry a `fact_id`, and cannot carry a provenance source type. The filed value stands beside it and stays the value of record.
 
 **Sensor Fusion** (`sensor-fusion`). Handles thermal and optical footage. Determines which elevation each frame shows and flags heat in void and ceiling spaces rather than compartments, which is the condition that collapses on crews without warning.
 
@@ -532,7 +542,7 @@ Ordered by how much they cost if unresolved.
 
 | Issue | Status | Why it matters |
 |---|---|---|
-| **The catalog claims a work-order approval that does not exist** | **Open — needs a decision** | `survey-ranker` publishes SUPERVISOR and the gateway table maps `write:work-order` to SUPERVISOR, but nothing on that path calls the gateway. Work orders are autonomous by design and under test. So the descriptor over-states a safeguard. Three ways to resolve, below. |
+| ~~The catalog claims a work-order approval that does not exist~~ | **Resolved 2026-08-21 — option (1) taken** | Fixed while merging `conflict-detector` + `survey-ranker` into `structure-watch`. The merged descriptor publishes `NONE`, and `write:work-order` is gone from the gateway's `APPROVAL_THRESHOLDS`. Behaviour is unchanged, because nothing on that path ever reached the gateway — which was the whole finding. **`require_work_order` still guards the endpoint**, so authorization is untouched; only the phantom approval claim is gone. A referral still needs a captain; a utility or road closure still needs a chief. |
 | **Gemma accepts a response schema and ignores it** | **Open — needs a decision** | Verified live Aug 21. Gemma returns `{"answer": "Yes. ..."}` instead of the requested `extract`/`reason` shape, so triage always fails open. Safe, but the cost saving Gemma exists for is not happening and "Gemma integrated" is thinner than it reads. Fix is either (a) prompt for a single token and parse strictly — arguably a *tighter* contract than JSON, and triage is a routing decision, not a fact, so the provenance discipline does not bind it; or (b) drop the separate triage model and say so. Do not fix by loosening the parser to accept freeform prose — that is the one option the project's own principles forbid. |
 | Nothing has ever run on **Cloud Run** | Open — needs you | Storage, events, and models are now verified live (phase 11). What is still unrun: any Cloud Run service, any applied Terraform, any built image. Docker is not installed on this machine. |
 | ~~Model ids unverified~~ | **Resolved Aug 21** | Both were wrong. `gemini-3.5-flash` needs `VERTEX_LOCATION=global` (404s in us-central1); `gemma-3-4b-it` does not exist on Vertex at all → `gemma-4-26b-a4b-it-maas`. Verified through the app's own adapter, all four verbs. |

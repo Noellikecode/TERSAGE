@@ -1,4 +1,10 @@
-"""The reconciler: three stages, and only one of them can be slow.
+"""The brief: three stages, and only one of them can be slow.
+
+Part of ``incident-interceptor`` since the merge. The stages were never
+separable -- stage one is the same document as stages two and three -- and
+splitting them across two agents put the 500 ms budget and the model boundary on
+opposite sides of a service boundary.
+
 
 **Instant.** A read of one stored snapshot and a render. No model call -- not an
 optional one, not a fast one: the emission model refuses to construct an instant
@@ -13,9 +19,11 @@ fields and invents nothing; a rejected or unavailable response leaves the
 deterministic brief exactly as it was and says the narrative is unavailable.
 
 **Live.** Amendments as late data arrives: EMS-derived life-safety facts, NWS
-weather, thermal observations, IC resolutions. Every amendment is marked as one,
-and **late data never delays earlier output** -- stage one is already on the
-commander's screen before stage two is asked for.
+weather, thermal observations, IC resolutions, and what the 911 intake said.
+Every amendment is marked as one, and **late data never delays earlier output**
+-- stage one is already on the commander's screen before stage two is asked for.
+The intake rides this stage for exactly that reason: it needs a model, and
+nothing that needs a model may sit in front of stage one.
 
 What no stage does is recommend anything. There is no tactical language in any
 template here, and a test asserts it.
@@ -89,7 +97,18 @@ COAL_WAS_WEALTH: Final[tuple[BriefSectionKey, ...]] = (
 
 NARRATIVE_MAX_CHARS: Final[int] = 2_000
 NARRATIVE_DEADLINE_MS: Final[int] = 4_000
-AGENT_ID: Final[str] = "incident-controller"
+
+#: What a brief says when nothing was on file. Stated in words rather than left
+#: to a column of UNKNOWNs, because "we checked and found nothing" and "nobody
+#: has ever filed anything about this building" are different things to tell a
+#: commander, and only the second one is true here.
+COLD_START_NOTE: Final[str] = "No pre-incident profile. Structural attributes unknown."
+
+#: The merged incident-loop agent -- the same id the controller stamps, and
+#: that is the point of the merge: one agent produces every stage of one
+#: document, so ``agent_versions`` on an emission names one thing rather
+#: than depending on which stage a reader happened to look at.
+AGENT_ID: Final[str] = "incident-interceptor"
 
 
 def _derived_render(fact: DerivedFact) -> str:
@@ -165,6 +184,26 @@ class Reconciler:
         sections: list[BriefSection] = []
         unknowns: list[CanonicalKey] = []
         disputed = {c.canonical_key for c in snapshot.conflicts}
+
+        if snapshot.is_cold_start:
+            # Said once, in words, at the top. A screen of "UNKNOWN" lines reads
+            # as a system that checked and found nothing; this building is one
+            # nobody has filed anything about, and those are different claims.
+            # It matters more now that the intake exists: a caller's "three
+            # floors" arriving as an amendment must not be the only thing on a
+            # brief that never admitted it had no profile.
+            sections.append(
+                BriefSection(
+                    key=BriefSectionKey.CONSTRUCTION,
+                    items=(
+                        BriefItem(
+                            label="pre-incident profile",
+                            value_render=COLD_START_NOTE,
+                            status=AssertionStatus.UNKNOWN,
+                        ),
+                    ),
+                )
+            )
 
         for section_key, keys in INSTANT_KEYS:
             items: list[BriefItem] = []
@@ -462,6 +501,7 @@ class Reconciler:
         voids: Sequence[VoidObservation] = (),
         resolutions: Sequence[str] = (),
         unavailable: Sequence[str] = (),
+        reported: Sequence[BriefSection] = (),
     ) -> BriefEmission:
         """One amendment carrying whatever arrived late.
 
@@ -469,8 +509,16 @@ class Reconciler:
         something changed rather than re-reading the whole brief to find it.
         Nothing here can delay stage one or stage two: they are already
         transmitted by the time this is built.
+
+        ``reported`` carries what the 911 or CAD intake said. It arrives as
+        sections rather than as items so it can land in the size-up order an
+        officer already reads in, and every line in it was built by
+        :func:`~firstdue.incident.intake.reported_sections`, which is the only
+        thing that may construct one -- a reported line that reached here by
+        another route would be a caller's words rendered like a record's.
         """
         sections = list(previous.sections)
+        sections.extend(reported)
 
         if derived_facts:
             sections.append(

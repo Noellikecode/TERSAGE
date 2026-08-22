@@ -89,6 +89,15 @@ WRITE_ENDPOINTS: tuple[Endpoint, ...] = (
         {"address": "sf-0450-hayes", "cad_ref": "CAD-0001"},
     ),
     Endpoint("POST", f"{PREFIX}/incidents/inc-x/brief/enrich", Role.CAPTAIN),
+    # Reading a 911 narrative amends the brief and appends to the log, so it is
+    # a write. A viewer may read what a caller said; only a captain may put it
+    # in front of a commander.
+    Endpoint(
+        "POST",
+        f"{PREFIX}/incidents/inc-x/intake",
+        Role.CAPTAIN,
+        {"narrative": "Caller reports smoke on the third floor."},
+    ),
     Endpoint(
         "POST",
         f"{PREFIX}/incidents/inc-x/resolutions",

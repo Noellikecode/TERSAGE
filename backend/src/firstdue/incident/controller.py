@@ -51,7 +51,13 @@ from firstdue.services.grants import GrantService
 
 logger = get_logger(__name__)
 
-AGENT_ID: Final[str] = "incident-controller"
+#: The merged incident-loop agent. ``incident-controller`` and
+#: ``brief-reconciler`` are superseded by it: opening the incident and
+#: assembling the brief were always one agent's worth of work on one
+#: document, and the grant this module mints is the grant that document is
+#: read under. A recorded run naming either old id still resolves in the
+#: catalog, which is what a two-year-old replay depends on.
+AGENT_ID: Final[str] = "incident-interceptor"
 #: An incident grant outlives a working fire and not much more.
 DEFAULT_TTL: Final[timedelta] = timedelta(hours=12)
 

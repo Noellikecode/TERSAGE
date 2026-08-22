@@ -239,6 +239,14 @@ class LogEntryType(StrEnum):
     APPROVAL_GRANTED = "APPROVAL_GRANTED"
     POLICY_DECISION = "POLICY_DECISION"
     FACT_OBSERVED = "FACT_OBSERVED"
+    #: What the 911 call or CAD narrative was read as. Attribute names and
+    #: outcomes, never the transcript: the log is the department's record, and
+    #: the caller's words belong to the call recording, not to a copy of it here.
+    INTAKE_READ = "INTAKE_READ"
+    #: Which agent the interceptor woke, under which rule, with what. Recorded
+    #: because "who was told" is the first question after an incident where
+    #: somebody was not told.
+    AGENT_HANDOFF = "AGENT_HANDOFF"
 
 
 class BenchmarkType(StrEnum):

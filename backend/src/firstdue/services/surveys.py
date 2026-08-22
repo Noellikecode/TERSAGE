@@ -41,7 +41,11 @@ from firstdue.ports.repositories import (
 
 logger = get_logger(__name__)
 
-AGENT_ID = "survey-ranker"
+#: Stamped as the provenance of a human-verified structural fact, which is the
+#: most authoritative value this system holds. It has to name an agent the
+#: catalog still resolves, and it has to be the one that actually owns the
+#: queue -- ``survey-ranker`` was merged into ``structure-watch``.
+AGENT_ID = "structure-watch"
 
 
 class SurveyResult(BaseModel):

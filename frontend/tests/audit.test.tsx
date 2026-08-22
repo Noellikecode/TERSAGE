@@ -4,6 +4,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AuditConsole, diffEmissions } from '@/components/audit/AuditConsole';
+import { BriefPanel } from '@/components/incident/BriefPanel';
+import type { BriefItemView } from '@/lib/api/types';
 import { DECISIONS, EVENTS, LOG, emission } from './fixtures';
 
 const EMISSIONS = [
@@ -75,5 +77,43 @@ describe('diffing emissions', () => {
 
   it('says so when nothing differs', () => {
     expect(diffEmissions(EMISSIONS[0]!, EMISSIONS[0]!)).toEqual(['no field-level differences']);
+  });
+});
+
+describe('a reported line is not a filed one', () => {
+  it('marks a caller-reported line with a word and a glyph, never colour alone', () => {
+    const items: BriefItemView[] = [
+      {
+        label: 'Occupancy',
+        value_render: 'R-2 residential',
+        status: 'CONFIRMED',
+        canonical_key: 'structure.occupancy',
+        fact_id: 'fact-1',
+        provenance: 'PERMIT',
+        derivation_note: null,
+        withheld_note: null,
+        reported_note: null,
+      },
+      {
+        // The backend type refuses to let this be CONFIRMED or carry a
+        // fact id. What the console owes is that the officer can see which
+        // of the two lines came from a person on the phone.
+        label: 'Occupancy',
+        value_render: 'REPORTED - "it is a daycare downstairs"',
+        status: 'DISPUTED',
+        canonical_key: 'intake.occupancy',
+        fact_id: null,
+        provenance: null,
+        derivation_note: null,
+        withheld_note: null,
+        reported_note: 'the filed record says R-2 (PERMIT) and stands as the value of record',
+      },
+    ];
+
+    render(<BriefPanel emission={emission({ sections: [{ key: 'CONSTRUCTION', items }] })} />);
+    expect(screen.getByText('Reported')).toBeInTheDocument();
+    expect(
+      screen.getByText(/stands as the value of record/i),
+    ).toBeInTheDocument();
   });
 });

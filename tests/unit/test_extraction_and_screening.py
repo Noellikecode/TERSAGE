@@ -1,132 +1,21 @@
-"""Deterministic ranking, document screening, and typed coercion."""
+"""Document screening, geometry derivation, triage, and typed coercion.
+
+Ranking used to live here too. It moved to ``test_structure_watch.py`` when
+``conflict-detector`` and ``survey-ranker`` merged, because a rank is no longer
+something you can compute from a profile and a clock -- it is computed from one
+reading of the corpus, and the test has to hold that.
+"""
 
 from __future__ import annotations
-
-from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from firstdue.agents.geometry_watcher import stories_from_height
-from firstdue.agents.ranker import (
-    RULE_CONFLICT,
-    RULE_NEVER_SURVEYED,
-    WEIGHT_CONFLICT,
-    score_profile,
-)
-from firstdue.domain.conflicts import Conflict
-from firstdue.domain.enums import Classification, SourceType
-from firstdue.domain.facts import StructuralFact
 from firstdue.domain.keys import Keys
-from firstdue.domain.profiles import BuildingProfile, ProfileEvent, ProfileEventType
 from firstdue.domain.values import BooleanValue, IntegerValue
 from firstdue.extraction.coercion import coerce_value, is_negated, value_type_for
 from firstdue.extraction.extractor import triage
 from firstdue.extraction.screening import screen_document
-
-NOW = datetime(2026, 8, 20, 8, 0, tzinfo=UTC)
-ADDRESS = "sf-0450-hayes"
-
-
-def _profile(
-    *, with_conflict: bool = False, surveyed_days_ago: int | None = None
-) -> BuildingProfile:
-    profile = BuildingProfile(address_id=ADDRESS, district_id="sffd-district-03")
-    fact = StructuralFact(
-        fact_id="fact-permit",
-        address_id=ADDRESS,
-        canonical_key=Keys.STORIES,
-        value=IntegerValue(integer=2),
-        source_type=SourceType.PERMIT,
-        source_ref="permit/1",
-        source_snapshot_id="snap-1",
-        observed_at=NOW - timedelta(days=2000),
-        ingested_at=NOW - timedelta(days=1999),
-        confidence=0.92,
-        classification=Classification.PUBLIC,
-    )
-    profile = profile.with_fact(
-        fact,
-        event=ProfileEvent(
-            event_id="evt-0",
-            sequence=0,
-            occurred_at=fact.ingested_at,
-            type=ProfileEventType.FACT_WRITTEN,
-            actor="records-watcher",
-            summary="filed",
-            fact_ids=(fact.fact_id,),
-        ),
-    )
-    if with_conflict:
-        profile = profile.with_conflict(
-            Conflict(
-                conflict_id="conflict-1",
-                address_id=ADDRESS,
-                canonical_key=Keys.STORIES,
-                rule_id="permit-vs-lidar-story-count",
-                severity=4,
-                fact_ids=("fact-permit", "fact-lidar"),
-                summary="Permit records 2 storeys; lidar DSM measures 3.",
-                detected_at=NOW,
-            ),
-            event=ProfileEvent(
-                event_id="evt-1",
-                sequence=profile.next_sequence,
-                occurred_at=NOW,
-                type=ProfileEventType.CONFLICT_DETECTED,
-                actor="conflict-detector",
-                summary="disagreement",
-                conflict_id="conflict-1",
-            ),
-        )
-    if surveyed_days_ago is not None:
-        profile = profile.model_copy(
-            update={"last_human_survey": NOW - timedelta(days=surveyed_days_ago)}
-        )
-    return profile
-
-
-# ----------------------------------------------------------------- ranking
-
-
-def test_a_conflict_outweighs_everything_else() -> None:
-    with_conflict, reasons = score_profile(_profile(with_conflict=True), now=NOW)
-    without, _ = score_profile(_profile(), now=NOW)
-
-    # A severity-4 conflict contributes 0.8 of the conflict weight; recording it
-    # also counts as source churn, so the gap is at least that much.
-    assert with_conflict - without >= WEIGHT_CONFLICT * 0.8 - 1e-6
-    assert any(r.rule_id == RULE_CONFLICT for r in reasons)
-
-
-def test_every_score_carries_at_least_one_reason() -> None:
-    """A row with no reason is not allowed to exist."""
-    _score, reasons = score_profile(_profile(), now=NOW)
-    assert reasons
-    assert all(r.detail for r in reasons)
-    assert all(0.0 <= r.weight <= 1.0 for r in reasons)
-
-
-def test_a_never_surveyed_structure_says_so() -> None:
-    _score, reasons = score_profile(_profile(), now=NOW)
-    assert any(r.rule_id == RULE_NEVER_SURVEYED for r in reasons)
-
-
-def test_a_recent_survey_scores_lower_than_an_old_one() -> None:
-    recent, _ = score_profile(_profile(surveyed_days_ago=10), now=NOW)
-    old, _ = score_profile(_profile(surveyed_days_ago=900), now=NOW)
-    assert old > recent
-
-
-def test_scoring_is_deterministic() -> None:
-    first = score_profile(_profile(with_conflict=True), now=NOW)
-    second = score_profile(_profile(with_conflict=True), now=NOW)
-    assert first == second
-
-
-def test_the_score_stays_within_range() -> None:
-    score, _ = score_profile(_profile(with_conflict=True), now=NOW)
-    assert 0.0 <= score <= 1.0
-
 
 # ------------------------------------------------------- geometry derivation
 

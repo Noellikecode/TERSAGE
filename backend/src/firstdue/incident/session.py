@@ -8,6 +8,14 @@ fresh render that might differ.
 
 Late data never delays earlier output. Each stage produces a new emission and
 appends it; nothing here waits on a source before emitting what it already has.
+That is what lets the 911 intake exist at all: it needs a model, so it runs
+*after* stage one is persisted and arrives as a marked amendment.
+
+Since the merge there is one incident-loop agent, ``incident-interceptor``, and
+one handler registered for it. Which piece of its work a run performs is carried
+in the run's ``stage`` parameter rather than in a second agent id, because the
+controller, the brief and the intake are three stages of one document and the
+catalog now says so.
 """
 
 from __future__ import annotations
@@ -29,6 +37,15 @@ from firstdue.errors import NotFoundError, StaleVersionError, ValidationError
 from firstdue.extraction.coercion import coerce_value
 from firstdue.incident.controller import IncidentController, OpenIncidentResult
 from firstdue.incident.fusion import SensorFusion, ThermalFrame
+from firstdue.incident.handoff import Handoff, RoutingPlan
+from firstdue.incident.intake import (
+    IntakeChannel,
+    IntakeReader,
+    IntakeReading,
+    reported_sections,
+    signals_from,
+)
+from firstdue.incident.interceptor import AGENT_ID, IncidentInterceptor, InterceptResult
 from firstdue.incident.reconciler import NarrativeChunk, Reconciler
 from firstdue.incident.recorder import IncidentRecorder
 from firstdue.incident.resources import ResourceAgent, ResourceOutcome
@@ -40,7 +57,17 @@ from firstdue.services.grants import GrantService
 
 logger = get_logger(__name__)
 
-IC_AGENT: Final[str] = "incident-controller"
+#: The merged incident-loop agent, which is also the agent an IC resolution is
+#: attributed to: the resolution is a fact the incident loop wrote.
+IC_AGENT: Final[str] = AGENT_ID
+
+#: Which piece of the interceptor's work a run performs. Two stages reach the
+#: runtime -- the enriched brief and the intake -- and they are told apart by a
+#: parameter rather than by two agent ids, because they are two stages of one
+#: document produced by one agent.
+STAGE_PARAM: Final[str] = "stage"
+STAGE_ENRICHED: Final[str] = "enriched"
+STAGE_INTAKE: Final[str] = "intake"
 
 
 def _one(payload: AgentInput, key: str) -> str:
@@ -94,6 +121,15 @@ class IncidentSession:
         self.reconciler = Reconciler(
             clock=container.clock, ids=container.ids, model=container.model
         )
+        # The intake reads a citizen-authored transcript, so it goes through the
+        # same document screen every ingested narrative does. The screen is the
+        # container's, not a second one built here: two screens with different
+        # configurations is how one of them ends up not running.
+        self.interceptor = IncidentInterceptor(
+            intake=IntakeReader(model=container.model, screen=container.screen),
+            registry=container.registry,
+            waker=_FleetWaker(self),
+        )
         self.fusion = SensorFusion(vision=container.vision, ids=container.ids)
         self.resources = ResourceAgent(
             policy=container.policy,
@@ -114,6 +150,17 @@ class IncidentSession:
         #: Raw imagery staged for the fusion agent's own extraction path.
         self._pending_imagery: dict[str, dict[str, Any]] = {}
         self._pending_requests: dict[str, dict[str, Any]] = {}
+        #: A narrative staged for the interceptor's intake run, keyed by the
+        #: correlation id of the run that will read it. It travels here rather
+        #: than inside the ``AgentInput`` for the same reason a thermal frame
+        #: does: an envelope carries identifiers, never record content, and a
+        #: 911 transcript is the most sensitive content the loop touches.
+        self._pending_narratives: dict[str, tuple[str, IntakeChannel, str]] = {}
+        #: What each woken agent was handed, per incident. Held so the agent
+        #: that later acts on this incident can read the reported context that
+        #: caused it to be woken.
+        self._handoffs: dict[str, dict[str, Handoff]] = {}
+        self._last_intercept: dict[str, InterceptResult] = {}
         # Where a handler leaves its typed result for the caller. An
         # AgentOutcome carries identifiers; the route still wants the object.
         self._last_thermal: dict[str, dict[str, Any]] = {}
@@ -140,7 +187,7 @@ class IncidentSession:
         )
         self.fleet.register_all(
             {
-                "brief-reconciler": self._reconciler_handler,
+                AGENT_ID: self._interceptor_handler,
                 "sensor-fusion": self._fusion_handler,
                 "agency-notifier": self._notifier_handler,
                 "incident-recorder": self._recorder_handler,
@@ -154,8 +201,33 @@ class IncidentSession:
     # runtime adds is the grant check, the deadline, the terminal state, and
     # the durable run record naming the pinned version that produced it.
 
-    async def _reconciler_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
-        emission = await self.emit_enriched(_one(payload, "incident_id"))
+    async def _interceptor_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
+        """The one handler for the merged incident-loop agent.
+
+        Two stages reach the runtime. The instant stage does not: it has no
+        model on its path and is emitted synchronously as the incident opens,
+        which is what its 500 ms budget describes.
+        """
+        incident_id = _one(payload, "incident_id")
+        stage = payload.parameters.get(STAGE_PARAM, STAGE_ENRICHED)
+        if stage == STAGE_INTAKE:
+            staged = self._pending_narratives.pop(payload.correlation_id, None)
+            if staged is None:  # pragma: no cover - the caller always stages one
+                return AgentOutcome()
+            narrative, channel, source_ref = staged
+            result = await self.intercept(
+                incident_id,
+                narrative=narrative,
+                channel=channel,
+                source_ref=source_ref,
+                correlation_id=payload.correlation_id,
+            )
+            self._last_intercept[incident_id] = result
+            return AgentOutcome(
+                emitted_event_ids=tuple(e.emission_id for e in (result.emission,) if e is not None)
+            )
+
+        emission = await self.emit_enriched(incident_id)
         return AgentOutcome(emitted_event_ids=(emission.emission_id,))
 
     async def _fusion_handler(self, payload: AgentInput, _grant: Grant) -> AgentOutcome:
@@ -238,8 +310,9 @@ class IncidentSession:
         """
         grant = await self._require_grant(incident_id)
         await self.fleet.run(
-            "brief-reconciler",
+            AGENT_ID,
             correlation_id=correlation_id,
+            parameters={STAGE_PARAM: STAGE_ENRICHED},
             ids={"incident_id": incident_id},
             grant=grant,
         )
@@ -247,6 +320,39 @@ class IncidentSession:
         if emission is None:  # pragma: no cover - enrichment always emits one
             raise NotFoundError("enrichment produced no emission", details={"id": incident_id})
         return emission
+
+    async def run_intake(
+        self,
+        incident_id: str,
+        *,
+        narrative: str,
+        channel: IntakeChannel,
+        source_ref: str,
+        correlation_id: str,
+    ) -> InterceptResult:
+        """Read the intake through the runtime, under the incident's own grant.
+
+        Deliberately a separate run from the one that opened the incident. The
+        instant brief is already persisted and streamed when this starts, so a
+        model that is slow, refusing, or down costs an amendment that never
+        arrives -- never a brief that never arrives.
+        """
+        grant = await self._require_grant(incident_id)
+        self._pending_narratives[correlation_id] = (narrative, channel, source_ref)
+        try:
+            await self.fleet.run(
+                AGENT_ID,
+                correlation_id=correlation_id,
+                parameters={STAGE_PARAM: STAGE_INTAKE},
+                ids={"incident_id": incident_id},
+                grant=grant,
+            )
+        finally:
+            self._pending_narratives.pop(correlation_id, None)
+        result = self._last_intercept.pop(incident_id, None)
+        if result is None:  # pragma: no cover - the handler always sets one
+            raise NotFoundError("the intake produced no result", details={"id": incident_id})
+        return result
 
     async def run_thermal_registration(
         self, incident_id: str, frame: ThermalFrame, *, correlation_id: str
@@ -377,6 +483,141 @@ class IncidentSession:
             raise NotFoundError("no brief to amend", details={"incident_id": incident_id})
         return await self._persist(self.reconciler.amendment(previous, **kwargs))
 
+    # --------------------------------------------------------------- intake
+
+    async def intercept(
+        self,
+        incident_id: str,
+        *,
+        narrative: str,
+        channel: IntakeChannel,
+        source_ref: str,
+        correlation_id: str,
+    ) -> InterceptResult:
+        """Read the narrative, amend the brief, route the incident, wake them.
+
+        Four steps, and the order is the safety argument:
+
+        1. **Read**, bounded and rejectable. A failure here is a value.
+        2. **Record** what was read -- including that nothing was, because an
+           unread intake is the thing an investigation most needs to see.
+        3. **Amend**, marked, and only when something was actually reported. An
+           amendment carrying nothing would still bump the version and make a
+           commander re-read a brief that did not change.
+        4. **Route and wake**, deterministically, from the declared capabilities
+           of the catalogued incident agents.
+
+        Nothing in steps 1-4 can reach the instant brief: it was persisted and
+        transmitted before this method had an incident to be called with.
+        """
+        incident = await self._require_incident(incident_id)
+        reading = await self.interceptor.read_intake(
+            narrative, incident_id=incident_id, channel=channel, source_ref=source_ref
+        )
+        await self.recorder.record_intake(
+            incident_id,
+            channel=str(reading.channel),
+            source_ref=reading.source_ref,
+            accepted=reading.accepted,
+            reported_keys=reading.reported_keys,
+            unknowns=reading.unknowns,
+            model_ref=reading.model_ref,
+            screen=reading.screen,
+            screen_findings=reading.screen_findings,
+            dropped_values=reading.dropped_values,
+            rejection_reason=reading.rejection_reason,
+        )
+
+        signals = signals_from(reading)
+        emission = await self._intake_amendment(incident, reading)
+
+        now = self._container.clock.now()
+        # Planned against this incident's own authority, so a rule that matches
+        # an agent the grant cannot cover is a stated gap rather than a denied
+        # run recorded on every incident.
+        grant = await self.grant_for(incident_id)
+        plan = await self.interceptor.route(
+            reading, now=now, authorised_scopes=frozenset(grant.scopes)
+        )
+        self._stage_handoffs(incident_id, plan)
+        started = await self.interceptor.wake_all(
+            plan, incident_id=incident_id, correlation_id=correlation_id
+        )
+        for handoff in plan.handoffs:
+            await self.recorder.record_handoff(
+                incident_id,
+                agent_ref=handoff.agent_ref,
+                rule_ids=handoff.rule_ids,
+                intake_keys=handoff.intake_keys,
+                note=handoff.note,
+                started=handoff.agent_id in started,
+            )
+        for entry in plan.withheld:
+            await self.recorder.record_handoff(
+                incident_id,
+                agent_ref=entry.agent_ref,
+                rule_ids=entry.rule_ids,
+                intake_keys=(),
+                note=(
+                    f"Withheld from {entry.agent_id}: this incident's grant does not "
+                    f"carry {', '.join(entry.missing_scopes)}."
+                ),
+                started=False,
+                missing_scopes=entry.missing_scopes,
+            )
+
+        logger.info(
+            "intake_intercepted",
+            extra={
+                "incident_id": incident_id,
+                "accepted": reading.accepted,
+                "reported": len(reading.items),
+                "woken": ",".join(started),
+                "unmatched_rules": ",".join(plan.unmatched_rule_ids),
+                "withheld": ",".join(plan.withheld_agent_ids),
+            },
+        )
+        return InterceptResult(
+            incident_id=incident_id,
+            reading=reading,
+            signals=signals,
+            plan=plan,
+            emission=emission,
+            woken_agent_ids=started,
+        )
+
+    async def _intake_amendment(
+        self, incident: Any, reading: IntakeReading
+    ) -> BriefEmission | None:
+        """Hang the reported lines off a marked amendment, or nothing at all."""
+        if not reading.items:
+            return None
+        snapshot = await self._container.snapshots.get(incident.profile_snapshot_id)
+        if snapshot is None:  # pragma: no cover - opening always stores one
+            raise NotFoundError(
+                "profile snapshot is missing", details={"incident_id": incident.incident_id}
+            )
+        sections = reported_sections(
+            reading,
+            signals_from(reading),
+            snapshot=snapshot,
+            # CAD's alarm level, never the reported one. The reported level is
+            # printed beside it and applied to nothing.
+            cad_alarm_level=incident.alarm_level,
+        )
+        if not sections:
+            return None
+        return await self.emit_amendment(incident.incident_id, reported=sections)
+
+    def _stage_handoffs(self, incident_id: str, plan: RoutingPlan) -> None:
+        staged = self._handoffs.setdefault(incident_id, {})
+        for handoff in plan.handoffs:
+            staged[handoff.agent_id] = handoff
+
+    def handoff_for(self, incident_id: str, agent_id: str) -> Handoff | None:
+        """What one agent was handed on this incident, if it was woken."""
+        return self._handoffs.get(incident_id, {}).get(agent_id)
+
     async def _persist(self, emission: BriefEmission) -> BriefEmission:
         """Write to the log, then hold the persisted copy. Never the reverse."""
         stored = await self.recorder.record_emission(emission)
@@ -394,6 +635,8 @@ class IncidentSession:
     def forget(self, incident_id: str) -> None:
         self._emissions.pop(incident_id, None)
         self._grants.pop(incident_id, None)
+        self._handoffs.pop(incident_id, None)
+        self._last_intercept.pop(incident_id, None)
 
     # -------------------------------------------------------------- the 360
 
@@ -670,6 +913,14 @@ class IncidentSession:
             raise NotFoundError("incident not found", details={"incident_id": incident_id})
         return incident
 
+    async def grant_for(self, incident_id: str) -> IncidentGrant:
+        """This incident's grant, reloaded from the store if the process lost it.
+
+        Public because waking a routed agent needs it: every incident-loop run
+        happens under the incident's own bounded authority, never a standing one.
+        """
+        return await self._require_grant(incident_id)
+
     async def _require_grant(self, incident_id: str) -> IncidentGrant:
         grant = self._grants.get(incident_id)
         if grant is not None:
@@ -680,6 +931,43 @@ class IncidentSession:
             raise NotFoundError("incident grant not found", details={"incident_id": incident_id})
         self._grants[incident_id] = stored
         return stored
+
+
+class _FleetWaker:
+    """Starts a routed agent the only way any agent runs: through the fleet.
+
+    The routing decision and the act of running are separated on purpose. The
+    decision is a pure function of the intake signals and the catalog, testable
+    without a runtime; this is the part that needs a grant, a deadline, and a
+    durable run record, and it gets all three by going through
+    :class:`~firstdue.agents.fleet.FleetRunner` rather than calling a handler.
+
+    What the woken agent is handed does **not** travel inside the
+    ``AgentInput``: the envelope carries the incident id and nothing else, and
+    the reported items sit on the session where the agent can read them. A 911
+    transcript inside an event envelope would be record content on the bus.
+
+    In-process, like every other incident handoff in this session. A deployment
+    that gives each agent its own Cloud Run service reaches them over the bus
+    instead, and ``FleetRunner`` refuses an agent this worker does not serve --
+    which :meth:`IncidentInterceptor.wake_all` treats as a wake that did not
+    start rather than as a failure of the incident. The plan is still the
+    record of what was decided.
+    """
+
+    def __init__(self, session: IncidentSession) -> None:
+        self._session = session
+
+    async def wake(self, handoff: Handoff, *, incident_id: str, correlation_id: str) -> str | None:
+        grant = await self._session.grant_for(incident_id)
+        run = await self._session.fleet.run(
+            handoff.agent_id,
+            correlation_id=f"{correlation_id}:{handoff.agent_id}"[:120],
+            causation_id=correlation_id,
+            ids={"incident_id": incident_id},
+            grant=grant,
+        )
+        return run.record.run_id
 
 
 class SessionRegistry:

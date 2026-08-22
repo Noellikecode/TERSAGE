@@ -69,6 +69,45 @@ class Keys:
     NARRATIVE: Final = "document.narrative"
 
 
+class IntakeKeys:
+    """What a 911 call or a CAD narrative is allowed to be read for.
+
+    A closed set, and deliberately namespaced under ``intake.`` rather than
+    reusing the structural keys above. ``occupancy.type`` is what a filed record
+    says a building *is*; ``intake.reported_occupancy`` is what somebody on a
+    phone said they saw. Sharing one key between the two would be the first step
+    towards the merge treating them as the same claim -- and a caller's guess
+    must never sort against a permit.
+
+    They live here, beside the structural keys, so that every canonical key in
+    the system is in one greppable file. What may be *done* with them is in
+    :mod:`firstdue.incident.intake`, and the answer is: rendered on the brief
+    behind a reported marker, and nothing else.
+    """
+
+    REPORTED_OCCUPANCY: Final = "intake.reported_occupancy"
+    ENTRAPMENT_REPORTED: Final = "intake.entrapment_reported"
+    HAZMAT_REPORTED: Final = "intake.hazardous_material_reported"
+    REPORTED_FLOOR_OF_ORIGIN: Final = "intake.reported_floor_of_origin"
+    REPORTED_ALARM_LEVEL: Final = "intake.reported_alarm_level"
+    ACCESS_NOTE: Final = "intake.access_note"
+
+
+#: The intake schema, in fixed order. A key outside this tuple is dropped rather
+#: than rendered: the brief has nowhere to put it, and an attribute nobody
+#: designed a line for is an attribute nobody reviewed. Ordered, because it is
+#: handed to a model as a response schema and a reordered schema is a different
+#: prompt.
+INTAKE_KEYS: Final[tuple[str, ...]] = (
+    IntakeKeys.REPORTED_OCCUPANCY,
+    IntakeKeys.ENTRAPMENT_REPORTED,
+    IntakeKeys.HAZMAT_REPORTED,
+    IntakeKeys.REPORTED_FLOOR_OF_ORIGIN,
+    IntakeKeys.REPORTED_ALARM_LEVEL,
+    IntakeKeys.ACCESS_NOTE,
+)
+
+
 #: Keys whose change invalidates measured geometry and queues a re-measure.
 GEOMETRY_INVALIDATING_KEYS: frozenset[str] = frozenset(
     {

@@ -70,7 +70,7 @@ from firstdue.ports.writes import ExternalWriteTarget
 
 logger = get_logger(__name__)
 
-AGENT_ID: Final[str] = "survey-ranker"
+AGENT_ID: Final[str] = "structure-watch"
 REFERRAL_AGENT_ID: Final[str] = "referral-clerk"
 
 WORK_ORDER_TARGET: Final[str] = "inspection-work-orders"

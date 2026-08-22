@@ -548,7 +548,7 @@ async def test_the_incident_loop_runs_through_the_runtime(
 
     runtime = container.runtime
     invoked = {ref.split("@")[0] for ref, _ in runtime.invocations}  # type: ignore[attr-defined]
-    assert "brief-reconciler" in invoked
+    assert "incident-interceptor" in invoked
 
 
 async def test_an_incident_run_is_durable_and_names_its_version(
@@ -559,7 +559,7 @@ async def test_an_incident_run_is_durable_and_names_its_version(
     opened = await _open(session)
     await session.emit_instant(opened)
     run = await session.fleet.run(
-        "brief-reconciler",
+        "incident-interceptor",
         correlation_id="corr_enrich",
         ids={"incident_id": opened.incident.incident_id},
         grant=opened.grant,
