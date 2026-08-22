@@ -32,9 +32,9 @@ variable "secret_environment_variables" {
   default = {}
 }
 variable "invokers" {
-  description = "SAs allowed to invoke every worker. Pub/Sub push, chiefly."
-  type        = list(string)
-  default     = []
+  description = "Caller key -> SA email allowed to invoke every worker. Keys must be statically known; see the cloud-run module for why."
+  type        = map(string)
+  default     = {}
 }
 
 locals {
@@ -143,9 +143,11 @@ resource "google_cloud_run_v2_service" "worker" {
 # Explicit invoker bindings, one per (worker, caller). Cloud Run defaults to
 # refusing, and this is the only thing that opens it.
 resource "google_cloud_run_v2_service_iam_member" "invoker" {
+  # "<worker>|<caller key>". Both halves are statically known; only the email
+  # in the value resolves at apply time.
   for_each = merge([
     for id, _ in local.agents : {
-      for sa in var.invokers : "${id}|${sa}" => { worker = id, member = sa }
+      for caller, sa in var.invokers : "${id}|${caller}" => { worker = id, member = sa }
     }
   ]...)
 

@@ -69,9 +69,17 @@ variable "allow_unauthenticated" {
   default     = false
 }
 variable "invokers" {
-  description = "SA emails allowed to invoke this service (scheduler, Pub/Sub push)."
-  type        = list(string)
-  default     = []
+  description = <<-EOT
+    Caller key -> SA email allowed to invoke this service.
+
+    A map, not a list, because the IAM bindings use `for_each` and Terraform
+    must know every key at plan time. Service account emails only exist after
+    apply, so a list of them made the whole plan unresolvable -- the first real
+    apply failed with "Invalid for_each argument" before creating anything.
+    The key is statically known; only the email it maps to is deferred.
+  EOT
+  type        = map(string)
+  default     = {}
 }
 variable "cpu_boost" {
   type    = bool
@@ -174,7 +182,9 @@ resource "google_cloud_run_v2_service_iam_member" "public" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "invoker" {
-  for_each = toset(var.invokers)
+  # Keyed by caller name, which is static. `each.value` is the email and is
+  # allowed to be unknown until apply.
+  for_each = var.invokers
 
   project  = var.project_id
   location = var.region
