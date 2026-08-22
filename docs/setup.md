@@ -169,6 +169,12 @@ for P in firstdue-dev firstdue-test; do
 
   # Native mode, not Datastore mode. The repositories use transactions, which
   # Datastore mode exposes differently.
+  #
+  # `nam5` is multi-region. Note that the staging Terraform defaults
+  # `firestore_location` to `us-central1` for cost, and **changing the location
+  # of an existing database forces Terraform to destroy and recreate it**. If
+  # you create it here and then deploy staging, set `firestore_location =
+  # "nam5"` in `terraform.tfvars` so the config matches what exists.
   gcloud firestore databases create --location=nam5 --type=firestore-native \
     --project="$P"
 done

@@ -73,16 +73,18 @@ module "secrets" {
   project_id  = var.project_id
   environment = local.environment
 
+  # Keys are static; the emails resolve at apply time. See the module's
+  # `accessors` description for why that distinction matters.
   accessors = {
-    callback-secret = [
-      module.iam.service_emails["firstdue-slow"],
-      module.iam.service_emails["firstdue-incident"],
-    ]
-    console-token-secret = [
-      module.iam.service_emails["firstdue-slow"],
-      module.iam.service_emails["firstdue-incident"],
-      module.iam.service_emails["firstdue-console"],
-    ]
+    callback-secret = {
+      slow     = module.iam.service_emails["firstdue-slow"]
+      incident = module.iam.service_emails["firstdue-incident"]
+    }
+    console-token-secret = {
+      slow     = module.iam.service_emails["firstdue-slow"]
+      incident = module.iam.service_emails["firstdue-incident"]
+      console  = module.iam.service_emails["firstdue-console"]
+    }
   }
 
   depends_on = [module.services]
@@ -138,10 +140,10 @@ module "slow_service" {
   timeout_seconds = 1800
   concurrency     = 10
 
-  invokers = [
-    module.iam.service_emails["firstdue-scheduler"],
-    module.iam.service_emails["firstdue-pubsub-push"],
-  ]
+  invokers = {
+    scheduler   = module.iam.service_emails["firstdue-scheduler"]
+    pubsub_push = module.iam.service_emails["firstdue-pubsub-push"]
+  }
 
   depends_on = [module.firestore, module.secrets]
 }
@@ -166,11 +168,11 @@ module "incident_service" {
   timeout_seconds = 900
   concurrency     = 40
 
-  invokers = [
-    module.iam.service_emails["firstdue-console"],
-    module.iam.service_emails["firstdue-ci-smoke"],
-    module.iam.service_emails["firstdue-pubsub-push"],
-  ]
+  invokers = {
+    console     = module.iam.service_emails["firstdue-console"]
+    ci_smoke    = module.iam.service_emails["firstdue-ci-smoke"]
+    pubsub_push = module.iam.service_emails["firstdue-pubsub-push"]
+  }
 
   depends_on = [module.firestore, module.secrets]
 }
@@ -217,10 +219,10 @@ module "agent_workers" {
   environment_variables        = local.common_env
   secret_environment_variables = local.secret_env
 
-  invokers = [
-    module.iam.service_emails["firstdue-pubsub-push"],
-    module.iam.service_emails["firstdue-scheduler"],
-  ]
+  invokers = {
+    pubsub_push = module.iam.service_emails["firstdue-pubsub-push"]
+    scheduler   = module.iam.service_emails["firstdue-scheduler"]
+  }
 
   depends_on = [module.firestore, module.secrets]
 }

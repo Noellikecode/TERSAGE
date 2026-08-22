@@ -8,8 +8,19 @@
 variable "project_id" { type = string }
 variable "environment" { type = string }
 variable "accessors" {
-  description = "Map of secret short name -> list of SA emails that may read it."
-  type        = map(list(string))
+  description = <<-EOT
+    Secret short name -> { accessor key -> service account email }.
+
+    A map rather than a list, and the reason is load-bearing: the IAM grants
+    below are created with `for_each`, and Terraform must know every *key* at
+    plan time. Service account emails are resolved during apply, so keying the
+    grants by email made the whole plan unresolvable -- `tofu import` and any
+    single-pass apply failed with "Invalid for_each argument".
+
+    So the caller supplies a statically-known accessor key, and only the email
+    it maps to is allowed to be an apply-time value.
+  EOT
+  type        = map(map(string))
 }
 variable "replication_locations" {
   description = "Empty means automatic replication."
@@ -50,9 +61,11 @@ resource "google_secret_manager_secret" "secret" {
 }
 
 locals {
+  # Keys are static: "<secret>|<accessor key>". Only `member` is unknown until
+  # the service accounts exist, and an unknown *value* is fine.
   grants = merge([
     for name, members in var.accessors : {
-      for member in members : "${name}|${member}" => { secret = name, member = member }
+      for key, email in members : "${name}|${key}" => { secret = name, member = email }
     }
   ]...)
 }
