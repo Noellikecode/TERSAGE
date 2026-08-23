@@ -103,6 +103,7 @@ export function CommandCenter({
   const [narrative, setNarrative] = useState('');
   const [replay, setReplay] = useState<IncidentReplayView | null>(null);
   const [replayBusy, setReplayBusy] = useState(false);
+  const [auditOpen, setAuditOpen] = useState(false);
   /** Survives `setIncident(null)` on close, because replay is what somebody
    *  opens *after* an incident, not during one. */
   const [replayableIncidentId, setReplayableIncidentId] = useState<string | null>(null);
@@ -176,6 +177,7 @@ export function CommandCenter({
     })();
   }, [initialAgents.length, refreshStandby]);
 
+
   const openProfile = useCallback(async (addressId: string) => {
     setSelected(addressId);
     const [profileResult, timelineResult, geometryResult] = await Promise.all([
@@ -187,6 +189,19 @@ export function CommandCenter({
     setTimeline(timelineResult.ok ? timelineResult.data : []);
     setGeometry(geometryResult.ok ? geometryResult.data : null);
   }, []);
+
+  // Open the top-ranked structure on arrival. The queue exists to answer
+  // "which building matters most", and making an officer click to find that
+  // out hides both the answer and every control that hangs off it -- the
+  // dispatch panel included, which is the one action this screen is for.
+  const autoOpened = useRef(false);
+  useEffect(() => {
+    if (autoOpened.current || selected || incident) return;
+    const top = queue?.entries[0]?.address_id;
+    if (!top) return;
+    autoOpened.current = true;
+    void openProfile(top);
+  }, [queue, selected, incident, openProfile]);
 
   const dispatch = useCallback(
     async (addressId: string, narrative = '', channel: IntakeChannel = 'CALL_911') => {
@@ -652,9 +667,19 @@ export function CommandCenter({
       )}
 
       <section aria-labelledby="audit-heading" className="border-t border-line bg-ground p-4">
-        <h2 id="audit-heading" className="mb-3 text-micro uppercase tracking-widest text-muted">
-          Audit
-        </h2>
+        {/* Collapsed by default. This is what an investigator opens weeks
+            later, not what an officer reads on shift -- and expanded it is
+            1700px of a standby screen that is supposed to fit one. */}
+        <button
+          type="button"
+          onClick={() => setAuditOpen((v) => !v)}
+          aria-expanded={auditOpen}
+          className="mb-3 flex items-center gap-2 text-micro uppercase tracking-widest text-muted hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+        >
+          <span id="audit-heading">Audit and replay</span>
+          <span aria-hidden>{auditOpen ? '▾' : '▸'}</span>
+        </button>
+        {auditOpen && (
         <AuditConsole
           events={events}
           decisions={decisions}
@@ -664,6 +689,7 @@ export function CommandCenter({
           onReplay={replayableIncidentId ? runReplay : undefined}
           replayBusy={replayBusy}
         />
+        )}
       </section>
 
       <footer className="border-t border-line bg-surface px-4 py-3 text-micro leading-5 text-muted">

@@ -52,7 +52,7 @@ export function SurveyQueue({
         return (
           <li
             key={entry.entry_id}
-            className={`border bg-surface ${selected ? 'border-live' : 'border-line'}`}
+            className={`border ${selected ? 'border-live bg-ground' : 'border-line bg-surface'}`}
           >
             <div className="flex flex-wrap items-center gap-2 p-3">
               <span className="font-mono text-xl text-ink" aria-label={`Rank ${entry.rank}`}>
@@ -61,7 +61,11 @@ export function SurveyQueue({
               <button
                 type="button"
                 onClick={() => onSelect?.(entry.address_id)}
-                className="flex-1 text-left font-mono text-ink underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+                className={`flex-1 border px-2 py-1 text-left font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-live ${
+                  selected
+                    ? 'border-live text-ink'
+                    : 'border-line text-ink hover:border-live hover:bg-ground'
+                }`}
               >
                 {entry.address_id}
               </button>

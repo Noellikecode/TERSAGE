@@ -124,9 +124,16 @@ describe('standby', () => {
     expect(screen.getByText(/1 fixture-backed/)).toBeInTheDocument();
   });
 
-  it('shows the fleet with publisher and pinned version', () => {
+  it('shows the fleet, and the contract for one agent on demand', () => {
+    // The rail lists nine agents; the publisher and pinned version are
+    // reference material behind a disclosure, because nine expanded cards
+    // push every actionable control below the fold.
     renderConsole();
     expect(screen.getAllByText('records-watcher').length).toBeGreaterThan(0);
+    expect(screen.queryByText('building')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: /records-watcher/ })[0]!);
+
     expect(screen.getByText('building')).toBeInTheDocument();
     expect(screen.getAllByText('@1.0.0').length).toBeGreaterThan(0);
   });

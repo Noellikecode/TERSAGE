@@ -9,6 +9,8 @@
  * stop when a fire starts, and a rail that vanished would imply it had.
  */
 
+import { useState } from 'react';
+
 import { StatusPill } from '@/components/StatusPill';
 import type { AgentDescriptorView, SubscriptionView } from '@/lib/api/types';
 
@@ -36,6 +38,7 @@ export function AgentRail({
   compressed?: boolean;
   loop?: 'SLOW' | 'INCIDENT';
 }) {
+  const [open, setOpen] = useState<string | null>(null);
   const pinned = new Map(subscriptions.map((s) => [s.agent_id, s.pinned_version]));
   const inLoop = loop ? agents.filter((a) => a.loop === loop) : agents;
 
@@ -73,21 +76,36 @@ export function AgentRail({
   }
 
   return (
-    <ul className="space-y-2">
+    <ul className="space-y-1">
       {shown.map((agent) => {
         const running = activity[agent.agent_id];
         const pin = pinned.get(agent.agent_id);
         const drifted = pin !== undefined && pin !== agent.version;
         return (
-          <li key={agent.ref} className="border border-line bg-surface p-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="font-mono text-ink">{agent.agent_id}</span>
+          <li key={agent.ref} className="border border-line bg-surface">
+            {/* One line by default. Nine agents at 150px each is 1400px of
+                reading before an officer reaches anything they can act on,
+                and the contract below is reference material, not a status. */}
+            <button
+              type="button"
+              onClick={() => setOpen((current) => (current === agent.agent_id ? null : agent.agent_id))}
+              aria-expanded={open === agent.agent_id}
+              className="flex w-full items-center justify-between gap-2 px-2 py-1.5 text-left hover:bg-ground focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+            >
+              <span className="flex items-center gap-2">
+                <span aria-hidden className="text-micro text-muted">
+                  {open === agent.agent_id ? '▾' : '▸'}
+                </span>
+                <span className="font-mono text-micro text-ink">{agent.agent_id}</span>
+              </span>
               <StatusPill
                 tone={running?.current ? 'live' : 'muted'}
                 label={running?.current ? 'running' : 'idle'}
               />
-            </div>
-            <p className="mt-1 text-micro leading-5 text-muted">{agent.role_summary}</p>
+            </button>
+            {open !== agent.agent_id ? null : (
+            <div className="border-t border-line p-3">
+            <p className="text-micro leading-5 text-muted">{agent.role_summary}</p>
             <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-micro">
               <dt className="text-muted">Publisher</dt>
               <dd className="text-ink">{agent.publisher_department}</dd>
@@ -116,6 +134,8 @@ export function AgentRail({
                   </span>
                 )}
               </p>
+            )}
+            </div>
             )}
           </li>
         );
