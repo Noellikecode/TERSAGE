@@ -10,6 +10,21 @@
 import { StatusPill } from '@/components/StatusPill';
 import type { AuditEventView, PolicyDecisionView } from '@/lib/api/types';
 
+/** Content hashes shortened to a matchable prefix.
+ *
+ * Deliberately narrow: only a long run of pure hex is shortened, because that
+ * is a digest and nothing else. Readable identifiers -- `local-injection-
+ * detector/1`, `act_wo_queue_sffd-district-03_sf-0450-hayes` -- are what an
+ * officer actually reads off this surface, and truncating those would trade
+ * one kind of unreadability for a worse one.
+ *
+ * Exported because the audit console renders the same detail maps and must
+ * shorten them the same way; two copies would drift.
+ */
+export function summarize(value: string): string {
+  return /^[0-9a-f]{32,}$/i.test(value) ? `${value.slice(0, 12)}…` : value;
+}
+
 export type StreamItem =
   | { kind: 'audit'; at: string; event: AuditEventView }
   | { kind: 'decision'; at: string; decision: PolicyDecisionView };
@@ -58,7 +73,7 @@ export function toStreamItems(
   return items.sort((a, b) => b.at.localeCompare(a.at));
 }
 
-export function ActivityStream({ items, limit = 40 }: { items: StreamItem[]; limit?: number }) {
+export function ActivityStream({ items, limit = 12 }: { items: StreamItem[]; limit?: number }) {
   if (items.length === 0) {
     return (
       <p className="border border-dashed border-line p-4 text-micro leading-5 text-muted">
@@ -86,9 +101,13 @@ export function ActivityStream({ items, limit = 40 }: { items: StreamItem[]; lim
                 )}
               </div>
               {Object.keys(item.event.detail).length > 0 && (
+                // Hashes and ids are the provenance and they matter -- but a
+                // 64-character digest rendered in full turns the one surface
+                // an officer glances at into a wall. Truncated to a prefix
+                // that is still enough to match against the audit record.
                 <p className="mt-1 break-words font-mono text-micro text-muted">
                   {Object.entries(item.event.detail)
-                    .map(([key, value]) => `${key}=${value}`)
+                    .map(([key, value]) => `${key}=${summarize(String(value))}`)
                     .join('  ')}
                 </p>
               )}

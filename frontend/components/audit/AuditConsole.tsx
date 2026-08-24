@@ -13,6 +13,7 @@
 
 import { useMemo, useState } from 'react';
 
+import { summarize } from '@/components/standby/ActivityStream';
 import { StatusPill } from '@/components/StatusPill';
 import type {
   AuditEventView,
@@ -200,7 +201,7 @@ export function AuditConsole({
                 </div>
                 <p className="mt-1 break-words font-mono text-micro text-muted">
                   {Object.entries(event.detail)
-                    .map(([key, value]) => `${key}=${value}`)
+                    .map(([key, value]) => `${key}=${summarize(String(value))}`)
                     .join('  ')}
                 </p>
               </li>
