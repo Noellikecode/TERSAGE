@@ -1,149 +1,172 @@
-# FIRST DUE
+# TERSAGE
 
-**Municipal structural intelligence as an institutional agent fleet.**
+Municipal structural intelligence for a fire department, built as an institutional
+agent fleet.
 
-A fire officer gets 60–90 seconds to decide how a building will behave before
-crews go inside. Everything that would inform that decision already exists in
-writing — the permit for the attic conversion, the inspection that flagged a
-blocked stairwell, the roof geometry showing a solar array that cannot be cut,
-the fact that the floor is lightweight parallel-chord truss.
+A fire department already holds most of what its crews need to know about a
+building: permits filed, inspections closed, violations still open, the
+assessor's record of how it was built. That knowledge is spread across systems
+nobody reads under time pressure. TERSAGE reads it continuously, keeps a
+provenanced profile of every structure in a district, and has the answer ready
+before the call comes in.
 
-None of it is reachable with an engine rolling. FIRST DUE makes it reachable by
-doing the work months earlier.
+## Run it
 
-> **This is a decision-support prototype, not a certified public-safety system.**
-> It has not been through the validation any tool would need before an incident
-> commander relied on it under fire conditions. See [Honest disclosure](#honest-disclosure).
-
----
-
-## The architectural thesis
-
-**The brief is instant because months of background work already happened.**
-
-|                | Slow loop                                    | Incident loop                       |
-| -------------- | -------------------------------------------- | ----------------------------------- |
-| Trigger        | Scheduler, continuous                        | CAD dispatch event                  |
-| Horizon        | Weeks to years                               | Seconds                             |
-| Job            | Watch sources, extract, detect conflict, rank survey work, file referrals | Load profile, stream brief, notify agencies, log the incident |
-| Output         | Department readiness console                 | Streaming tactical brief            |
-| Scale          | 3,800+ structures per district               | 1 structure, no artificial delay    |
-
-No system can cold-query eleven municipal sources fast enough to matter. The
-slow loop is the product; the incident loop is the payoff.
-
-## The three principles
-
-1. **Disagreement is signal.** When the permit says two stories and the lidar
-   measures three, the system surfaces the conflict rather than averaging or
-   picking a winner — unpermitted construction is itself a structural risk.
-2. **Absence renders as UNKNOWN, never as NONE.** "No hazmat filing on record"
-   and "no hazardous materials present" are different statements.
-3. **Inferred renders differently from observed.** Confidence propagates to
-   every downstream conclusion.
-
-## What it will never do
-
-No tactical recommendations. No offensive/defensive call. No crew assignments.
-No evacuation orders. No fire-behaviour prediction. Every incident agent is
-information delivery or clerical execution. Tactics belong to the incident
-commander, and an agent that nudges them is a liability.
-
-Gemini extracts facts into strict schemas, composes bounded prose, and explains
-deterministic results. Gemma decides only whether a document is worth a Gemini
-call — the one judgement whose failure is safe in both directions, and it fails
-open. Neither model makes an authorization decision, decides whether facts
-conflict, invents a structural fact, fills an UNKNOWN, blocks the instant brief,
-or issues a tactical recommendation. **The instant brief stage contains no model
-call at all.**
-
----
-
-## Quick start (no credentials required)
+No credentials, no cloud account.
 
 ```bash
-make setup      # install backend + frontend toolchains (Python 3.12 via uv)
-make demo       # start the credential-free demo: API on :8000, console on :3000
+make setup
+make demo
 ```
 
-Fake mode is the default. It runs the entire fleet, gateway, and console with no
-Google credentials — the fake adapters implement the same interfaces,
-authorization rules, idempotency behaviour, event ordering, and failure modes as
-the live ones.
+The API serves on `:8000` and the console on `:3000`. Every port has a
+credential-free implementation with the same authorization rules, idempotency
+behaviour, event ordering and failure modes as the Google-backed one, so the
+whole fleet runs on a laptop.
 
-### The commands
+| Command | What it does |
+|---|---|
+| `make demo` | API and console, credential-free |
+| `make slow-loop` | One complete slow-loop pass over a district |
+| `make verify` | Lint, types, tests, schema, console build, secret scan |
+| `make reset` | Deterministic demo state, same content hash every time |
+| `make infra-check` | Terraform format, validate, and conformance |
 
-| Command               | What it does                                                    |
-| --------------------- | --------------------------------------------------------------- |
-| `make demo`           | Credential-free demo: backend + frontend, seeded and ready       |
-| `make verify`         | The complete verification suite: lint, types, tests, build, scan |
-| `make reset`          | Deterministic demo reset — same content hash every time          |
-| `make deploy-staging` | Documented staging deployment (see `docs/deploy.md`)             |
-| `make slow-loop`      | One complete slow-loop pass over a district, no credentials       |
-| `make infra-check`    | Terraform format, validate, and conformance — no credentials      |
+## Two loops
 
-Run `make help` for the full target list. `make test-cloud
-GCP_TEST_PROJECT_ID=your-test-project` runs the durable-memory contract suite
-against a real Firestore and real Pub/Sub — the same tests that run in memory,
-against the real services. There is no emulator: what that suite asserts is
-transaction and ordering semantics, which is exactly what an emulator
-approximates rather than reproduces. See [docs/setup.md](docs/setup.md).
+**The slow loop** runs against municipal and federal records. It reads permits,
+the assessor's roll, fire inspections, violations, parcels, federal hazard
+registries and satellite geometry; turns filings into facts bound to the
+character spans they came from; detects where two sources disagree; ranks
+structures by whether a person needs to go and look; and drafts inter-agency
+referrals for a captain to file.
 
-## Repository layout
+**The incident loop** wakes on a 911 call or a CAD dispatch. It reads the
+caller's narrative, opens the incident against one profile snapshot, and streams
+a brief to the incident commander in three stages. The first stage contains no
+model call — it is a deterministic template over stored facts, and
+`BriefEmission` refuses to be constructed any other way.
 
-```
-backend/src/firstdue/   FastAPI application, domain model, ports, adapters
-  domain/               Models, invariants, and the deterministic engines
-  reliability/          Failure classification, derived backoff, circuit breakers
-  eventing/             One delivery policy, shared by both transports
-  sources/              Source framework: caching, limits, snapshots, backfill
-  extraction/           Screening, triage, typed extraction with spans
-  agents/               Records · geometry · hazard watchers, ranker, actions
-  gateway/              Default-deny policy, PHI derivation, jurisdiction
-  incident/             Controller, reconciler, fusion, resources, recorder
-  security/             Screening, signed callbacks, request limits
-  registry/             The eleven agent descriptors, and topic routing
-  observability/        Structured logs, OpenTelemetry traces and metrics
-  adapters/             memory · fake · firestore · pubsub · google · vertex
-frontend/               Next.js 14 App Router command center
-  app/api/gateway/      Server-side proxy; the backend credential never reaches the browser
-  components/           Standby, profile, incident, audit, geometry
-  lib/api/              Typed client, SSE stream, contract-checked types
-infra/terraform/        Terraform (OpenTofu): 12 modules, staging and prod
-  policy/               Index, topic, and IAM data derived from the code
-docs/                   Architecture, ADRs, setup, build notes, threat model
-fixtures/               Synthetic fixtures (EMS, Tier II, CAD, RMS, thermal)
-tests/                  pytest suite: invariants, API, adapters, contract
-```
+The slow loop does not stop when a fire starts.
 
-## Documentation
+## What the fleet is
 
-- [Setup](docs/setup.md) — toolchains, environment variables, running locally
-- [Architecture](docs/architecture.md) — the two loops, the fleet, the gateway
-- [Architecture decisions](docs/adr/) — why the system is shaped this way
-- [Threat model](docs/threat-model.md) — what can go wrong, what stops it, what does not
-- [Build notes](docs/build-notes.md) — decisions, deviations, commands, risks
+Thirteen agents are published in the catalog; nine are scheduled. The other four
+are superseded and stay resolvable, because a brief recorded two years ago names
+the agent version that produced it.
 
-## Honest disclosure
+| Agent | Loop | Budget | Approval |
+|---|---|---|---|
+| `records-watcher` | slow | 120s | — |
+| `hazard-watcher` | slow | 180s | — |
+| `geometry-watcher` | slow | 300s | — |
+| `structure-watch` | slow | 60s | — |
+| `referral-clerk` | slow | 60s | captain |
+| `incident-interceptor` | incident | 6s | — |
+| `sensor-fusion` | incident | 2s | — |
+| `agency-notifier` | incident | 5s | chief (utility shutoff) |
+| `incident-recorder` | incident | 15s | — |
 
-A hidden simulation is worse than an admitted one.
+Each is published to a registry with its version, scopes, write targets and
+latency budget. Departments subscribe to what they are authorized to run, pinned
+to a version.
 
-- CAD dispatch, the building department referral intake, and the department
-  records system are **simulated receiving APIs with real write semantics**.
-- EMS, mutual-aid, and confidential Tier II fixtures are **synthetic**.
-  **No real person's records appear anywhere in this project.**
-- Permit, assessor, inspection, imagery, hazmat, pipeline, EV, weather, and
-  lidar sources are real public data for real addresses.
-- Thermal footage is recorded, not a live flight.
-- The survey **calendar event and crew notification** are recorded and audited
-  but not sent, unless the deployment holds delegated Google Workspace
-  authority (`WORKSPACE_WRITES=google`). The console says so on screen when
-  live mode is running without it. Every other write — work order, pre-incident
-  plan, inter-agency referral, agency notifications — executes for real.
+## How it is built
 
-Default municipality: **San Francisco**. City-specific behaviour is isolated
-behind adapter interfaces.
+Ports and adapters. Sixteen ports, one per seam, and nine adapter packages —
+`memory`, `fake`, `firestore`, `pubsub`, `google`, `vertex`, `resend`, `nasa`,
+`clock`. Two implementations of nearly every port, so the credential-free demo is
+a faithful rehearsal rather than a mock.
 
-## Licence
+- **Domain** — facts, conflicts, profiles, geometry, briefs, the merge engine,
+  the conflict rules. Deterministic, no I/O.
+- **Gateway** — default-deny policy on every read and write, with PHI derivation
+  and jurisdiction checks.
+- **Registry** — the agent catalog, versioning, and per-department subscription.
+- **Memory bank** — durable open questions that outlive a pass, recall gated by
+  the caller's scopes.
+- **Reliability** — failure classification, derived backoff, circuit breakers.
+- **Observability** — structured logs, OpenTelemetry traces, an append-only
+  audit log that never holds document contents.
+
+Firestore and Pub/Sub sit behind the same contracts as the in-memory
+implementations, and one contract suite holds both to the same behaviour.
+
+## The epistemics
+
+Three states, and none of them is an empty field.
+
+- An attribute nothing settled is `UNKNOWN`, with the sources that were checked.
+- An attribute two sources disagree about is `DISPUTED`, with both facts intact.
+  Disagreement is never averaged.
+- A source that could not be reached is `UNAVAILABLE`, naming the source. It is
+  not an absence of hazard.
+
+Every fact carries its source, its snapshot, when it was observed, a confidence,
+and the span in the document that supports it. Facts are immutable and
+append-only; a correction is a new fact that supersedes an old one, and both
+remain.
+
+**The model may not author a fact.** Models extract typed values bound to spans,
+route documents, compose prose and resolve references. Deterministic code decides
+what is true, what conflicts, and what gets ranked.
+
+**A human approves anything that reaches outside the department.** A captain
+files an inter-agency referral; a chief approves a utility shutoff. Both gates
+are enforced twice — once at the decision and once at the write.
+
+## Reasoning
+
+Six agents run LangGraph graphs on Gemini through Vertex AI: `records-watcher`,
+`hazard-watcher`, `referral-clerk`, `incident-interceptor`, `incident-recorder`,
+`agency-notifier`. A graph decides what to look up, what to cross-check, and when
+it is done. When a graph runs out of budget it checkpoints into the memory bank
+and opens a question, so work that spans weeks survives a restart.
+
+`incident-interceptor` is the head of the incident loop. It reads the caller's
+narrative against the profile the slow loop compiled, then writes a focus to the
+incident log — pointers carrying an id and a reason, never a value — and the
+other incident agents read it. `incident-recorder` closes questions the slow loop
+opened months earlier, when the incident actually answered them.
+
+## External services
+
+| Service | Used for |
+|---|---|
+| Vertex AI — Gemini, Gemma | Extraction, composition, triage, imagery reading |
+| Google Search grounding | Resolving a reference to a canonical id |
+| Model Armor | Inline screen on every ingested document |
+| Firestore, Pub/Sub, Cloud Run, Secret Manager | State, events, execution, credentials |
+| Vertex Vector Search | Semantic recall over screened narratives |
+| Google Solar API, Street View, Static Maps | Roof geometry, building imagery |
+| NASA FIRMS | Regional satellite fire activity |
+| NASA POWER | Fire-weather context |
+| Resend | Delivering an approved referral |
+| SF open data, EPA FRS, USGS 3DEP, NREL, NWS | Municipal and federal records |
+
+Ten of thirteen catalogued sources have live endpoints. The rest are catalogued
+with the reason they have none, and say so on screen.
+
+## The console
+
+One screen, two arrangements. In standby the fleet works across the width with a
+regional fire-activity map in the middle; each agent has its own visual and a
+terminal showing what it did. On dispatch the page reorganises: incident agents
+on the left, the massing model and building imagery in the middle, the slow loop
+on the right, still running.
+
+## Deployment
+
+Thirteen Terraform modules across staging and production. Eleven Cloud Run
+services — the two loops and nine per-agent workers — each running as its own
+service account with only the roles its declared scopes imply. The IAM and
+Firestore index policy is derived from the agent descriptors, and a conformance
+suite fails if the two drift apart.
+
+## Verification
+
+1,425 backend tests and 278 console tests. Strict mypy across 184 source files.
+Ruff. A contract suite that holds the in-memory and Firestore backends to one set
+of behaviours, and an infrastructure suite that holds Terraform to the code.
 
 Apache-2.0.

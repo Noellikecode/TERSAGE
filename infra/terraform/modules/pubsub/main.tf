@@ -18,7 +18,13 @@ variable "push_service_account" {
   type        = string
 }
 variable "push_audience" {
-  description = "OIDC audience the backend requires. Usually the service URL."
+  description = <<-EOT
+    OIDC audience for the shared subscriptions, which push to the slow loop.
+
+    This is the slow service's own audience -- its custom audience, not the
+    generated URL, because the value must equal the INTERNAL_PUSH_AUDIENCE that
+    service was given and that is set before any URL exists.
+  EOT
   type        = string
 }
 variable "max_delivery_attempts" {
@@ -36,6 +42,19 @@ variable "subscriptions_policy_file" {
 }
 variable "agent_push_endpoints" {
   description = "agent id -> full https URL of that worker's push endpoint."
+  type        = map(string)
+}
+variable "agent_push_audiences" {
+  description = <<-EOT
+    agent id -> the OIDC audience that worker accepts.
+
+    Separate from the endpoint because they are not the same string. An agent
+    subscription pushes to the worker's generated URL and must mint a token for
+    the worker's own audience; using one shared audience meant every agent push
+    carried the slow loop's audience and Cloud Run rejected it before the
+    request reached the app -- a delivery failure with nothing in the app's
+    logs to explain it.
+  EOT
   type        = map(string)
 }
 
@@ -146,7 +165,8 @@ resource "google_pubsub_subscription" "agent_push" {
     push_endpoint = var.agent_push_endpoints[each.value.agent]
     oidc_token {
       service_account_email = var.push_service_account
-      audience              = var.push_audience
+      # The audience of the service this subscription actually pushes to.
+      audience = var.agent_push_audiences[each.value.agent]
     }
   }
 

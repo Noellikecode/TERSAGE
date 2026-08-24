@@ -237,6 +237,13 @@ def test_notifications_inform_and_commitments_spend() -> None:
         "public-works",
         "exposure",
         "building-department",
+        # The three partners the descriptor names. They inform and commit
+        # nobody, which is the only test that puts a kind on this side of the
+        # line -- telling a utility what is on the roof is not cutting its
+        # service, and the two must not share a kind.
+        "utility-conditions",
+        "mutual-aid",
+        "county-oem",
     }
     assert set(commitment_kinds()) == {
         "gas-shutoff",

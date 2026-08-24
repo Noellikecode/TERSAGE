@@ -15,6 +15,7 @@ import pytest
 
 from firstdue.adapters.clock import DeterministicIdGenerator
 from firstdue.domain.enums import Classification, SourceType
+from firstdue.domain.keys import Keys
 from firstdue.extraction.extractor import FactExtractor
 from firstdue.ports.sources import SourceRecord, SourceSnapshot
 from firstdue.security.armor import ArmorVerdict, DocumentScreen, LocalInjectionDetector
@@ -34,7 +35,7 @@ class _RecordingScreen:
         self.calls = 0
         self.seen: list[str | None] = []
 
-    def inspect(self, document_text: str | None) -> ArmorVerdict:
+    async def inspect(self, document_text: str | None) -> ArmorVerdict:
         self.calls += 1
         self.seen.append(document_text)
         return ArmorVerdict(
@@ -130,3 +131,147 @@ async def test_an_unavailable_screen_fails_closed() -> None:
     )
     outcome = await _extract(extractor)
     assert outcome.screened_text is None
+
+
+class _UnavailableScreen:
+    """A configured screen that could not run -- the shape a live outage takes."""
+
+    screen_name = "model-armor"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def inspect(self, document_text: str | None) -> ArmorVerdict:
+        self.calls += 1
+        return ArmorVerdict(
+            safe_text="",
+            findings=("recording-screen/instruction-override",),
+            screen=self.screen_name,
+            unavailable_reason="SCREEN_UNAVAILABLE",
+        )
+
+
+class _CountingModel:
+    """Fails the test by being called at all."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def extract(self, **kwargs: object) -> None:
+        self.calls += 1
+        raise AssertionError("an unscreened document was handed to a model")
+
+    async def triage(self, **kwargs: object) -> None:
+        self.calls += 1
+        raise AssertionError("an unscreened document was handed to a model")
+
+
+@pytest.mark.degraded
+async def test_a_screen_outage_never_lets_a_document_reach_a_model() -> None:
+    """The rule the screen exists for, at the moment the screen is down."""
+    screen = _UnavailableScreen()
+    model = _CountingModel()
+    extractor = FactExtractor(
+        ids=DeterministicIdGenerator("screen-test"),
+        model=model,  # type: ignore[arg-type]
+        screen=screen,
+    )
+
+    outcome = await _extract(extractor)
+
+    assert screen.calls == 1
+    assert model.calls == 0
+    assert outcome.screened_text is None
+
+
+@pytest.mark.degraded
+async def test_a_screen_outage_is_reported_and_not_left_looking_like_an_empty_pass() -> None:
+    """A screen that was down and a narrative that said nothing are not alike.
+
+    A pass that returns no facts and says nothing else reads, downstream and in
+    the audit record, as a document that turned out to hold nothing. This one
+    held something nobody was able to look at, and the outcome has to say so.
+    """
+    outcome = await _extract(
+        FactExtractor(
+            ids=DeterministicIdGenerator("screen-test"),
+            model=_CountingModel(),  # type: ignore[arg-type]
+            screen=_UnavailableScreen(),
+        )
+    )
+
+    assert outcome.screen_unavailable_reason == "SCREEN_UNAVAILABLE"
+    assert outcome.used_model is False
+    # What the local screen did manage to find is not lost with it.
+    assert outcome.screen_findings == ("recording-screen/instruction-override",)
+
+
+@pytest.mark.degraded
+async def test_a_screen_outage_does_not_stop_the_filed_columns() -> None:
+    """Fail closed on the model, not on the fact.
+
+    A permit's *filing* does not stop being true because a prose screen is
+    down, so the structured columns are still extracted and still land.
+    """
+    record, snapshot = _record()
+    extractor = FactExtractor(
+        ids=DeterministicIdGenerator("screen-test"),
+        model=_CountingModel(),  # type: ignore[arg-type]
+        screen=_UnavailableScreen(),
+    )
+
+    outcome = await extractor.extract(
+        record.model_copy(update={"fields": {"stories": "3"}}),
+        address_id="sf-0450-hayes",
+        snapshot=snapshot,
+        source_type=SourceType.PERMIT,
+        ingested_at=datetime(2026, 4, 2, tzinfo=UTC),
+        field_map={"stories": Keys.STORIES},
+    )
+
+    assert [fact.canonical_key for fact in outcome.facts] == [Keys.STORIES]
+    assert outcome.screen_unavailable_reason == "SCREEN_UNAVAILABLE"
+
+
+async def test_the_outcome_names_the_screen_that_actually_ran() -> None:
+    """The audit record has to name the screen, not assume the local one.
+
+    ``RecordsWatcher`` used to hard-code ``local-injection-detector/1`` into the
+    ``INJECTION_BLOCKED`` audit detail. Under Model Armor that named the wrong
+    screen on every block, in the one record an investigator would use to work
+    out what had examined the document.
+    """
+    screen = _RecordingScreen()
+    extractor = FactExtractor(
+        ids=DeterministicIdGenerator("screen-test"), model=None, screen=screen
+    )
+    outcome = await _extract(extractor)
+    assert outcome.screen == "recording-screen"
+
+
+async def test_an_unavailable_screen_is_distinguishable_from_a_quiet_one() -> None:
+    """Withheld and empty are opposite claims that produce the same facts.
+
+    Both return no narrative facts. Only one of them means the document was
+    read. A caller that cannot tell them apart records "nothing found" about a
+    document nothing looked at.
+    """
+
+    class _DeadScreen:
+        screen_name = "dead-screen"
+
+        async def inspect(self, document_text: str | None) -> ArmorVerdict:
+            return ArmorVerdict(
+                safe_text="",
+                blocked=False,
+                screen=self.screen_name,
+                unavailable_reason="SCREEN_UNAVAILABLE",
+            )
+
+    extractor = FactExtractor(
+        ids=DeterministicIdGenerator("screen-test"), model=None, screen=_DeadScreen()
+    )
+    outcome = await _extract(extractor)
+    assert outcome.screen_unavailable_reason == "SCREEN_UNAVAILABLE"
+    assert outcome.screen == "dead-screen"
+    assert outcome.used_model is False

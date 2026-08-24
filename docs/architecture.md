@@ -107,7 +107,22 @@ in the system is tried as a write in the test suite and refused.
 
 Structured facts are what the department *believes*. The narratives those facts
 were read out of are searchable separately, by meaning, through `VectorIndex` —
-in-memory in fake mode, Vertex Vector Search in live mode.
+two implementations behind one port, selected by `VECTOR_SEARCH_ENABLED`.
+
+**The deployment runs the in-memory one, and that is a deliberate cost
+decision rather than a mode.** `VertexVectorIndex` is written and live mode can
+select it, but `infra/terraform/envs/staging/terraform.tfvars` sets
+`vector_search_enabled = false` — a running index endpoint is several hundred
+USD a month — and the `vector-search` module creates nothing while it is
+false. So what serves recall in staging is `adapters/memory/vectors.py`,
+scoring by token overlap: a deterministic similarity that needs no model, no
+credentials, and no network, and that is not an embedding and does not pretend
+to be. **Say the consequence out loud: that index is two dictionaries in the
+worker process, so recall is per-instance and does not survive a
+scale-to-zero.** Everything a caller can observe about a match is identical
+across the two — same protocol, same classification refusal, same match shape,
+same rule that a match is a pointer. The durability is the part that differs,
+and it differs in the direction that matters.
 
 A match is a **pointer, never an assertion**. It carries the ids and a distance,
 not text and not a value, so an officer goes and reads the record. An embedding
@@ -161,8 +176,15 @@ or `403` for a caller that is not the fleet. See
 
 ## The agent registry
 
-Eleven agents, two loops, five external write targets, all published at `1.0.0`
-and pinned by the fire department at startup.
+Thirteen descriptors, two loops, five external write targets, all published at
+`1.0.0` and pinned by the fire department at startup. **Nine of the thirteen are
+scheduled.** `ACTIVE_FLEET` is derived as the descriptors with no
+`deprecated_at`, so retiring an agent is one edit and there is no second
+hand-maintained list to disagree with the first; the four superseded ones —
+`conflict-detector` and `survey-ranker` merged into `structure-watch`,
+`incident-controller` and `brief-reconciler` into `incident-interceptor` — stay
+resolvable so a recorded run replays byte-identically, and are routed nowhere,
+given no worker, and given no service account.
 
 **Every one of them runs through `AgentRuntime`.** `agents/fleet.py` resolves
 the pinned descriptor, obtains the authority that descriptor's scopes imply,

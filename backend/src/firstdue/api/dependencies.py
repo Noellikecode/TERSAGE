@@ -16,8 +16,11 @@ could not learn by observing that the port is open.
 
 In fake mode a caller presents a bearer token derived from ``DEMO_SEED`` --
 deterministic, in no file, and printed by ``firstdue status``. Live mode
-verifies a Google-issued OIDC token and maps its identity to a role. There is no
-mode in which a missing credential is treated as a viewer.
+verifies a Google-issued OIDC token and binds the verified email to a role from
+``CONSOLE_ROLE_BINDINGS``; see :meth:`ConsoleAuthenticator._verify_oidc` for
+what that does and does not establish. There is no mode in which a missing
+credential is treated as a viewer, and no mode in which a caller chooses their
+own role.
 """
 
 from __future__ import annotations
@@ -26,11 +29,15 @@ import hashlib
 import hmac
 from collections.abc import Callable
 from enum import StrEnum
-from typing import Any, Final
+from typing import Final
 
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field
 
+# The console verifies the same kind of token as the push endpoint, against a
+# different audience. One implementation, imported: two copies of a token
+# verifier would mean one of them is the copy nobody exercises.
+from firstdue.api.auth import OidcVerifier, verify_google_oidc
 from firstdue.domain.enums import Department, Scope
 from firstdue.domain.identity import WRITE_SCOPES
 from firstdue.errors import ConfigurationError, NotAuthorizedError
@@ -132,14 +139,24 @@ def _bearer(request: Request) -> str:
 class ConsoleAuthenticator:
     """Resolves a request to a caller, or refuses it."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, verifier: OidcVerifier = verify_google_oidc) -> None:
         self._settings = settings
+        self._verifier = verifier
+        #: Read once, at startup, so a request never depends on re-parsing it.
+        self._role_bindings = settings.console_roles
+        if not settings.use_fake_agents and not self._role_bindings:
+            # Not fatal: a deployment may have nobody enrolled yet, and refusing
+            # to start would take the read-only console down with it. But it is
+            # worth saying out loud, because until one principal is bound every
+            # caller is a viewer -- which means no referral and no shutoff can be
+            # approved by anyone.
+            logger.warning("console_role_bindings_empty")
 
     @property
     def is_configured(self) -> bool:
         if self._settings.use_fake_agents:
             return console_token(self._settings, Role.VIEWER) is not None
-        return bool(self._settings.internal_push_audience)
+        return bool(self._settings.console_audience)
 
     def authenticate(self, request: Request) -> Caller:
         """Identify the caller.
@@ -170,36 +187,56 @@ class ConsoleAuthenticator:
         logger.warning("console_auth_rejected", extra={"method": "shared-secret"})
         raise NotAuthorizedError("credential is not valid")
 
-    def _verify_oidc(self, token: str) -> Caller:  # pragma: no cover - live mode only
-        """Verify a Google-issued OIDC token and map it to a role."""
-        try:
-            from google.auth.transport import requests as google_requests
-            from google.oauth2 import id_token
-        except ImportError as exc:
-            raise ConfigurationError(
-                "google-auth is not installed; install the 'google' extra",
-                details={"package": "google-auth"},
-            ) from exc
+    def _verify_oidc(self, token: str) -> Caller:
+        """Verify a Google-issued OIDC token and bind its principal to a role.
 
-        # google-auth ships no annotations for this call; every claim used below
-        # is checked explicitly rather than trusted for its type.
-        verify: Any = id_token.verify_oauth2_token
+        **This is principal-level binding, not per-user single sign-on.** What
+        is established is that Google issued this token for this audience and
+        that the verified email on it is one ``CONSOLE_ROLE_BINDINGS`` names.
+        There is no session, no group membership, and no directory lookup, and
+        the binding list is configuration an operator maintains by hand. A
+        console that needs real per-user authentication needs an identity-aware
+        proxy in front of it -- that is a deployment decision this process
+        cannot make for itself, and pretending otherwise here would be claiming
+        an authentication story the code does not have.
+
+        The role is not read from a token claim. A Google-issued ID token, for a
+        service account or a user, carries no custom claims at all, so a
+        ``firstdue_role`` claim could never be present: defaulting off it meant
+        every caller in live mode was a viewer and no approval gate in the system
+        was reachable. A gate nobody can pass is not a gate.
+
+        An unbound principal is a viewer -- the least authority the system has,
+        and the right answer for a caller nobody has vouched for.
+        """
+        audience = self._settings.console_audience or ""
         try:
-            claims: dict[str, Any] = verify(
-                token,
-                google_requests.Request(),
-                audience=self._settings.internal_push_audience,
-            )
+            claims = self._verifier(token, audience)
+        except ConfigurationError:
+            # A missing google-auth package is the operator's problem, not the
+            # caller's; rendering it as a refusal would send an officer hunting
+            # for a credential that is fine.
+            raise
         except Exception as exc:
+            # Deliberately opaque: which check failed is not the caller's business.
             logger.warning("console_auth_rejected", extra={"method": "oidc"})
             raise NotAuthorizedError("credential is not valid") from exc
 
-        email = str(claims.get("email", ""))
+        email = str(claims.get("email", "")).strip().lower()
         if not claims.get("email_verified") or not email:
+            logger.warning("console_auth_rejected", extra={"method": "oidc"})
             raise NotAuthorizedError("credential is not valid")
-        # Role comes from a claim the identity provider controls. Absent one,
-        # the caller is a viewer: the least authority, never the most.
-        role = Role(str(claims.get("firstdue_role", Role.VIEWER)))
+        bound = self._role_bindings.get(email, Role.VIEWER.value)
+        try:
+            role = Role(bound)
+        except ValueError as exc:
+            # Settings already refused an unknown role name at startup, so this
+            # is reachable only if the two vocabularies drift. It is here because
+            # the alternative is a ValueError escaping as a 500, and an
+            # authorization failure rendered as an internal error is one nobody
+            # reads as an authorization failure.
+            logger.warning("console_auth_rejected", extra={"method": "oidc"})
+            raise NotAuthorizedError("credential is not valid") from exc
         return Caller(subject=email, role=role, scopes=frozenset(ROLE_SCOPES[role]))
 
 

@@ -4,10 +4,34 @@
  * The command center. One screen, two modes, no navigation between them.
  *
  * A dispatch does not take an officer somewhere else -- the standby view
- * compresses and the incident surfaces expand in place. That is deliberate:
+ * reorganises and the incident surfaces expand in place. That is deliberate:
  * losing the district context at the moment a fire starts is exactly when
  * losing it costs the most, and a page transition is a moment where a tablet on
  * a bad connection can show nothing at all.
+ *
+ * The shape, and the screen never scrolls as a whole:
+ *
+ * - **The district bar, full width, directly under the header.** True in both
+ *   modes, so it is above the mode switch rather than inside it. Read as an
+ *   instrument panel: a number, a meter, a two-word label.
+ * - **Standby: three columns, the same shape as an incident.** The slow loop
+ *   flanks the screen in two columns, and the middle carries the region --
+ *   satellite fire activity and fire weather at the top, the ranked structures
+ *   under it, and a selected structure under that. Standby used to be a fleet
+ *   grid across the whole width, which meant the screen changed shape entirely
+ *   at dispatch; an officer re-learning the layout at the moment a fire starts
+ *   is the cost that bought.
+ * - **Incident: three columns.** The incident-loop agents down the left, the
+ *   massing model beside the building photograph in the middle with the brief
+ *   under them, and the slow-loop agents down the right. The slow loop does not
+ *   stop when a fire starts, and a rail that vanished would imply it had -- so
+ *   it moves, it does not disappear.
+ *
+ * Which agent belongs to which *loop* is `FleetPanel`'s decision, made from the
+ * `loop` prop each column passes. The layout never re-answers that. Standby is
+ * the one place it also has to decide *which half* of a single loop a column
+ * gets, because both standby columns are the same loop and the panel has no
+ * way to tell them apart: that split is done here, once, in catalog order.
  *
  * Everything on screen comes from the backend. Where the backend reports
  * nothing, the console says so rather than inventing a row.
@@ -15,10 +39,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { AuditConsole } from '@/components/audit/AuditConsole';
-import { BackendStatus } from '@/components/BackendStatus';
 import { GeometryCanvas, type ViewAngle } from '@/components/GeometryCanvas';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
+import { BuildingImagery } from '@/components/incident/BuildingImagery';
 import { IntakePanel } from '@/components/incident/IntakePanel';
 import { IncidentBanner } from '@/components/incident/IncidentBanner';
 import { ResourcePanel } from '@/components/incident/ResourcePanel';
@@ -26,11 +49,14 @@ import { ThermalPanel } from '@/components/incident/ThermalPanel';
 import { AttributeGrid } from '@/components/profile/AttributeGrid';
 import { ConflictPanel, type ResolutionSubmission } from '@/components/profile/ConflictPanel';
 import { Timeline } from '@/components/profile/Timeline';
-import { ActivityStream, toStreamItems } from '@/components/standby/ActivityStream';
 import { AgentRail } from '@/components/standby/AgentRail';
-import { DispatchPanel } from '@/components/standby/DispatchPanel';
+import { DispatchPanel, SAMPLE_CALLS } from '@/components/standby/DispatchPanel';
 import { DistrictStrip } from '@/components/standby/DistrictStrip';
-import { SurveyQueue } from '@/components/standby/SurveyQueue';
+import {
+  FireActivityMap,
+  normalizeFireActivity,
+  type FireActivity,
+} from '@/components/standby/FireActivityMap';
 import { StatusPill } from '@/components/StatusPill';
 import { browserGet, browserPost } from '@/lib/api/client';
 import { useBriefStream } from '@/lib/api/stream';
@@ -43,9 +69,7 @@ import type {
   CloseIncidentResponse,
   DistrictStatsView,
   GeometryView,
-  IncidentReplayView,
   IntakeChannel,
-  IncidentLogView,
   OpenIncidentResponse,
   PolicyDecisionView,
   QueueView,
@@ -60,6 +84,188 @@ import type {
 } from '@/lib/api/types';
 
 const VIEWS: ViewAngle[] = ['ISO', 'ALPHA', 'BRAVO', 'CHARLIE', 'DELTA'];
+
+/** How often the one remaining piece of status chrome re-checks the backend. */
+const READINESS_POLL_MS = 5000;
+
+/**
+ * How often standby re-reads the district while nothing is burning.
+ *
+ * Without this the console was static: the district counts, the ranked
+ * structures and every agent's reasoning box were whatever they had been when
+ * the page loaded, and a screen that has stopped updating looks exactly like a
+ * district where nothing is happening. Seven seconds is slower than the slow
+ * loop produces work and fast enough that a card visibly moves.
+ *
+ * It runs in standby only. During an incident the brief arrives on an SSE
+ * stream and this loop is torn down: a second fetch loop against the same
+ * backend would compete with the stream for a tablet's connection while
+ * telling the officer nothing the stream is not already saying.
+ */
+const STANDBY_POLL_MS = 7000;
+
+/**
+ * How stale regional fire activity is allowed to get before the standby poll
+ * re-reads it.
+ *
+ * There is no second timer: the fire-activity read rides the seven-second
+ * standby poll and is skipped on the passes where the last one is still fresh.
+ * A satellite overpass is hours apart and the endpoint is backed by an external
+ * archive, so asking every seven seconds would be a request-per-tablet against
+ * someone else's quota to redraw a map that has not moved. Two minutes keeps
+ * the panel honest about the day without pretending to a cadence the data has.
+ *
+ * Running a slow-loop pass by hand bypasses this: an operator who asked for a
+ * pass is asking to see the current state, not a two-minute-old one.
+ */
+const FIRE_ACTIVITY_MAX_AGE_MS = 120000;
+
+/**
+ * The demo choreography. Three constants, together at the top so a recording
+ * can be paced without reading the component.
+ *
+ * `AUTO_PASS_MS` runs a real slow-loop pass on an interval, so standby is a
+ * platform doing background work rather than a list of statuses. Everything
+ * that moves on screen moved because a pass wrote something.
+ *
+ * `AUTO_CALL_MS` is how long standby runs before a call arrives, and
+ * `CALL_WARNING_MS` is how much of that is spent visibly counting down, so a
+ * viewer sees the transition begin instead of the screen snapping.
+ */
+const AUTO_PASS_MS = 25000;
+/**
+ * The same passes, slower, while an incident is open.
+ *
+ * The slow loop does not stop when a fire starts -- that is stated in the fleet
+ * component and in the architecture notes, and it is the reason the right-hand
+ * column used to carry it. It is off screen during an incident now, so the only
+ * thing that makes "still running" true is that it is still running.
+ */
+const AUTO_PASS_INCIDENT_MS = 60000;
+const AUTO_CALL_MS = 50000;
+const CALL_WARNING_MS = 6000;
+
+/** Queue rows carry a backend status; only the ones off the default are shown. */
+function queueTone(status: string) {
+  if (status === 'DISPATCHED') return 'live' as const;
+  if (status === 'SURVEYED') return 'confirmed' as const;
+  return 'muted' as const;
+}
+
+/**
+ * What one slow-loop pass reported, in one line.
+ *
+ * Every clause is read off the pass's own report and omitted when the report
+ * does not carry it. A pass that wrote nothing says "0 facts written", which is
+ * a result; a pass whose report has no such field says nothing at all, which is
+ * an absence. The two must not be summarised into the same sentence.
+ */
+function summarisePass(report: unknown): string {
+  const parts: string[] = [];
+  if (typeof report === 'object' && report !== null) {
+    const row = report as Record<string, unknown>;
+    if (typeof row.facts_written === 'number') parts.push(`${row.facts_written} facts written`);
+    if (Array.isArray(row.conflicts)) parts.push(`${row.conflicts.length} conflicts detected`);
+    if (typeof row.queue_size === 'number') parts.push(`queue re-ranked to ${row.queue_size}`);
+    if (Array.isArray(row.unavailable_sources) && row.unavailable_sources.length > 0) {
+      parts.push(`${row.unavailable_sources.length} sources UNAVAILABLE`);
+    }
+  }
+  return parts.length > 0 ? `Slow-loop pass complete: ${parts.join(', ')}.` : 'Slow-loop pass complete.';
+}
+
+type BackendState = 'checking' | 'ready' | 'degraded' | 'unreachable';
+
+/**
+ * The only status chrome left in the header: is the backend there at all.
+ *
+ * The row of chips this replaces -- mode, storage backend, event backend,
+ * municipality, version -- told an operator things that never change while
+ * they watch, and cost the screen a band of pixels to do it. One thing does
+ * change and does matter: a district with no work queued and a district whose
+ * backend is dead render identically otherwise, and an officer must never read
+ * the second as the first.
+ *
+ * So: a dot. Silent when the backend answers, a word when it does not.
+ */
+function BackendSignal({
+  initial,
+  statusMissing,
+}: {
+  initial: Readiness | null;
+  statusMissing: boolean;
+}) {
+  const [state, setState] = useState<BackendState>(() => {
+    // The server render already tried and failed; say so on the first paint
+    // rather than showing "checking" until a poll confirms what is known.
+    if (statusMissing) return 'unreachable';
+    if (initial) return initial.ready ? 'ready' : 'degraded';
+    return 'checking';
+  });
+  const [detail, setDetail] = useState<string | null>(initial?.status ?? null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+
+    async function poll() {
+      // Through the console's own gateway, not straight at the backend: this
+      // runs in the browser and the credential lives on the server.
+      const result = await browserGet<Readiness>('/readyz', { signal: controller.signal });
+      if (cancelled) return;
+      if (result.ok) {
+        setState(result.data.ready ? 'ready' : 'degraded');
+        setDetail(result.data.status);
+      } else {
+        setState('unreachable');
+        setDetail(result.error.message);
+      }
+    }
+
+    void poll();
+    const timer = setInterval(() => void poll(), READINESS_POLL_MS);
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, []);
+
+  const label =
+    state === 'ready'
+      ? 'Backend reachable'
+      : state === 'degraded'
+        ? 'Backend degraded'
+        : state === 'unreachable'
+          ? 'Backend unreachable'
+          : 'Checking backend';
+
+  const tone =
+    state === 'ready'
+      ? 'text-confirmed'
+      : state === 'degraded'
+        ? 'text-disputed'
+        : state === 'unreachable'
+          ? 'text-alarm'
+          : 'text-muted';
+
+  return (
+    <span
+      className="flex items-center gap-1.5 text-micro uppercase tracking-wide"
+      aria-live="polite"
+      aria-atomic="true"
+      title={detail ? `${label}: ${detail}` : label}
+      data-testid="backend-signal"
+    >
+      <span aria-hidden="true" className={tone}>
+        {state === 'ready' ? '●' : state === 'unreachable' ? '■' : '▲'}
+      </span>
+      {/* Healthy is the boring case: it stays available to a screen reader and
+          out of a commander's way. Anything else is said in words. */}
+      <span className={state === 'ready' ? 'sr-only' : tone}>{label}</span>
+    </span>
+  );
+}
 
 export interface CommandCenterProps {
   status: SystemStatus | null;
@@ -101,11 +307,6 @@ export function CommandCenter({
   const [selected, setSelected] = useState<string | null>(null);
   /** The transcript this incident was dispatched with, if any. */
   const [narrative, setNarrative] = useState('');
-  const [replay, setReplay] = useState<IncidentReplayView | null>(null);
-  const [replayBusy, setReplayBusy] = useState(false);
-  /** Survives `setIncident(null)` on close, because replay is what somebody
-   *  opens *after* an incident, not during one. */
-  const [replayableIncidentId, setReplayableIncidentId] = useState<string | null>(null);
   /** Referrals staged in this session.
    *
    * The profile carries `open_referrals` only once a referral has been
@@ -124,10 +325,42 @@ export function CommandCenter({
 
   const [incident, setIncident] = useState<OpenIncidentResponse | null>(null);
   const [outcomes, setOutcomes] = useState<ResourceOutcomeView[]>([]);
-  const [log, setLog] = useState<IncidentLogView | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
+
+  /** Regional fire activity. `null` until the first read answers. */
+  const [fireActivity, setFireActivity] = useState<FireActivity | null>(null);
+  /** A failed *request*, kept apart from an answered request carrying a
+      refusal: the endpoint always returns 200, so a transport failure and an
+      unconfigured key are different facts and must not render alike. */
+  const [fireActivityError, setFireActivityError] = useState<string | null>(null);
+  /** When the last fire-activity read went out, for the staleness check. */
+  const fireActivityAtRef = useRef(0);
+
+  /** The hand-run slow-loop pass: idle, in flight, or finished with a word. */
+  const [passRunning, setPassRunning] = useState(false);
+  //: When the last pass finished, for the off-screen slow-loop line. Null until
+  //: one has, because "no pass yet" and "a pass just now" are different claims.
+  const [passAt, setPassAt] = useState<number | null>(null);
+  //: Seconds until the demo dispatches, or null when nothing is scheduled.
+  const [callIn, setCallIn] = useState<number | null>(null);
+  //: Set once a call has been placed, by anyone, so the demo never fires a
+  //: second one on top of a live incident.
+  const dispatchedRef = useRef(false);
+  //: The viewer stopped the clock. Sticky: a demo you had to keep re-cancelling
+  //: mid-sentence would be worse than no demo.
+  const [autoCallOff, setAutoCallOff] = useState(false);
+  //: What the demo timers read. A ref, so a refresh that changes any of it does
+  //: not tear the timers down -- see the comment on the choreography effect.
+  const demoRef = useRef({
+    queue: null as QueueView | null,
+    passRunning: false,
+    busy: false,
+    runPass: async () => {},
+    dispatch: async (_a: string, _n: string, _c: IntakeChannel) => {},
+  });
+  const [passNotice, setPassNotice] = useState<string | null>(null);
 
   const stream = useBriefStream(incident?.incident_id ?? null);
   const announcedRef = useRef<number>(0);
@@ -148,18 +381,66 @@ export function CommandCenter({
     setAnnouncement(announcementFor(latest));
   }, [latest]);
 
-  const refreshStandby = useCallback(async () => {
-    const [statsResult, queueResult, eventsResult, decisionsResult] = await Promise.all([
-      browserGet<DistrictStatsView>(`/api/v1/districts/${districtId}/stats`),
-      browserGet<QueueView>(`/api/v1/districts/${districtId}/queue`),
-      browserGet<AuditEventView[]>('/api/v1/internal/audit/events?limit=60'),
-      browserGet<PolicyDecisionView[]>('/api/v1/internal/audit/decisions?limit=60'),
-    ]);
-    if (statsResult.ok) setStats(statsResult.data);
-    if (queueResult.ok) setQueue(queueResult.data);
-    if (eventsResult.ok) setEvents(eventsResult.data);
-    if (decisionsResult.ok) setDecisions(decisionsResult.data);
-  }, [districtId]);
+  /**
+   * Read the region's satellite fire activity.
+   *
+   * Not a loop of its own: this is called once when standby opens and then only
+   * from the standby poll, which is the console's single heartbeat.
+   */
+  const refreshFireActivity = useCallback(
+    async (signal?: AbortSignal) => {
+      fireActivityAtRef.current = Date.now();
+      const result = await browserGet<unknown>(
+        `/api/v1/districts/${districtId}/fire-activity`,
+        { signal },
+      );
+      // A torn-down poll aborts, which comes back `ok: false`. That is not a
+      // failure an officer should be told about.
+      if (signal?.aborted) return;
+      if (result.ok) {
+        setFireActivity(normalizeFireActivity(result.data));
+        setFireActivityError(null);
+        return;
+      }
+      setFireActivityError(result.error.message);
+    },
+    [districtId],
+  );
+
+  const refreshStandby = useCallback(
+    async (signal?: AbortSignal, options: { forceFireActivity?: boolean } = {}) => {
+      // The audit event and decision streams are no longer rendered as a console
+      // of their own. They are still fetched: the fleet panel builds each agent's
+      // reasoning box out of the events that agent is the `actor` of, so this is
+      // the fleet's data, not the audit console's leftovers.
+      //
+      // The queue is still fetched too, though the ranked-queue panel is gone:
+      // its rows are the only list of addresses the console has, and selecting
+      // a structure is what opens a profile and arms a dispatch.
+      //
+      // Fire activity rides this same pass rather than getting a timer of its
+      // own, and is skipped while the last read is still fresh -- see
+      // `FIRE_ACTIVITY_MAX_AGE_MS`.
+      const fireIsStale =
+        options.forceFireActivity === true ||
+        Date.now() - fireActivityAtRef.current >= FIRE_ACTIVITY_MAX_AGE_MS;
+
+      const [statsResult, queueResult, eventsResult, decisionsResult] = await Promise.all([
+        browserGet<DistrictStatsView>(`/api/v1/districts/${districtId}/stats`, { signal }),
+        browserGet<QueueView>(`/api/v1/districts/${districtId}/queue`, { signal }),
+        browserGet<AuditEventView[]>('/api/v1/internal/audit/events?limit=60', { signal }),
+        browserGet<PolicyDecisionView[]>('/api/v1/internal/audit/decisions?limit=60', { signal }),
+        fireIsStale ? refreshFireActivity(signal) : Promise.resolve(),
+      ]);
+      // An aborted request comes back `ok: false`, so a torn-down poll writes
+      // no state: there is no unmount guard to forget.
+      if (statsResult.ok) setStats(statsResult.data);
+      if (queueResult.ok) setQueue(queueResult.data);
+      if (eventsResult.ok) setEvents(eventsResult.data);
+      if (decisionsResult.ok) setDecisions(decisionsResult.data);
+    },
+    [districtId, refreshFireActivity],
+  );
 
   useEffect(() => {
     if (initialAgents.length > 0) return;
@@ -176,6 +457,77 @@ export function CommandCenter({
     })();
   }, [initialAgents.length, refreshStandby]);
 
+  /**
+   * The standby heartbeat.
+   *
+   * One interval, no second loop: it exists only while `incident` is null, so
+   * it is torn down by the same state change that opens the SSE stream and
+   * re-armed by the one that closes it. `inFlight` keeps a slow round trip from
+   * stacking requests behind itself on a bad connection, and a hidden tab does
+   * not poll at all.
+   */
+  useEffect(() => {
+    if (incident) return;
+    const controller = new AbortController();
+    let inFlight = false;
+
+    const timer = setInterval(() => {
+      if (inFlight) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      inFlight = true;
+      void refreshStandby(controller.signal).finally(() => {
+        inFlight = false;
+      });
+    }, STANDBY_POLL_MS);
+
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [incident, refreshStandby]);
+
+  /**
+   * The first fire-activity read, and the one after an incident closes.
+   *
+   * One request, not a loop: the panel would otherwise sit empty until the
+   * standby poll's first tick, and a map that has not answered yet looks
+   * exactly like a region with nothing burning in it.
+   */
+  useEffect(() => {
+    if (incident) return;
+    const controller = new AbortController();
+    void refreshFireActivity(controller.signal);
+    return () => controller.abort();
+  }, [incident, refreshFireActivity]);
+
+  /**
+   * Run one complete slow-loop pass, by hand.
+   *
+   * A scheduler drives this in production. Exposing it here is not a refresh
+   * button: the request polls every source, writes the facts it finds, detects
+   * conflicts and re-ranks the queue, so the district bar, the ranked strip and
+   * every agent's reasoning box tick because work actually happened. Calling it
+   * "refresh" would describe the screen instead of the system.
+   */
+  const runSlowLoopPass = useCallback(async () => {
+    setPassRunning(true);
+    setPassNotice(null);
+    const result = await browserPost<Record<string, unknown>>(
+      `/api/v1/districts/${districtId}/poll`,
+    );
+    if (!result.ok) {
+      setPassRunning(false);
+      setPassNotice(`Slow-loop pass failed: ${result.error.message}`);
+      return;
+    }
+    // Read the district back before saying the pass is done, so the counts on
+    // screen are the ones the pass produced rather than the ones before it.
+    await refreshStandby(undefined, { forceFireActivity: true });
+    setPassRunning(false);
+    setPassAt(Date.now());
+    setPassNotice(summarisePass(result.data));
+  }, [districtId, refreshStandby]);
+
   const openProfile = useCallback(async (addressId: string) => {
     setSelected(addressId);
     const [profileResult, timelineResult, geometryResult] = await Promise.all([
@@ -190,6 +542,8 @@ export function CommandCenter({
 
   const dispatch = useCallback(
     async (addressId: string, narrative = '', channel: IntakeChannel = 'CALL_911') => {
+      dispatchedRef.current = true;
+      setCallIn(null);
       setBusy(true);
       setNotice(null);
       // The narrative is kept so the intake panel can check a quote against
@@ -207,8 +561,6 @@ export function CommandCenter({
         return;
       }
       setIncident(result.data);
-      setReplayableIncidentId(result.data.incident_id);
-      setReplay(null);
       setOutcomes([]);
       announcedRef.current = 0;
       await openProfile(result.data.address_id);
@@ -217,6 +569,86 @@ export function CommandCenter({
     },
     [openProfile],
   );
+
+  demoRef.current = {
+    queue,
+    passRunning,
+    busy,
+    runPass: runSlowLoopPass,
+    dispatch,
+  };
+
+  /**
+   * Standby runs itself: real passes on an interval, then a call.
+   *
+   * **Auto-dispatch is gated on the backend calling itself fake.** `status.mode`
+   * comes from `/api/v1/system/status`; anything other than the string `fake`
+   * -- including a status this console has not managed to read yet -- means no
+   * call is placed. Software that invented a 911 call on a real deployment
+   * would be the worst thing in this repository, so the gate is a positive
+   * check on a known value rather than an absence of a live flag. Do not
+   * relax it into `!== 'live'`.
+   *
+   * Both timers live here, in the effect the incident tears down, so an open
+   * incident silences the demo without a second piece of state deciding that.
+   */
+  useEffect(() => {
+    const demo = !incident && status?.mode === 'fake' && !autoCallOff && !dispatchedRef.current;
+
+    // Runs in both modes, slower during an incident. A pass is one HTTP request
+    // that returns before it resolves; the brief arrives on its own SSE stream
+    // and neither waits on the other.
+    const passes = setInterval(
+      () => {
+        // Skipped rather than queued: a pass still running means the work this
+        // tick would have done is already happening.
+        const now = demoRef.current;
+        if (!now.passRunning && !now.busy) void now.runPass();
+      },
+      incident ? AUTO_PASS_INCIDENT_MS : AUTO_PASS_MS,
+    );
+
+    if (incident) {
+      setCallIn(null);
+      return () => clearInterval(passes);
+    }
+    if (!demo) {
+      return () => clearInterval(passes);
+    }
+
+    const warn = setTimeout(
+      () => setCallIn(Math.round(CALL_WARNING_MS / 1000)),
+      Math.max(0, AUTO_CALL_MS - CALL_WARNING_MS),
+    );
+    const tick = setInterval(
+      () => setCallIn((left) => (left === null || left <= 0 ? left : left - 1)),
+      1000,
+    );
+    const call = setTimeout(() => {
+      const top = demoRef.current.queue?.entries?.[0]?.address_id;
+      if (!top) return;
+      dispatchedRef.current = true;
+      setCallIn(null);
+      const sample = SAMPLE_CALLS[0];
+      if (!sample) return;
+      void demoRef.current.dispatch(top, sample.text, sample.channel);
+    }, AUTO_CALL_MS);
+
+    return () => {
+      clearInterval(passes);
+      clearInterval(tick);
+      clearTimeout(warn);
+      clearTimeout(call);
+    };
+    // Deliberately narrow. Everything the timers *read* -- the queue, whether a
+    // pass is in flight, the callbacks -- goes through a ref, because this
+    // effect must not re-subscribe when those change. It did once: with
+    // `passRunning` and `queue` in the list, the seven-second refresh tore the
+    // timers down and rebuilt them every tick, so the countdown to the call
+    // restarted before it could ever finish and the demo never dispatched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incident, status?.mode, autoCallOff]);
+
 
   /** Draft a referral from a conflict. The agent stops here, by design. */
   const stageReferral = useCallback(
@@ -271,22 +703,6 @@ export function CommandCenter({
     },
     [openProfile, selected],
   );
-
-  /** Re-read the sealed record and re-hash it. Answers a different question
-   *  from the log: not what happened, but whether the record still says so. */
-  const runReplay = useCallback(async () => {
-    if (!replayableIncidentId) return;
-    setReplayBusy(true);
-    const result = await browserGet<IncidentReplayView>(
-      `/api/v1/internal/audit/incidents/${replayableIncidentId}/replay`,
-    );
-    setReplayBusy(false);
-    if (!result.ok) {
-      setNotice(`Could not replay the incident: ${result.error.message}`);
-      return;
-    }
-    setReplay(result.data);
-  }, [replayableIncidentId]);
 
   const resolve = useCallback(
     async (submission: ResolutionSubmission) => {
@@ -379,15 +795,11 @@ export function CommandCenter({
   const closeIncident = useCallback(async () => {
     if (!incident) return;
     setBusy(true);
-    const logResult = await browserGet<IncidentLogView>(
-      `/api/v1/incidents/${incident.incident_id}/log`,
-    );
     const result = await browserPost<CloseIncidentResponse>(
       `/api/v1/incidents/${incident.incident_id}/close`,
       { closed_by: 'bc-09' },
     );
     setBusy(false);
-    if (logResult.ok) setLog(logResult.data);
     if (!result.ok) {
       setNotice(`Could not close the incident: ${result.error.message}`);
       return;
@@ -401,11 +813,297 @@ export function CommandCenter({
     await openProfile(incident.address_id);
   }, [incident, openProfile, refreshStandby]);
 
-  const streamItems = useMemo(() => toStreamItems(events, decisions), [events, decisions]);
   const railAgents = agents.length > 0 ? agents : agentList;
 
+  /**
+   * Standby's two fleet columns, split from one loop.
+   *
+   * `FleetPanel` scopes itself by `loop`, and in standby both columns are the
+   * same loop -- so asking it twice would draw the whole slow fleet twice. The
+   * split is therefore the layout's to make, and it is made exactly here: the
+   * slow-loop descriptors in catalog order, cut in half, left column first.
+   *
+   * Catalog order and not, say, activity: an agent that jumped columns when it
+   * wrote a fact would make the fleet unreadable at exactly the moment it was
+   * worth reading. The order the registry publishes is stable across renders,
+   * so a card stays where an officer last saw it.
+   */
+  const [slowLeft, slowRight, slowTotal] = useMemo(() => {
+    const slow = railAgents.filter((agent) => agent.loop === 'SLOW');
+    const cut = Math.ceil(slow.length / 2);
+    return [slow.slice(0, cut), slow.slice(cut), slow.length] as const;
+  }, [railAgents]);
+
+  /** The incident loop, split the same way and for the same reason. */
+  const [incidentLeft, incidentRight, incidentTotal] = useMemo(() => {
+    const acting = railAgents.filter((agent) => agent.loop === 'INCIDENT');
+    const cut = Math.ceil(acting.length / 2);
+    return [acting.slice(0, cut), acting.slice(cut), acting.length] as const;
+  }, [railAgents]);
+
+  /**
+   * The fleet panel's contract.
+   *
+   * `events` and `decisions` are the audit streams the deleted audit console
+   * used to render; the rail turns them into per-agent reasoning boxes,
+   * filtered by `actor`. `incident` lets the rail decide its own incident
+   * presentation -- the layout no longer compresses it from outside, because
+   * the fleet is never squeezed into a strip: it is two flanking columns of
+   * full cards in both modes.
+   *
+   * `agents` here is the whole catalog, and it is the default a column gets.
+   * `loop` -- and, in standby, an `agents` subset -- is added per column at the
+   * call site, never here.
+   *
+   * One consequence of the standby split is worth naming: `FleetPanel` builds
+   * its `fleetIds` set from whatever `agents` it was handed, and that set is
+   * what stops one agent's work on a shared write target from appearing in
+   * another's reasoning box. Handed half the fleet, a column knows about half
+   * the fleet. Closing that properly means `FleetPanel` taking the full roster
+   * separately from the agents it draws, which is the fleet package's call to
+   * make, not the layout's.
+   *
+   * `geometry` and `sources` have no other path into the panel: the console is
+   * the only holder of the structure currently on screen and of the district's
+   * source health, and the rail's massing glyph and coverage read come out of
+   * them.
+   *
+   * Spread rather than written out attribute by attribute: the props are being
+   * added to `AgentRail` right now, and a spread passes the extra ones through
+   * without the layout having to land in the same commit as the rail.
+   */
+  const railProps = {
+    agents: railAgents,
+    subscriptions,
+    events,
+    decisions,
+    incident,
+    geometry,
+    sources: stats?.sources ?? [],
+  };
+
+  /**
+   * A fleet column. Two of them in either mode: during an incident the same
+   * panel asked for a different loop each time, and in standby the same loop
+   * handed a different half of it.
+   *
+   * The panel still decides which agents match a *loop* -- `loop` is passed,
+   * never re-filtered here, because a filter written twice is how two answers
+   * drift apart. `columnAgents` is the one thing the panel cannot decide for
+   * itself: two columns of the same loop are indistinguishable from inside it.
+   */
+  const fleetRegion = ({
+    id,
+    heading,
+    note,
+    loop,
+    className,
+    columnAgents,
+    emptyNote,
+  }: {
+    id: string;
+    heading: string;
+    note?: string;
+    loop?: 'SLOW' | 'INCIDENT';
+    className: string;
+    /** An explicit subset, for a column that is half of one loop. */
+    columnAgents?: AgentDescriptorView[];
+    /**
+     * What to say when this column's subset is empty.
+     *
+     * Without it the panel would fall through to its own empty state -- "the
+     * registry reported an empty catalog" -- which is true of the catalog and
+     * false of this column when the other one is holding every agent there is.
+     */
+    emptyNote?: string;
+  }) => (
+    <section aria-labelledby={id} className={className}>
+      <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2 px-4 pb-2 pt-3">
+        <h2 id={id} className="text-micro uppercase tracking-widest text-muted">
+          {heading}
+        </h2>
+        {note && <span className="text-micro uppercase tracking-wide text-muted">{note}</span>}
+      </div>
+      <div className="px-4 pb-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        {columnAgents && columnAgents.length === 0 && emptyNote ? (
+          <p className="border border-dashed border-line p-4 text-micro leading-5 text-muted">
+            {emptyNote}
+          </p>
+        ) : (
+          <AgentRail
+            {...railProps}
+            {...(columnAgents
+              ? // Half the roster to draw, the whole roster to attribute against.
+                // A column that only knew its own half would claim the other
+                // half's writes on any shared target.
+                { agents: columnAgents, fleetRoster: railProps.agents }
+              : {})}
+            {...(loop ? { loop } : {})}
+          />
+        )}
+      </div>
+    </section>
+  );
+
+  /** The computed structure. Middle column during an incident, under the fleet
+      in standby -- it has a place either way, but only once a structure has
+      been selected does it have anything to draw. */
+  const structurePanel = (
+    <section aria-labelledby="structure-heading" className="min-w-0 bg-ground p-4">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <h2 id="structure-heading" className="text-micro uppercase tracking-widest text-muted">
+          Massing model
+        </h2>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Fixed camera views">
+          {VIEWS.map((angle) => (
+            <button
+              key={angle}
+              type="button"
+              aria-pressed={view === angle}
+              onClick={() => setView(angle)}
+              className={`border px-2 py-0.5 text-micro uppercase tracking-wide focus-visible:outline focus-visible:outline-2 focus-visible:outline-live ${
+                view === angle ? 'border-live text-live' : 'border-line text-muted'
+              }`}
+            >
+              {angle}
+            </button>
+          ))}
+        </div>
+      </div>
+      <GeometryCanvas geometry={geometry} view={view} forceFallback={forceSvgGeometry} />
+    </section>
+  );
+
+  /** The real structure, beside the computed one. Incident only: outside one
+      there is no address to photograph, and a panel explaining that in a
+      paragraph was a paragraph explaining an empty box. */
+  const imageryPanel = (
+    <section aria-labelledby="imagery-heading" className="min-w-0 bg-ground p-4">
+      <h2 id="imagery-heading" className="mb-2 text-micro uppercase tracking-widest text-muted">
+        Building imagery
+      </h2>
+      <BuildingImagery addressId={incident?.address_id ?? null} />
+    </section>
+  );
+
+  const profileSection = profile && (
+    <section aria-labelledby="profile-heading" className="min-w-0 bg-ground p-4">
+      <h2 id="profile-heading" className="font-mono text-ink">
+        {profile.address_id}
+        <span className="ml-2 text-micro text-muted">profile v{profile.profile_version}</span>
+      </h2>
+
+      <div className="mt-3 grid gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <AttributeGrid facts={profile.facts} unknownKeys={profile.unknown_keys} />
+        </div>
+        <div className="space-y-4">
+          <ConflictPanel
+            conflicts={profile.conflicts}
+            referrals={[...profile.open_referrals, ...staged]}
+            onResolve={resolve}
+            onStageReferral={stageReferral}
+            onApproveReferral={approveReferral}
+            busy={busy}
+            disabledReason={
+              incident
+                ? undefined
+                : 'An observation is recorded during an incident 360. Open an incident to settle this on scene.'
+            }
+          />
+          <div>
+            <h3 className="text-micro uppercase tracking-widest text-muted">Timeline</h3>
+            <div className="mt-2">
+              <Timeline events={timeline} />
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+
+  /**
+   * The structures the slow loop has ranked, as one line of chips.
+   *
+   * This is what is left of the survey queue panel. The panel carried a rank, a
+   * score and every ranking rule inline, and it took the middle of the screen
+   * to do it. The rank is a recorded backend value and stays; the score and the
+   * rule text are gone with the panel rather than being restated here, so the
+   * strip claims only what it can attribute.
+   */
+  const structuresStrip = (
+    <section aria-labelledby="structures-heading" className="shrink-0 bg-ground px-4 py-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h2 id="structures-heading" className="text-micro uppercase tracking-widest text-muted">
+          Ranked for survey
+        </h2>
+        {queue && <span className="font-mono text-micro text-muted">{queue.count}</span>}
+
+        {/* The slow loop, run by hand. It sits with the queue because the
+            queue is the thing it re-ranks. */}
+        <button
+          type="button"
+          onClick={() => void runSlowLoopPass()}
+          disabled={passRunning}
+          aria-busy={passRunning}
+          data-testid="run-slow-loop-pass"
+          title="Polls every source, writes the facts it finds, detects conflicts, and re-ranks the queue."
+          className="ml-auto border border-line px-2 py-0.5 text-micro uppercase tracking-wide text-ink hover:border-live disabled:cursor-progress disabled:border-line disabled:text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+        >
+          {passRunning ? 'Running a slow-loop pass…' : 'Run a slow-loop pass'}
+        </button>
+      </div>
+      <p
+        role="status"
+        aria-atomic="true"
+        data-testid="slow-loop-pass-status"
+        className={`text-micro ${passNotice?.startsWith('Slow-loop pass failed') ? 'text-alarm' : 'text-muted'}`}
+      >
+        {passRunning ? 'Slow-loop pass running: sources, facts, conflicts, ranking.' : passNotice}
+      </p>
+      {(queue?.entries ?? []).length === 0 ? (
+        <p className="mt-1 text-micro text-muted">No ranked structures yet</p>
+      ) : (
+        <ul className="mt-1.5 flex flex-wrap gap-1" aria-label="Ranked structures">
+          {(queue?.entries ?? []).map((entry) => (
+            <li
+              key={entry.entry_id}
+              className={`flex items-center gap-1.5 border bg-surface px-2 py-1 ${
+                selected === entry.address_id ? 'border-live' : 'border-line'
+              }`}
+            >
+              <span aria-hidden="true" className="font-mono text-micro text-muted">
+                {entry.rank}
+              </span>
+              <button
+                type="button"
+                onClick={() => openProfile(entry.address_id)}
+                className="font-mono text-micro text-ink underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+              >
+                {entry.address_id}
+              </button>
+              {entry.status !== 'RANKED' && (
+                <StatusPill tone={queueTone(entry.status)} label={entry.status.toLowerCase()} />
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+
+  /**
+   * A live deployment without delegated Workspace authority records the
+   * calendar and mail writes and sends neither. That has to stay on screen
+   * somewhere: the work order, the referral and the pre-plan really do execute,
+   * and a crew notification sitting beside them looking identical is the
+   * console asserting a notification nobody received. It lives in the
+   * disclosure line now rather than in a header chip.
+   */
+  const simulatedWorkspaceWrites = status?.mode === 'live' && status.workspace_writes === 'fake';
+
   return (
-    <div className="flex min-h-screen flex-col bg-ground text-ink">
+    <div className="flex h-screen flex-col overflow-hidden bg-ground text-ink">
       <a
         href="#main"
         className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:border focus:border-live focus:bg-surface focus:px-3 focus:py-1"
@@ -413,48 +1111,12 @@ export function CommandCenter({
         Skip to main content
       </a>
 
-      <header className="border-b border-line bg-surface px-4 py-3">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div className="flex items-baseline gap-3">
-            <h1 className="text-base font-semibold tracking-widest text-ink">FIRST DUE</h1>
-            <span className="text-micro uppercase tracking-wide text-muted">Command Center</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {status ? (
-              <>
-                <StatusPill
-                  tone={status.mode === 'live' ? 'live' : 'muted'}
-                  label={`${status.mode} mode`}
-                  title={
-                    status.mode === 'fake'
-                      ? 'Deterministic adapters, no credentials required'
-                      : 'Live Google-backed adapters'
-                  }
-                />
-                <StatusPill tone="muted" label={`store: ${status.storage_backend}`} />
-                <StatusPill tone="muted" label={`events: ${status.event_backend}`} />
-                {status.mode === 'live' && status.workspace_writes === 'fake' ? (
-                  <StatusPill
-                    tone="disputed"
-                    label="calendar + mail: simulated"
-                    title={
-                      'Calendar and Gmail act as a user, which needs delegated ' +
-                      'Workspace authority this deployment does not hold. Both ' +
-                      'actions are recorded and audited; neither is sent.'
-                    }
-                  />
-                ) : null}
-                <span className="text-micro text-muted">{status.municipality_id}</span>
-                <span className="text-micro text-muted">v{status.version}</span>
-              </>
-            ) : (
-              <StatusPill tone="alarm" label="No backend status" />
-            )}
-          </div>
+      <header className="flex shrink-0 flex-wrap items-baseline justify-between gap-3 border-b border-line bg-surface px-4 py-2">
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-base font-semibold tracking-widest text-ink">TERSAGE</h1>
+          <span className="text-micro uppercase tracking-wide text-muted">Command Center</span>
         </div>
-        <div className="mt-3">
-          <BackendStatus initial={readiness ?? undefined} />
-        </div>
+        <BackendSignal initial={readiness} statusMissing={status === null} />
       </header>
 
       {incident && (
@@ -474,201 +1136,226 @@ export function CommandCenter({
         {announcement}
       </p>
       {notice && (
-        <p role="status" className="border-b border-line bg-raised px-4 py-2 text-micro text-ink">
+        <p
+          role="status"
+          className="shrink-0 border-b border-line bg-raised px-4 py-2 text-micro text-ink"
+        >
           {notice}
         </p>
       )}
       {error && (
-        <p role="alert" className="border-b border-alarm bg-raised px-4 py-2 text-micro text-alarm">
+        <p
+          role="alert"
+          className="shrink-0 border-b border-alarm bg-raised px-4 py-2 text-micro text-alarm"
+        >
           {error}
         </p>
       )}
       {stream.state === 'reconnecting' && (
-        <p role="status" className="border-b border-line bg-raised px-4 py-1 text-micro text-disputed">
+        <p
+          role="status"
+          className="shrink-0 border-b border-line bg-raised px-4 py-1 text-micro text-disputed"
+        >
           Stream reconnecting. Versions already received stay on screen; missed
           ones replay from the log.
         </p>
       )}
 
-      <main
-        id="main"
-        className="grid flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[300px_1fr_340px]"
-      >
-        {/* Left: the fleet. Compresses during an incident, never disappears. */}
-        <section aria-labelledby="fleet-heading" className="bg-ground p-4">
-          <h2 id="fleet-heading" className="mb-3 text-micro uppercase tracking-widest text-muted">
-            {incident ? 'Slow loop — still running' : 'Fleet'}
-          </h2>
-          <AgentRail
-            agents={railAgents}
-            subscriptions={subscriptions}
-            compressed={Boolean(incident)}
-            loop={incident ? 'SLOW' : undefined}
-          />
-          {incident && (
-            <>
-              <h2 className="mb-2 mt-4 text-micro uppercase tracking-widest text-muted">
-                Incident agents
-              </h2>
-              <AgentRail agents={railAgents} subscriptions={subscriptions} loop="INCIDENT" />
-            </>
-          )}
-        </section>
-
-        {/* Centre: the queue in standby, the brief and structure at dispatch. */}
-        <section aria-labelledby="centre-heading" className="min-w-0 bg-ground p-4">
-          <h2 id="centre-heading" className="sr-only">
-            {incident ? 'Incident brief' : 'District and survey queue'}
-          </h2>
-
-          {!incident && (
-            <>
-              <DistrictStrip stats={stats} />
-              <div className="mt-4 flex flex-wrap items-baseline justify-between gap-2">
-                <h3 className="text-micro uppercase tracking-widest text-muted">Survey queue</h3>
-                {queue && <span className="text-micro text-muted">{queue.count} ranked</span>}
-              </div>
-              <div className="mt-2">
-                <SurveyQueue
-                  entries={queue?.entries ?? []}
-                  onSelect={openProfile}
-                  selectedAddressId={selected}
-                />
-              </div>
-              {profile && (
-                <div className="mt-4">
-                  <DispatchPanel
-                    addressId={profile.address_id}
-                    busy={busy}
-                    onDispatch={dispatch}
-                  />
-                </div>
-              )}
-            </>
-          )}
-
-          {incident && <BriefPanel emission={latest} />}
-
-          {incident?.intake && (
-            <div className="mt-4">
-              <IntakePanel intake={incident.intake} narrative={narrative} />
-            </div>
-          )}
-
-          {(geometry || incident) && (
-            <div className="mt-4">
-              <div className="mb-2 flex flex-wrap items-center gap-2">
-                <h3 className="text-micro uppercase tracking-widest text-muted">Structure</h3>
-                <div className="flex flex-wrap gap-1" role="group" aria-label="Fixed camera views">
-                  {VIEWS.map((angle) => (
-                    <button
-                      key={angle}
-                      type="button"
-                      aria-pressed={view === angle}
-                      onClick={() => setView(angle)}
-                      className={`border px-2 py-0.5 text-micro uppercase tracking-wide focus-visible:outline focus-visible:outline-2 focus-visible:outline-live ${
-                        view === angle ? 'border-live text-live' : 'border-line text-muted'
-                      }`}
-                    >
-                      {angle}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <GeometryCanvas
-                geometry={geometry}
-                view={view}
-                forceFallback={forceSvgGeometry}
-              />
-            </div>
-          )}
-        </section>
-
-        {/* Right: the profile in standby, resources and thermal at dispatch. */}
-        <section aria-labelledby="right-heading" className="min-w-0 bg-ground p-4">
-          <h2 id="right-heading" className="mb-3 text-micro uppercase tracking-widest text-muted">
-            {incident ? 'Resources and conditions' : 'Activity'}
-          </h2>
-
-          {incident ? (
-            <div className="space-y-4">
-              <ResourcePanel
-                outcomes={outcomes}
-                onRequest={requestResource}
-                onApprove={approve}
-                busy={busy}
-              />
-              <ThermalPanel
-                faces={geometry?.spec.faces ?? []}
-                onRegister={registerThermal}
-                busy={busy}
-              />
-            </div>
-          ) : (
-            <ActivityStream items={streamItems} />
-          )}
-        </section>
-      </main>
-
-      {profile && (
-        <section aria-labelledby="profile-heading" className="border-t border-line bg-ground p-4">
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 id="profile-heading" className="font-mono text-ink">
-              {profile.address_id}
-              <span className="ml-2 text-micro text-muted">
-                profile v{profile.profile_version}
-              </span>
-            </h2>
-
-          </div>
-
-          <div className="mt-3 grid gap-4 lg:grid-cols-3">
-            <div className="lg:col-span-2">
-              <AttributeGrid facts={profile.facts} unknownKeys={profile.unknown_keys} />
-            </div>
-            <div className="space-y-4">
-              <ConflictPanel
-                conflicts={profile.conflicts}
-                referrals={[...profile.open_referrals, ...staged]}
-                onResolve={resolve}
-                onStageReferral={stageReferral}
-                onApproveReferral={approveReferral}
-                busy={busy}
-                disabledReason={
-                  incident
-                    ? undefined
-                    : 'An observation is recorded during an incident 360. Open an incident to settle this on scene.'
-                }
-              />
-              <div>
-                <h3 className="text-micro uppercase tracking-widest text-muted">Timeline</h3>
-                <div className="mt-2">
-                  <Timeline events={timeline} />
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
+      {callIn !== null && !incident && (
+        /* A demo affordance, not a claim about data -- worded so nobody reads
+           it as a real dispatch already in progress. Polite, not assertive: it
+           should not interrupt a screen reader mid-sentence. */
+        <div
+          role="status"
+          aria-live="polite"
+          className="shrink-0 border-b border-disputed bg-raised px-4 py-2 text-micro text-disputed"
+        >
+          <span className="font-mono">
+            Simulated 911 call arriving in {callIn}s — the console will switch to the
+            incident view.
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setAutoCallOff(true);
+              setCallIn(null);
+            }}
+            className="ml-3 underline underline-offset-4 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+          >
+            Stay in standby
+          </button>
+        </div>
       )}
 
-      <section aria-labelledby="audit-heading" className="border-t border-line bg-ground p-4">
-        <h2 id="audit-heading" className="mb-3 text-micro uppercase tracking-widest text-muted">
-          Audit
-        </h2>
-        <AuditConsole
-          events={events}
-          decisions={decisions}
-          log={log}
-          emissions={emissions}
-          replay={replay}
-          onReplay={replayableIncidentId ? runReplay : undefined}
-          replayBusy={replayBusy}
-        />
-      </section>
+      <main id="main" className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:overflow-hidden">
+        {/* The district bar, above the mode switch because it is true in both
+            modes. It does not scroll with whatever is under it. */}
+        <div className="shrink-0 border-b border-line bg-surface px-3 py-2">
+          <DistrictStrip stats={stats} />
+        </div>
 
-      <footer className="border-t border-line bg-surface px-4 py-3 text-micro leading-5 text-muted">
+        {!incident && (
+          /* Standby: the same three columns an incident uses, so the screen
+             does not change shape under an officer at the moment a fire
+             starts. The slow loop flanks, split in half; the middle carries
+             the region -- what is burning out there and what the weather is
+             doing -- then the ranked structures, then whichever one is open.
+             Stacks below `lg`, where three columns is one unreadable column. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden">
+            {fleetRegion({
+              id: 'standby-fleet-heading',
+              heading: 'Fleet — slow loop',
+              note: `${slowLeft.length} of ${slowTotal}`,
+              loop: 'SLOW',
+              columnAgents: slowLeft,
+              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
+            })}
+
+            <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:overflow-y-auto">
+              <FireActivityMap activity={fireActivity} error={fireActivityError} />
+
+              {structuresStrip}
+
+              {profile && (
+                <>
+                  <div className="grid shrink-0 grid-cols-1 gap-px bg-line lg:grid-cols-[7fr_3fr]">
+                    {structurePanel}
+                    <div className="min-w-0 bg-ground p-4">
+                      <DispatchPanel
+                        addressId={profile.address_id}
+                        busy={busy}
+                        onDispatch={dispatch}
+                      />
+                    </div>
+                  </div>
+                  {profileSection}
+                </>
+              )}
+            </div>
+
+            {fleetRegion({
+              id: 'standby-fleet-continued-heading',
+              heading: 'Fleet — slow loop, continued',
+              note: `${slowRight.length} of ${slowTotal}`,
+              loop: 'SLOW',
+              columnAgents: slowRight,
+              // With no slow agents at all the panel's own "empty catalog" line
+              // is the true one, so this note stands down and lets it through.
+              ...(slowTotal > 0
+                ? {
+                    emptyNote:
+                      slowTotal === 1
+                        ? 'The catalog publishes one slow-loop agent, and it is in the column on the left.'
+                        : `All ${slowTotal} slow-loop agents are in the column on the left.`,
+                  }
+                : {}),
+              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
+            })}
+          </div>
+        )}
+
+        {incident && (
+          /* Incident: three columns. The agents acting right now are on the
+             left, the structure and the brief are in the middle, and the slow
+             loop is on the right -- still there, still full cards. It did not
+             stop because a fire started, and a column that vanished at dispatch
+             would tell an officer it had. Stacks below `lg`, where three
+             columns is one unreadable column. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden">
+            {fleetRegion({
+              id: 'incident-fleet-heading',
+              heading: 'Fleet — incident loop',
+              note: `${incidentLeft.length} of ${incidentTotal} · acting now`,
+              loop: 'INCIDENT',
+              columnAgents: incidentLeft,
+              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
+            })}
+
+            <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:overflow-y-auto">
+              {/* The computed structure and the real one, side by side. Stacks
+                  below `lg`, where 30% of a narrow screen is not a photograph. */}
+              <div className="grid shrink-0 grid-cols-1 gap-px bg-line lg:grid-cols-[7fr_3fr]">
+                {structurePanel}
+                {imageryPanel}
+              </div>
+
+              <section aria-labelledby="brief-heading" className="min-w-0 bg-ground p-4">
+                <h2 id="brief-heading" className="sr-only">
+                  Incident brief
+                </h2>
+                <BriefPanel emission={latest} />
+                {incident.intake && (
+                  <div className="mt-4">
+                    <IntakePanel intake={incident.intake} narrative={narrative} />
+                  </div>
+                )}
+              </section>
+
+              <section
+                aria-labelledby="conditions-heading"
+                className="min-w-0 bg-ground p-4"
+              >
+                <h2
+                  id="conditions-heading"
+                  className="mb-3 text-micro uppercase tracking-widest text-muted"
+                >
+                  Resources and conditions
+                </h2>
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <ResourcePanel
+                    outcomes={outcomes}
+                    onRequest={requestResource}
+                    onApprove={approve}
+                    busy={busy}
+                  />
+                  <ThermalPanel
+                    faces={geometry?.spec.faces ?? []}
+                    onRegister={registerThermal}
+                    busy={busy}
+                  />
+                </div>
+              </section>
+
+              {profileSection}
+
+              {/* The slow loop left the screen; it did not stop. Derived from
+                  the real descriptor count and the real timestamp of the last
+                  completed pass, so the claim is checkable. "No pass yet" is
+                  said rather than rounded to zero seconds. */}
+              <p
+                className="shrink-0 border-t border-line bg-surface px-4 py-1.5 font-mono text-micro text-muted"
+                data-testid="slow-loop-offscreen"
+              >
+                slow loop · {slowTotal} agents · off screen, still running ·{' '}
+                {passRunning
+                  ? 'pass in progress'
+                  : passAt === null
+                    ? 'no pass completed yet this session'
+                    : `last pass ${Math.max(0, Math.round((Date.now() - passAt) / 1000))}s ago`}
+              </p>
+            </div>
+
+            {fleetRegion({
+              id: 'incident-fleet-continued-heading',
+              heading: 'Fleet — incident loop, continued',
+              note: `${incidentRight.length} of ${incidentTotal} · acting now`,
+              loop: 'INCIDENT',
+              columnAgents: incidentRight,
+              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
+              emptyNote: 'Every incident agent is in the column on the left.',
+            })}
+          </div>
+        )}
+      </main>
+
+      <footer className="shrink-0 border-t border-line bg-surface px-4 py-1.5 text-micro leading-5 text-muted">
         {status?.disclosure ??
           'Decision-support prototype, not a certified public-safety system.'}
+        {simulatedWorkspaceWrites && (
+          <span className="ml-2 text-disputed">
+            calendar + mail: simulated — recorded and audited, neither is sent.
+          </span>
+        )}
       </footer>
     </div>
   );

@@ -191,7 +191,7 @@ def cmd_serve(settings: Settings, *, reload: bool) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="firstdue", description="FIRST DUE control surface")
+    parser = argparse.ArgumentParser(prog="firstdue", description="TERSAGE control surface")
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 

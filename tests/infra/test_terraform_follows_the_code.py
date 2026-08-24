@@ -40,7 +40,7 @@ def _load(name: str) -> dict:
 
 
 def test_every_firestore_collection_is_accounted_for() -> None:
-    """All 23 collections, each either indexed or explicitly not needing one."""
+    """All 25 collections, each either indexed or explicitly not needing one."""
     collections = _load("firestore.json")["collections"]
 
     assert set(collections) == set(COLLECTION_NAMES)

@@ -5,10 +5,16 @@ things and no others: authenticating, creating the state bucket that Terraform
 cannot create for itself, and adding secret *values* that must never pass
 through a plan file.
 
-> **Nothing in this document has been applied.** The configuration validates
-> (`tofu validate`, `tofu fmt -check`) and its conformance to the application is
-> tested (`tests/infra/`), but no FIRST DUE environment has been deployed. Every
-> cost figure below is an estimate from published list prices, not an
+> **Almost nothing in this document has been applied.** The configuration
+> validates (`tofu validate`, `tofu fmt -check`) and its conformance to the
+> application is tested (`tests/infra/`). Against `firstdue-dev`, the staging
+> apply has landed **four resources** — the Artifact Registry repository, the
+> Firestore database, and two `google_project` data reads — and both container
+> images are built and pushed. Everything else below is still unbuilt: `tofu
+> plan` reports **327 resources to add and 2 to change in place**, and the
+> project holds **zero Cloud Run services, zero Pub/Sub topics, and no service
+> account Terraform created.**
+> Every cost figure below is an estimate from published list prices, not an
 > observation from a bill. See [Build notes](build-notes.md).
 
 ---
@@ -76,6 +82,22 @@ $EDITOR terraform.tfvars
 | `model_armor_template` | Leave empty if Model Armor is not allowlisted for your project. The local deterministic detector remains and the console reports which screen ran. |
 | `vector_search_enabled` | Leave `false`. See [Cost](#cost). |
 | `scheduler_paused` | `true` for staging. An unattended slow-loop pass before the first smoke test is noise. |
+| `console_role_bindings` | `"email:role,email:role"`, roles `viewer`/`captain`/`chief`. **Not required, and empty is not a safe default.** See below. |
+
+**`console_role_bindings` empty is not a lockout, which is what makes it
+dangerous.** The console comes up, every authenticated principal signs in, and
+every one of them is a viewer — so no referral and no utility shutoff can be
+approved by anyone. The backend logs `console_role_bindings_empty` and keeps
+serving, because a read-only console is still worth having. But the approval
+gates this system argues for are then present and unreachable, and a gate
+nobody can pass is not a gate. A typo'd role name, by contrast, is a startup
+failure: authority somebody believes they granted and did not is the one thing
+worth refusing to boot over.
+
+`CONSOLE_AUDIENCE` and `INTERNAL_PUSH_SERVICE_ACCOUNT` need no tfvars entry —
+Terraform derives both from what it creates, the latter as the comma-separated
+pair of Pub/Sub-push and Cloud Scheduler identities. Outside Terraform you set
+them by hand; see [Setup](setup.md#console-authentication).
 
 ### Secrets
 

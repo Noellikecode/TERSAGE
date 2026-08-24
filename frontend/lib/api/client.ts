@@ -19,7 +19,23 @@ import type {
 export const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 const DEFAULT_TIMEOUT_MS = 4000;
 
+/**
+ * Where the backend is, for **server-side** calls only.
+ *
+ * `FIRSTDUE_API_BASE_URL` is a plain server variable, read from the environment
+ * at request time -- that is the one Cloud Run sets. `NEXT_PUBLIC_API_BASE_URL`
+ * is inlined by webpack at *build* time and is not set during the Docker build,
+ * so it survives only as the local-development fallback.
+ *
+ * Browser code must not call this. Client components go through `browserGet` /
+ * `browserPost`, which pin `baseUrl: ''` and prefix `GATEWAY_PREFIX`, so the
+ * browser talks to its own origin and the credential stays on the server.
+ */
 export function apiBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    const runtimeBase = process.env.FIRSTDUE_API_BASE_URL;
+    if (runtimeBase) return runtimeBase;
+  }
   return process.env.NEXT_PUBLIC_API_BASE_URL ?? DEFAULT_API_BASE_URL;
 }
 

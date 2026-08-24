@@ -38,6 +38,10 @@ from firstdue.adapters.fake.sources import InMemorySourceRegistry
 from firstdue.adapters.fake.writes import FakeWriteTarget
 from firstdue.adapters.memory.audit import InMemoryAuditSink
 from firstdue.adapters.memory.bus import InMemoryEventBus
+from firstdue.adapters.memory.memory_bank import (
+    InMemoryCheckpointRepository,
+    InMemoryOpenQuestionRepository,
+)
 from firstdue.adapters.memory.repositories import (
     InMemoryAgentRunRepository,
     InMemoryApprovalRepository,
@@ -71,6 +75,10 @@ from firstdue.ports.audit import AuditSink
 from firstdue.ports.bus import EventBus
 from firstdue.ports.city import CityAdapter
 from firstdue.ports.clock import Clock, IdGenerator
+from firstdue.ports.fireactivity import FireActivityClient
+from firstdue.ports.grounding import GroundingService
+from firstdue.ports.imagery import ImageryClient
+from firstdue.ports.memory import CheckpointRepository, OpenQuestionRepository
 from firstdue.ports.model import ModelClient
 from firstdue.ports.office import CalendarClient, MailClient, ObjectStore
 from firstdue.ports.repositories import (
@@ -99,6 +107,7 @@ from firstdue.ports.vision import VisionClient
 from firstdue.ports.writes import ExternalWriteTarget
 from firstdue.reliability.retry import RetryPolicy
 from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient, build_screen
+from firstdue.services.memory_bank import MemoryBank
 from firstdue.settings import EventBackend, Settings, StorageBackend, WorkspaceWrites
 from firstdue.sources.catalog import LiveCredentials, build_sources
 
@@ -147,6 +156,16 @@ class Container:
     #: bound to image regions out. Separate from ``model`` because it is a
     #: different contract with one verb, not a fifth verb on the text one.
     vision: VisionClient
+    #: A photograph of the building, beside the massing model the fleet derived.
+    #: Separate from ``vision``: that one *reads* a frame a crew captured, this
+    #: one *fetches* one nobody on scene took. Different provider, different
+    #: failure mode, and only one of them can be metered by a third party.
+    imagery: ImageryClient
+    #: Regional fire activity and fire-weather context. Held on the container
+    #: for the same reason imagery is: the adapter owns a cache and a token
+    #: bucket in front of someone else's quota, and one rebuilt per request
+    #: arrives with neither.
+    fire_activity: FireActivityClient
     vectors: VectorIndex
     sources: SourceRegistry
     write_targets: dict[str, ExternalWriteTarget]
@@ -155,12 +174,28 @@ class Container:
     source_adapters: tuple[SourceAdapter, ...]
     calendar: CalendarClient
     mailer: MailClient
+    #: Where an *approved* referral is emailed. Deliberately a separate client
+    #: from ``mailer``: notifying a crew and filing against a property owner are
+    #: different acts, with different recipients and different consequences, and
+    #: a deployment may reasonably want one configured and not the other. Falls
+    #: back to ``mailer`` when Resend is unconfigured, so the path is never
+    #: silently missing -- only simulated, and the console says which.
+    referral_mailer: MailClient
     plan_store: ObjectStore
 
     #: The gateway. Every read and write the fleet performs decides here.
     policy: PolicyEngine
     #: The document screen in front of every model call.
     screen: LocalInjectionDetector | ModelArmorClient
+    #: Durable agent working memory: the questions a pass could not close, and
+    #: the graph positions it parked. ``None`` when the bank is switched off,
+    #: which is the one honest way to run without it -- an agent that silently
+    #: forgot would repeat the same failed work forever and look busy doing it.
+    memory: MemoryBank | None
+    #: Resolves a fuzzy external reference to a canonical id, or declines. It
+    #: never authors a claim about a building; that distinction is what lets it
+    #: reach the public web at all.
+    grounding: GroundingService
 
     @property
     def mode(self) -> str:
@@ -251,6 +286,12 @@ class Stores:
     runs: AgentRunRepository
     compensations: CompensationRepository
     audit: AuditSink
+    #: Durable agent working memory. Grouped here with every other repository
+    #: so a half-Firestore, half-memory process stays inexpressible -- an open
+    #: question that outlives a deployment is worth nothing if it lands in a
+    #: store that does not.
+    open_questions: OpenQuestionRepository
+    checkpoints: CheckpointRepository
 
 
 def build_memory_stores() -> Stores:
@@ -273,6 +314,8 @@ def build_memory_stores() -> Stores:
         runs=InMemoryAgentRunRepository(),
         compensations=InMemoryCompensationRepository(),
         audit=InMemoryAuditSink(),
+        open_questions=InMemoryOpenQuestionRepository(),
+        checkpoints=InMemoryCheckpointRepository(),
     )
 
 
@@ -304,6 +347,10 @@ def build_firestore_stores(settings: Settings) -> Stores:
         FirestoreWriteActionRepository,
         build_client,
     )
+    from firstdue.adapters.firestore.memory_bank import (
+        FirestoreCheckpointRepository,
+        FirestoreOpenQuestionRepository,
+    )
 
     if not settings.gcp_project_id:  # pragma: no cover - settings validate this first
         raise ConfigurationError("Firestore storage requires GCP_PROJECT_ID")
@@ -333,6 +380,8 @@ def build_firestore_stores(settings: Settings) -> Stores:
         runs=FirestoreAgentRunRepository(client, config),
         compensations=FirestoreCompensationRepository(client, config),
         audit=FirestoreAuditSink(client, config),
+        open_questions=FirestoreOpenQuestionRepository(client, config),
+        checkpoints=FirestoreCheckpointRepository(client, config),
     )
 
 
@@ -492,6 +541,142 @@ def _build_vectors(settings: Settings) -> VectorIndex:
     )
 
 
+def _build_referral_mailer(
+    settings: Settings,
+    *,
+    clock: Clock,
+    stores: Stores,
+    fallback: MailClient,
+) -> MailClient:
+    """Resend for approved referrals, or the mailer everything else uses.
+
+    Falls back rather than returning ``None`` because a referral that cannot be
+    emailed must still be *recorded as sent somewhere* -- the fake mailer keeps
+    the audit trail and the console label honest. A missing key is a documented
+    state; a silently skipped notification is not.
+
+    Settings validation already refuses a key without a sender, so reaching
+    here with one and not the other is not expressible.
+    """
+    if settings.use_fake_agents or not settings.resend_api_key:
+        return fallback
+
+    from firstdue.adapters.resend.mail import ResendMailClient
+
+    return ResendMailClient(
+        api_key=settings.resend_api_key,
+        sender=settings.resend_from_address or "",
+        clock=clock,
+        idempotency=stores.idempotency,
+        policy=_retry_policy(settings),
+    )
+
+
+def _build_fire_activity(
+    settings: Settings, *, city: CityAdapter, clock: Clock
+) -> FireActivityClient:
+    """Regional fire activity, delegating the three-way choice to the adapter.
+
+    The bounding boxes are parsed here rather than inside the adapter so a
+    malformed box is a startup failure naming the setting, not a refusal an
+    officer reads as an outage.
+    """
+    from firstdue.adapters.nasa import build_fire_activity
+    from firstdue.ports.fireactivity import BoundingBox
+
+    return build_fire_activity(
+        use_fake=settings.use_fake_agents,
+        map_key=settings.firms_map_key,
+        city=city,
+        clock=clock,
+        region=BoundingBox.parse(settings.fire_activity_region),
+        city_bounds=BoundingBox.parse(settings.fire_activity_city_bounds),
+    )
+
+
+def _build_imagery(settings: Settings, *, city: CityAdapter, clock: Clock) -> ImageryClient:
+    """A photograph of the building, or an adapter that says why there is none.
+
+    Three states, and the third is the one that matters. Fake mode gets a
+    deterministic synthetic elevation, watermarked and captioned as generated.
+    Live mode with a Maps key gets Street View, falling back to satellite.
+
+    Live mode *without* a key gets an adapter that refuses -- never the
+    synthetic one. A drawing that stood in for a photograph on a real
+    deployment would be the exact failure this project refuses everywhere else:
+    a commander cannot be shown a picture of a building nobody photographed.
+    """
+    if settings.use_fake_agents:
+        from firstdue.adapters.fake.imagery import FakeImageryClient
+
+        return FakeImageryClient(city=city)
+
+    from firstdue.adapters.google.imagery import GoogleImageryClient, UnconfiguredImageryClient
+
+    if not settings.google_maps_api_key:
+        return UnconfiguredImageryClient()
+    return GoogleImageryClient(api_key=settings.google_maps_api_key, city=city, clock=clock)
+
+
+def _build_memory(settings: Settings, *, stores: Stores, clock: Clock) -> MemoryBank | None:
+    """Durable agent working memory, or an honest absence.
+
+    Selected independently of fake mode, like storage and events are: the
+    in-memory repositories are a real second implementation of the same
+    protocols, and fake mode uses them rather than doing without. A pass that
+    could not settle a question needs somewhere to put it in either mode --
+    that is the whole component.
+
+    ``None`` is a deliberate state, not a fallback. Every caller treats a bank
+    it does not have as "do not open questions", never as "opened and lost".
+    """
+    if not settings.memory_bank_enabled:
+        return None
+    return MemoryBank(
+        questions=stores.open_questions,
+        checkpoints=stores.checkpoints,
+        clock=clock,
+    )
+
+
+def _build_grounding(
+    settings: Settings,
+    *,
+    screen: LocalInjectionDetector | ModelArmorClient,
+    clock: Clock,
+) -> GroundingService:
+    """Reference resolution, and the one path that reaches the public web.
+
+    Three states, not two. Fake mode gets the deterministic double. Live mode
+    with grounding enabled gets Gemini with Google Search. Live mode with it
+    disabled gets the double in its **unavailable** state, which declines every
+    reference with a reason and returns no reports.
+
+    That third state is the one worth explaining: routing a live process to the
+    ordinary double would answer from a digest, and a binding derived from
+    arithmetic is indistinguishable on the console from one that was retrieved.
+    Declining is the truthful answer to "what did the web say" when nobody
+    asked the web.
+    """
+    from firstdue.adapters.fake.grounding import FakeGroundingService
+
+    if settings.use_fake_agents:
+        return FakeGroundingService(screen=screen, clock=clock)
+    if not settings.grounding_search_enabled:
+        return FakeGroundingService(screen=screen, clock=clock, unavailable=True)
+
+    from firstdue.adapters.vertex.grounding import VertexGroundingService
+
+    return VertexGroundingService(
+        project_id=settings.gcp_project_id or "",
+        location=settings.vertex_location,
+        model=settings.gemini_model,
+        screen=screen,
+        clock=clock,
+        policy=_retry_policy(settings),
+    )
+
+
 def _build_runtime(settings: Settings, *, clock: Clock, ids: IdGenerator) -> AgentRuntime:
     if settings.use_fake_agents:
         return FakeRuntime(clock=clock, ids=ids)
@@ -574,6 +759,21 @@ def build_container(settings: Settings) -> Container:
 
     office = _build_office(settings, clock=clock, ids=ids, stores=stores)
 
+    # Built before the container literal because grounding screens every snippet
+    # it retrieves, and a web page is the least trustworthy input in the fleet.
+    screen = build_screen(
+        use_fake=settings.use_fake_agents,
+        template=settings.model_armor_template,
+        project_id=settings.gcp_project_id,
+    )
+    memory = _build_memory(settings, stores=stores, clock=clock)
+    imagery = _build_imagery(settings, city=city, clock=clock)
+    fire_activity = _build_fire_activity(settings, city=city, clock=clock)
+    referral_mailer = _build_referral_mailer(
+        settings, clock=clock, stores=stores, fallback=office[1]
+    )
+    grounding = _build_grounding(settings, screen=screen, clock=clock)
+
     return Container(
         settings=settings,
         clock=clock,
@@ -601,18 +801,19 @@ def build_container(settings: Settings) -> Container:
         runtime=_build_runtime(settings, clock=clock, ids=ids),
         model=model,
         vision=_build_vision(settings),
+        imagery=imagery,
+        fire_activity=fire_activity,
         vectors=vectors,
         sources=source_registry,
         write_targets=write_targets,
         source_adapters=sources,
         policy=PolicyEngine(ids=ids),
-        screen=build_screen(
-            use_fake=settings.use_fake_agents,
-            template=settings.model_armor_template,
-            project_id=settings.gcp_project_id,
-        ),
+        screen=screen,
+        memory=memory,
+        grounding=grounding,
         calendar=office[0],
         mailer=office[1],
+        referral_mailer=referral_mailer,
         plan_store=office[2],
     )
 

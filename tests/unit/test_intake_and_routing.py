@@ -12,6 +12,7 @@ to hold:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,7 +45,7 @@ from firstdue.incident.intake import (
 from firstdue.incident.interceptor import AGENT_ID
 from firstdue.ports.model import ExtractedValue, ExtractionResult
 from firstdue.registry.descriptors import active_descriptors
-from firstdue.security.armor import LocalInjectionDetector
+from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient
 
 NOW = datetime(2026, 8, 21, 3, 14, tzinfo=UTC)
 INCIDENT = "inc-1"
@@ -358,6 +359,40 @@ async def test_a_screen_that_cannot_run_keeps_the_transcript_away_from_the_model
     )
     assert model.calls == 0
     assert reading.accepted is False
+
+
+@pytest.mark.degraded
+async def test_a_live_screen_outage_degrades_the_intake_instead_of_taking_it_down() -> None:
+    """The Model Armor path, at the moment Model Armor is having an outage.
+
+    ``LocalInjectionDetector(unavailable=True)`` is a test fixture and nothing
+    builds it in production, so the fail-closed branch above was documented,
+    tested, and unreachable. The live screen *raised* instead, and nothing here
+    caught it: an Armor outage did not degrade the intake, it took the request
+    down in the middle of an active incident.
+    """
+
+    def _unreachable(*, client_options: dict[str, str]) -> object:
+        raise RuntimeError("model armor is unreachable")
+
+    model = ScriptedModel(_result())
+    reader = IntakeReader(
+        model=model,
+        screen=ModelArmorClient(
+            template="projects/p/locations/us-central1/templates/t",
+            project_id="p",
+            module=SimpleNamespace(ModelArmorClient=_unreachable),
+        ),
+    )
+
+    reading = await reader.read(
+        NARRATIVE, incident_id=INCIDENT, channel=IntakeChannel.CALL_911, source_ref="call/CAD-1"
+    )
+
+    assert model.calls == 0, "an unscreened transcript was handed to a model"
+    assert reading.accepted is False
+    assert reading.rejection_reason == "the narrative screen is unavailable"
+    assert reading.unknowns == INTAKE_KEYS
 
 
 @pytest.mark.invariant

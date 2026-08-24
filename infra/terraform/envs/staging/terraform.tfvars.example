@@ -21,3 +21,44 @@ model_armor_template = ""
 
 # A running index endpoint is several hundred USD a month.
 vector_search_enabled = false
+
+# Optional third-party API keys: google-maps-api-key, nrel-api-key,
+# socrata-app-token, resend-api-key. Terraform creates the secret *containers*
+# either way; a key is only mounted into the services once it is listed here,
+# because Cloud Run refuses to start a container whose secret has no version.
+# So: add the version first, then list the key.
+#
+#   gcloud secrets versions add firstdue-staging-google-maps-api-key --data-file=-
+#
+# An unlisted key leaves what it powers reporting UNCONFIGURED -- the Google
+# Solar API for roof geometry, NREL for EV hazards, Resend for the referral
+# email -- which the console shows. A referral is still staged and still waits
+# on a captain either way; it just is not mailed.
+live_source_keys = []
+
+# From address on the inter-agency referral email. Resend rejects a From on a
+# domain it has not verified, so this default mails nowhere on purpose; a
+# deployment that sends puts an address on its own verified domain here.
+resend_from_address = "firstdue-referrals@example.org"
+
+# Google Search grounding for the GroundingService. Off for cost, like
+# vector_search_enabled: a grounded generation bills a search on top of the
+# model call, and a slow-loop pass makes that a per-pass charge.
+grounding_search_enabled = false
+
+# Durable agent working memory: open questions and their checkpoints. On,
+# because it is what lets a question opened by a slow-loop agent survive every
+# restart and scale-to-zero until an incident closes it.
+memory_bank_enabled = true
+
+# Who may use the console, and as what: "email:role,email:role". Roles are
+# viewer, captain, chief.
+#
+# Leaving this empty is not a lockout and not a safe default. Everyone who
+# authenticates becomes a viewer, so the console works, people sign in, people
+# read -- and no referral and no utility shutoff can be approved by anyone,
+# because nobody holds captain or chief. The backend logs a warning and starts
+# anyway. A live deployment fills this in.
+#
+#   console_role_bindings = "chief@example.org:chief,captain@example.org:captain"
+console_role_bindings = ""

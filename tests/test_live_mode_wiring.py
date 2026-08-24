@@ -40,6 +40,10 @@ def _live_settings(tmp_path: Path) -> Settings:
         gcp_project_id="firstdue-test",
         gcs_plans_bucket="firstdue-test-plans",
         callback_secret="callback-secret-value",  # noqa: S106 - a test fixture, not a credential
+        # The console refuses every request without an audience to verify
+        # against, so live mode will not start without one. Which clock the
+        # container chose is what these tests are about; this just satisfies it.
+        console_audience="https://firstdue-incident",
         # Live mode screens every untrusted document through Model Armor, so a
         # live container without a template refuses to start. That is the
         # behaviour under test elsewhere; here it just has to be satisfied.

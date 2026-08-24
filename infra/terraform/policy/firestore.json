@@ -181,6 +181,48 @@
       "indexes": [],
       "reason": "read by document id only; the single-field indexes Firestore creates are enough"
     },
+    "memory_checkpoints": {
+      "indexes": [
+        {
+          "fields": [
+            "question_id",
+            "created_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "open_questions": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "status",
+            "opened_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        },
+        {
+          "fields": [
+            "address_id",
+            "status",
+            "opened_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
     "policy_decisions": {
       "indexes": [
         {

@@ -20,8 +20,30 @@ from firstdue.settings import AppEnv, ServiceRole, Settings
 PREFIX = "/api/v1"
 
 
-def _client(role: ServiceRole) -> TestClient:
-    settings = Settings(app_env=AppEnv.TEST, fixtures_dir=Path("fixtures"), firstdue_loop=role)
+#: The console API, named by the routes a deployed console actually calls. The
+#: last two are the governance surface: the referral a captain files and the
+#: dispatch that follows it.
+CONSOLE_PATHS: tuple[str, ...] = (
+    f"{PREFIX}/buildings/{{address_id}}",
+    f"{PREFIX}/buildings/{{address_id}}/timeline",
+    f"{PREFIX}/buildings/{{address_id}}/geometry",
+    f"{PREFIX}/districts/{{district_id}}/stats",
+    f"{PREFIX}/districts/{{district_id}}/queue",
+    f"{PREFIX}/conflicts/{{conflict_id}}/referral",
+    f"{PREFIX}/referrals/{{referral_id}}/approve",
+    f"{PREFIX}/queue/{{entry_id}}/dispatch",
+)
+
+INCIDENT_PATH = f"{PREFIX}/incidents/{{incident_id}}/brief"
+
+
+def _client(role: ServiceRole, *, agent: str = "") -> TestClient:
+    settings = Settings(
+        app_env=AppEnv.TEST,
+        fixtures_dir=Path("fixtures"),
+        firstdue_loop=role,
+        firstdue_agent=agent,
+    )
     token = console_token(settings, Role.CHIEF)
     return TestClient(create_app(settings), headers={"Authorization": f"Bearer {token}"})
 
@@ -48,13 +70,59 @@ def test_the_slow_service_does_not_serve_the_incident_loop() -> None:
     assert response.status_code == 404
 
 
-def test_the_incident_service_does_not_serve_the_slow_loop() -> None:
+def test_the_incident_service_serves_the_whole_console() -> None:
+    """The console is not a loop surface, and gating it on the loop broke it.
+
+    There is one console, behind one proxy, with one backend base URL --
+    Terraform points it at the incident service. With the console router mounted
+    on the slow loop, that service answered 404 for building profiles, district
+    stats, the survey queue, the timeline, and the captain's referral approval:
+    half the product, missing, in the deployment only. Nothing here caught it
+    because the test app runs ``ServiceRole.ALL``, where every router is mounted
+    and the split is invisible.
+    """
     with _client(ServiceRole.INCIDENT) as client:
         paths = _paths(client)
-        response = client.post(f"{PREFIX}/districts/sffd-district-03/poll")
-    assert f"{PREFIX}/incidents/{{incident_id}}/brief" in paths
-    assert f"{PREFIX}/districts/{{district_id}}/queue" not in paths
-    assert response.status_code == 404
+
+    assert INCIDENT_PATH in paths
+    assert set(CONSOLE_PATHS) <= paths
+
+
+def test_the_slow_service_serves_the_console_too() -> None:
+    """Either backend service can be the one the console is pointed at."""
+    with _client(ServiceRole.SLOW) as client:
+        paths = _paths(client)
+
+    assert set(CONSOLE_PATHS) <= paths
+
+
+@pytest.mark.parametrize("role", list(ServiceRole))
+def test_an_agent_worker_exposes_no_console_at_all(role: ServiceRole) -> None:
+    """A worker holds one agent's identity and has no operator in front of it.
+
+    It mounted the console router anyway -- including the referral approval and
+    the queue dispatch, the two writes the whole governance thesis rests on.
+    Not remotely exploitable, because a worker is not publicly invokable, but an
+    authorization surface nobody intended and one the agent-worker Terraform
+    module already asserted did not exist. Parametrised over the loop roles
+    because a worker inherits its agent's loop, and none of them is a console.
+    """
+    with _client(role, agent="records-watcher") as client:
+        paths = _paths(client)
+
+    assert not set(CONSOLE_PATHS) & paths
+
+
+def test_a_slow_loop_worker_serves_neither_console_nor_incident_routes() -> None:
+    """What Terraform actually deploys for a slow-loop agent: a worker that
+    consumes events and answers probes, and offers no operator surface."""
+    with _client(ServiceRole.SLOW, agent="records-watcher") as client:
+        paths = _paths(client)
+
+    assert not set(CONSOLE_PATHS) & paths
+    assert INCIDENT_PATH not in paths
+    assert "/healthz" in paths
+    assert f"{PREFIX}/internal/events/push" in paths
 
 
 @pytest.mark.parametrize("role", list(ServiceRole))

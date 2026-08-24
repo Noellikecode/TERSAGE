@@ -20,12 +20,94 @@ import hashlib
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Self
+from typing import Final, Self
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from firstdue.errors import ConfigurationError
+
+#: Role names a console binding may name.
+#:
+#: Duplicated from :class:`firstdue.api.dependencies.Role` deliberately. Every
+#: module in the API layer imports these settings, so naming the enum here would
+#: be an import cycle, and settings must not depend upwards to answer a question
+#: about its own input. The two are pinned together by a test, and the console
+#: still refuses a role name the enum does not know rather than trusting this
+#: copy -- so a drift between them denies authority instead of inventing it.
+CONSOLE_ROLE_NAMES: Final[frozenset[str]] = frozenset({"viewer", "captain", "chief"})
+
+
+def parse_service_accounts(raw: str | None) -> tuple[str, ...]:
+    """Parse a comma-separated list of service-account emails.
+
+    Order is preserved and duplicates are kept out, but neither matters to the
+    caller: this is a membership test, and the comparison against it is
+    constant-time.
+
+    An entry that is not an email address is a startup failure rather than a
+    principal that can never match. The silent version of that mistake is an
+    internal caller that authenticates perfectly and is refused anyway, which is
+    exactly how a scheduled slow loop stops running without anyone noticing.
+    """
+    accounts: list[str] = []
+    for entry in (raw or "").split(","):
+        account = entry.strip()
+        if not account:
+            # A trailing or doubled comma is a formatting artifact.
+            continue
+        if "@" not in account:
+            raise ConfigurationError(
+                "internal caller service accounts must be email addresses, comma-separated",
+                details={"entry": account},
+            )
+        if account not in accounts:
+            accounts.append(account)
+    return tuple(accounts)
+
+
+def parse_console_role_bindings(raw: str) -> dict[str, str]:
+    """Parse ``CONSOLE_ROLE_BINDINGS`` into ``{email: role name}``.
+
+    The format is a comma-separated list of ``email:role`` pairs. Parsing is
+    strict on purpose: a binding that cannot be read is authority somebody
+    believes they granted and did not, and the failure mode of guessing is an
+    officer who is silently a viewer at the moment they reach for an approval.
+    So an unreadable entry stops the process rather than resolving to a default
+    that looks like it worked.
+
+    Emails are lower-cased on both sides of the comparison, because an identity
+    provider is free to vary the case of a local part it considers one person.
+    """
+    bindings: dict[str, str] = {}
+    for entry in raw.split(","):
+        binding = entry.strip()
+        if not binding:
+            # A trailing or doubled comma is a formatting artifact, not an
+            # ambiguous grant; there is nothing to be strict about.
+            continue
+        principal, separator, role_name = binding.partition(":")
+        principal = principal.strip().lower()
+        role_name = role_name.strip().lower()
+        if not separator or not principal or not role_name or "@" not in principal:
+            raise ConfigurationError(
+                "CONSOLE_ROLE_BINDINGS entries must be 'email:role', comma-separated",
+                details={"binding": binding},
+            )
+        if role_name not in CONSOLE_ROLE_NAMES:
+            raise ConfigurationError(
+                "CONSOLE_ROLE_BINDINGS names a role that does not exist",
+                details={"binding": binding, "roles": sorted(CONSOLE_ROLE_NAMES)},
+            )
+        existing = bindings.get(principal)
+        if existing is not None and existing != role_name:
+            # Last-wins would decide silently which of the two an officer holds.
+            raise ConfigurationError(
+                "CONSOLE_ROLE_BINDINGS binds one principal to two roles",
+                details={"principal": principal, "roles": sorted({existing, role_name})},
+            )
+        bindings[principal] = role_name
+    return bindings
 
 
 class AppEnv(StrEnum):
@@ -166,6 +248,16 @@ class Settings(BaseSettings):
     #: Seed for the deterministic id generator, so `make reset` is reproducible.
     demo_seed: str = "firstdue-demo"
     #: Start of the deterministic demo timeline (ISO-8601, timezone-aware).
+    #: Run one slow-loop pass at startup so the console opens on a district
+    #: that has already been surveyed -- profiles, a ranked queue, and open
+    #: conflicts present as accumulated state rather than narrated.
+    #:
+    #: It exists because fake mode holds state in memory *per process*: a pass
+    #: run by the CLI writes to a store the server never sees, so without this
+    #: the console starts with an empty queue, nothing to select, and therefore
+    #: no way to dispatch. Off by default so the test suite and any live
+    #: deployment start cold; `make demo` and `make serve` turn it on.
+    demo_prime_slow_loop: bool = False
     demo_epoch: str = "2026-08-20T08:00:00+00:00"
     #: Synthetic fixtures and real public reference data used in fake mode.
     fixtures_dir: Path = Path("fixtures")
@@ -174,7 +266,7 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------- google ---
     gcp_project_id: str | None = None
-    gcp_region: str = "us-west1"
+    gcp_region: str = "us-central1"
     firestore_database: str = "(default)"
     pubsub_topic_prefix: str = "firstdue"
     gcs_plans_bucket: str | None = None
@@ -230,8 +322,45 @@ class Settings(BaseSettings):
     internal_push_token: str | None = None
     #: OIDC audience the push endpoint requires. Live mode only.
     internal_push_audience: str | None = None
-    #: The service account Pub/Sub pushes as. Live mode only.
+    #: The service accounts allowed to call the internal endpoints, as a
+    #: comma-separated list. Live mode only.
+    #:
+    #: More than one because more than one Google service calls in, as separate
+    #: IAM identities on purpose: Pub/Sub pushes events as the push service
+    #: account, and Cloud Scheduler ticks the slow loop as its own. A single
+    #: value here rejected every scheduled tick -- a 401 nobody sees, and a slow
+    #: loop that has quietly not run for a week. Collapsing the two identities in
+    #: IAM instead would have solved it by removing the separation.
+    #:
+    #: Parsed by :func:`parse_service_accounts`; an unusable value is a startup
+    #: failure and an empty one refuses traffic. There is no wildcard.
     internal_push_service_account: str | None = None
+
+    # ----------------------------------------------------- console auth ------
+    #: OIDC audience the console requires. Live mode only.
+    #:
+    #: Deliberately not ``internal_push_audience``: that one is Pub/Sub calling
+    #: the fleet, this one is an officer's browser calling the incident service.
+    #: They are separate settings because they are separate trust boundaries,
+    #: and each must be set on its own even where they resolve to the same
+    #: string. In the current topology they do coincide on the incident service
+    #: and differ everywhere else: the push audience is per-service, so the slow
+    #: service and every agent worker verify pushes against their own, while the
+    #: console audience is the incident service's for all of them. Reusing one
+    #: setting for both would have made that arrangement unexpressible.
+    #:
+    #: Both are stable Cloud Run custom audiences rather than service URLs, so
+    #: they survive a service being torn down and recreated at a different URL.
+    console_audience: str | None = None
+    #: Which authenticated principals hold which role, as ``email:role`` pairs.
+    #:
+    #: Live mode has no other source for this. A Google-issued ID token carries
+    #: no custom claims, so a role has to be bound to the verified email out of
+    #: band, and this is that binding. An unbound principal is a viewer.
+    #:
+    #: Parsed by :func:`parse_console_role_bindings` and validated at startup:
+    #: see :meth:`_check_console_role_bindings_are_readable`.
+    console_role_bindings: str = ""
 
     # ------------------------------------------------- observability --------
     #: Tracing and metrics are off unless asked for. Fake mode never turns them
@@ -244,6 +373,55 @@ class Settings(BaseSettings):
     vector_search_enabled: bool = False
     vector_search_endpoint: str | None = None
     vector_embedding_model: str = "text-embedding-004"
+
+    # ------------------------------------------------- reasoning and memory --
+    # ------------------------------------------------------ fire activity --
+    #: NASA FIRMS map key. Free, rate-limited, read-only.
+    firms_map_key: str | None = None
+    #: The area the fire-activity map covers, as ``west,south,east,north``.
+    #:
+    #: Regional, not municipal, and measured rather than assumed: over FIRMS'
+    #: maximum five-day window San Francisco proper returns **zero** detections
+    #: and Northern California returns hundreds. VIIRS pixels are ~375 m and
+    #: built for wildfire, so a structure fire never registers. A city-only box
+    #: would be a permanently empty panel; the region is what carries signal a
+    #: department acts on -- mutual-aid demand, air quality, red-flag posture.
+    fire_activity_region: str = "-124.5,36.5,-119.5,40.5"
+    #: The city drawn inside that region, and counted separately. Must be
+    #: enclosed by the region; a box that is not fails at startup.
+    fire_activity_city_bounds: str = "-122.55,37.70,-122.35,37.84"
+
+    #: Google Search grounding for :class:`GroundingService`. Off by default for
+    #: the same two reasons Vector Search is: it bills per request, and it is the
+    #: only path in the fleet that reaches the public web. A deployment that
+    #: wants it says so. With it off, live mode routes grounding to the
+    #: deterministic double in its unavailable state, which declines every
+    #: reference with a reason rather than answering from a digest -- a live
+    #: process must not emit a binding that looks retrieved and was arithmetic.
+    grounding_search_enabled: bool = False
+    #: LangGraph as the graph executor. The nodes and the router are ours either
+    #: way; this chooses who drives them, and the built-in driver is what fake
+    #: mode and the test suite run. Two tests assert the two drivers produce
+    #: byte-identical reasoning chains, which is what makes this switchable at
+    #: all rather than a fork.
+    langgraph_enabled: bool = False
+    #: Hard ceiling on graph steps, checked in the router alongside the wall
+    #: clock. A budget that only bounds time still lets a cheap loop spin.
+    agent_graph_max_steps: int = Field(default=24, ge=1, le=200)
+    #: Durable agent working memory. Container-level only: nothing inside the
+    #: bank reads settings, and there is no path that silently degrades
+    #: durability -- either the fleet has a memory or it does not.
+    memory_bank_enabled: bool = True
+
+    # ------------------------------------------------------- referral email --
+    #: Resend delivers the inter-agency referral once a captain has approved it.
+    #: Absent, the referral is still drafted, staged, and filed -- it simply is
+    #: not emailed, which is the fake-mode default and why the demo is unchanged.
+    resend_api_key: str | None = None
+    #: Required whenever the key is set; must be a Resend-verified sender domain.
+    resend_from_address: str | None = None
+    #: Where an approved referral is sent. Empty means file but do not email.
+    building_department_emails: str = ""
 
     # --------------------------------------------------------- secret names --
     #: Names, never values. The value is fetched from Secret Manager at startup
@@ -288,6 +466,27 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _check_console_role_bindings_are_readable(self) -> Self:
+        """A binding nobody can read is authority nobody was granted.
+
+        Parsed and discarded here rather than only on the request that needs it:
+        a typo in ``CONSOLE_ROLE_BINDINGS`` must stop the process at startup, not
+        leave a captain as a viewer until the first referral she cannot file.
+        """
+        parse_console_role_bindings(self.console_role_bindings)
+        return self
+
+    @model_validator(mode="after")
+    def _check_internal_callers_are_readable(self) -> Self:
+        """Same reason: an unreadable principal list is a 401 waiting to happen.
+
+        Parsed at startup so a malformed entry stops the process, rather than
+        surfacing as a scheduled tick that has been refused since the deploy.
+        """
+        parse_service_accounts(self.internal_push_service_account)
+        return self
+
+    @model_validator(mode="after")
     def _check_live_mode_is_fully_configured(self) -> Self:
         """Live mode requires real configuration; there is no silent fallback."""
         if self.storage_backend is StorageBackend.FIRESTORE and not self.gcp_project_id:
@@ -315,6 +514,18 @@ class Settings(BaseSettings):
             )
             if not value
         ]
+        if self.serves_console and not self.console_audience:
+            # Without this the console cannot verify a single caller and refuses
+            # every request -- at request time, on a fireground, rather than at
+            # startup where a missing setting belongs.
+            #
+            # Scoped to the processes that actually serve the console, on the
+            # same principle the loop split already encodes: a process is
+            # required to configure what it serves and nothing else. An agent
+            # worker has no console, and holding nine of them hostage to an
+            # audience they never verify against is a deployment that will not
+            # come up for a reason that is not true.
+            missing.append("CONSOLE_AUDIENCE")
         if self.event_backend is EventBackend.PUBSUB:
             # A push endpoint that cannot verify who called it is an open door
             # into the fleet's event stream. Live mode will not start without
@@ -323,7 +534,13 @@ class Settings(BaseSettings):
                 name
                 for name, value in (
                     ("INTERNAL_PUSH_AUDIENCE", self.internal_push_audience),
-                    ("INTERNAL_PUSH_SERVICE_ACCOUNT", self.internal_push_service_account),
+                    # The parsed list, not the raw string: a value of ", " is
+                    # set, is unusable, and would otherwise start a process that
+                    # refuses every internal caller it has.
+                    (
+                        "INTERNAL_PUSH_SERVICE_ACCOUNT",
+                        ",".join(self.internal_caller_service_accounts),
+                    ),
                 )
                 if not value
             )
@@ -334,6 +551,50 @@ class Settings(BaseSettings):
                 details={"missing": missing},
             )
         return self
+
+    @model_validator(mode="after")
+    def _check_referral_email_is_whole(self) -> Self:
+        """A half-configured Resend is worse than an unconfigured one.
+
+        No key at all is a documented state: the referral is drafted, staged,
+        approved, and filed, and simply not emailed. A key with no sender, or a
+        sender with no key, is something else -- a deployment that believes it
+        is notifying the building department and is not. That failure is silent
+        at the only moment it matters, months later, when someone asks why the
+        referral was never actioned.
+
+        Recipients are deliberately *not* required. Filing without emailing is
+        the demo's own default, and it stays legitimate.
+        """
+        if bool(self.resend_api_key) != bool(self.resend_from_address):
+            raise ConfigurationError(
+                "referral email needs both RESEND_API_KEY and RESEND_FROM_ADDRESS, " "or neither",
+                details={
+                    "missing": (
+                        ["RESEND_FROM_ADDRESS"] if self.resend_api_key else ["RESEND_API_KEY"]
+                    )
+                },
+            )
+        return self
+
+    @property
+    def internal_caller_service_accounts(self) -> tuple[str, ...]:
+        """The identities allowed to call the internal endpoints.
+
+        Empty means nobody, which is how it must fail: an internal endpoint that
+        accepts anyone is an open door into the fleet's event stream.
+        """
+        return parse_service_accounts(self.internal_push_service_account)
+
+    @property
+    def console_roles(self) -> dict[str, str]:
+        """The parsed principal-to-role bindings, keyed by lower-cased email.
+
+        Re-parsed on access rather than cached: the authenticator reads it once
+        when the app is built, and a settings object that answered from a cache
+        would be one more thing that can disagree with its own input.
+        """
+        return parse_console_role_bindings(self.console_role_bindings)
 
     @property
     def is_agent_worker(self) -> bool:
@@ -350,6 +611,28 @@ class Settings(BaseSettings):
     @property
     def serves_incident_loop(self) -> bool:
         return self.firstdue_loop in (ServiceRole.ALL, ServiceRole.INCIDENT)
+
+    @property
+    def serves_console(self) -> bool:
+        """Whether this process serves the console API.
+
+        Both backend services do, and the loop role has nothing to do with it.
+        The console is one human-facing surface, behind one proxy, with one
+        backend base URL -- so gating it on the loop split it in half: the
+        service that proxy points at answered 404 for building profiles,
+        district stats, the survey queue, the timeline, and the captain's
+        referral approval. Which loop produced the state a screen renders is the
+        wrong axis to gate a read surface on.
+
+        What is actually true is that an **agent worker is not a console**. It
+        holds one agent's service-account identity, is not publicly invokable,
+        and has no operator in front of it. Until this property existed it
+        mounted the console router anyway -- including the referral approval and
+        the dispatch write -- which is an authorization surface nobody intended
+        and one the agent-worker Terraform module already asserted did not
+        exist.
+        """
+        return not self.is_agent_worker
 
     @property
     def is_fake_mode(self) -> bool:
@@ -394,6 +677,26 @@ class Settings(BaseSettings):
             return None
         material = f"firstdue-callback|{self.demo_seed}".encode()
         return hashlib.sha256(material).hexdigest()[:32]
+
+    @property
+    def referral_recipients(self) -> tuple[str, ...]:
+        """Where an approved referral is emailed.
+
+        Parsed rather than stored as a list because it arrives as one Cloud Run
+        environment variable. An entry without an ``@`` is dropped rather than
+        raised on: a malformed recipient must not stop a captain filing a
+        referral, and the empty tuple already means "file but do not email".
+        """
+        return tuple(
+            entry.strip()
+            for entry in self.building_department_emails.split(",")
+            if entry.strip() and "@" in entry
+        )
+
+    @property
+    def referral_email_configured(self) -> bool:
+        """Whether an approved referral can actually reach the building department."""
+        return bool(self.resend_api_key and self.resend_from_address and self.referral_recipients)
 
     @property
     def vertex_configured(self) -> bool:

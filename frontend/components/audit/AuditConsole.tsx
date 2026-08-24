@@ -26,6 +26,7 @@ const ACTIONS = ['ALL', 'ALLOW', 'DERIVE', 'WITHHOLD_JURISDICTION', 'REQUIRE_APP
 const KINDS = [
   'ALL',
   'injection_blocked',
+  'screen_unavailable',
   'model_output_rejected',
   'write_executed',
   'approval_granted',

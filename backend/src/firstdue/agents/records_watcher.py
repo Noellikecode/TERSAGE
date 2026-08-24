@@ -14,6 +14,29 @@ property of the arithmetic instead of a check somebody has to remember.
 A source that is down does not stop the pass. Its records are missing from this
 poll and the profile says the source was unavailable -- never that the hazard
 was absent.
+
+**Retrieval, when there is somewhere to remember.** Given a
+:class:`~firstdue.services.memory_bank.MemoryBank` or a
+:class:`~firstdue.ports.grounding.GroundingService`, the fixed four-feed pass
+becomes agentic retrieval: which feed to read next, the references the filings
+themselves cite, and a chase for the cited record -- looping until nothing is
+outstanding. A filing nobody has published yet becomes an open question naming
+the permit number and the feeds already searched, so the next pass waits instead
+of re-failing. See :mod:`firstdue.agents.graphs.records`.
+
+**The model may not author a fact.** The graph decides *what to look up and when
+the picture has closed*, and that is all. What it produces is a set of
+:class:`~firstdue.ports.sources.SourceSnapshot` objects; they go to the same
+:class:`~firstdue.extraction.extractor.FactExtractor`, behind the same screen,
+and every fact that comes out carries the same character span, snapshot id, and
+provenance it always did. No node holds a
+:class:`~firstdue.domain.facts.StructuralFact`, so none can invent one -- and a
+value an officer cannot trace to a line in a filed document would not be a fact
+at all.
+
+With neither collaborator wired -- the default, and what ``make demo`` and the
+whole test suite run -- none of that happens and this agent behaves exactly as
+it always has.
 """
 
 from __future__ import annotations
@@ -24,7 +47,19 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from firstdue.domain.enums import SourceType
+from firstdue.agents.graphs.base import (
+    DEFAULT_MAX_STEPS,
+    GROUNDING_DEADLINE_MS,
+    GraphCassette,
+    GraphStop,
+    ReasoningPlanner,
+    graph_budget,
+    park,
+    run_graph,
+)
+from firstdue.agents.graphs.records import RecordsGraphState, RecordsRetrieval
+from firstdue.domain.conflicts import ConflictStatus
+from firstdue.domain.enums import Classification, SourceType
 from firstdue.domain.facts import StructuralFact
 from firstdue.domain.keys import Keys
 from firstdue.domain.profiles import BuildingProfile, ProfileEvent, ProfileEventType
@@ -36,14 +71,17 @@ from firstdue.errors import (
     StaleVersionError,
 )
 from firstdue.extraction.extractor import FactExtractor
+from firstdue.extraction.recorded import request_digest
 from firstdue.observability.logging import get_logger
 from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
 from firstdue.ports.city import CityAdapter
 from firstdue.ports.clock import Clock, IdGenerator
+from firstdue.ports.grounding import GroundingService
 from firstdue.ports.repositories import FactRepository, ProfileRepository
 from firstdue.ports.sources import SourceAdapter, SourceRecord, SourceSnapshot
 from firstdue.ports.vectors import VectorIndex
 from firstdue.services.materialization import ProfileMaterializer
+from firstdue.services.memory_bank import MemoryBank
 from firstdue.sources.catalog import ASSESSOR, INSPECTIONS, PERMITS, VIOLATIONS
 
 logger = get_logger(__name__)
@@ -93,9 +131,27 @@ class WatchResult(BaseModel):
     unavailable_sources: tuple[str, ...] = ()
     #: Injection patterns the screen removed from ingested documents.
     screen_findings: tuple[str, ...] = ()
+    #: Documents withheld from the model because the screen could not run. Not
+    #: the same as a document that screened to nothing, and reported separately
+    #: for that reason -- a pass that read nothing must not look like a pass
+    #: that found nothing.
+    documents_screen_unavailable: int = Field(default=0, ge=0)
     documents_triaged_out: int = Field(default=0, ge=0)
     #: Narratives written to the semantic index for later recall.
     narratives_indexed: int = Field(default=0, ge=0)
+
+    # ---- the retrieval graph. All zero on a pass that did not run one, and a
+    # pass that did not run one is the default; see ``RecordsWatcher.reasons``.
+    #: Why retrieval stopped: ``CLOSED``, or the ceiling that ended it.
+    graph_stop: str = Field(default="", max_length=40)
+    #: Nodes executed. Bounded, and visible so an operator can see the bound.
+    graph_steps: int = Field(default=0, ge=0)
+    #: Cited filings this pass went and found.
+    references_followed: int = Field(default=0, ge=0)
+    #: Cited filings nothing has published yet. Each one is a thread.
+    references_outstanding: int = Field(default=0, ge=0)
+    #: Threads left open in the memory bank, one per outstanding reference.
+    open_question_ids: tuple[str, ...] = ()
 
 
 class RecordsWatcher:
@@ -113,6 +169,12 @@ class RecordsWatcher:
         ids: IdGenerator,
         audit: AuditSink | None = None,
         vectors: VectorIndex | None = None,
+        memory: MemoryBank | None = None,
+        grounding: GroundingService | None = None,
+        planner: ReasoningPlanner | None = None,
+        traces: GraphCassette | None = None,
+        use_langgraph: bool = True,
+        max_graph_steps: int = DEFAULT_MAX_STEPS,
         agent_version: str = "1.0.0",
     ) -> None:
         self._profiles = profiles
@@ -124,7 +186,22 @@ class RecordsWatcher:
         self._ids = ids
         self._audit = audit
         self._vectors = vectors
+        # Optional, like ``audit`` and ``vectors`` above. With neither wired
+        # this agent runs the fixed four-feed pass it has always run; the
+        # retrieval graph is opted into by giving it somewhere to remember and
+        # something to ask, never inherited.
+        self._memory = memory
+        self._grounding = grounding
+        self._planner = planner
+        self._traces = traces
+        self._use_langgraph = use_langgraph
+        self._max_graph_steps = max_graph_steps
         self._agent_version = agent_version
+
+    @property
+    def reasons(self) -> bool:
+        """Whether this instance runs the retrieval graph at all."""
+        return self._memory is not None or self._grounding is not None
 
     async def poll(
         self,
@@ -133,17 +210,41 @@ class RecordsWatcher:
         sources: Sequence[SourceAdapter],
         correlation_id: str,
         since: datetime | None = None,
+        deadline: datetime | None = None,
     ) -> WatchResult:
-        """Poll every watched source for a district and materialize the results."""
-        pending: dict[str, list[StructuralFact]] = {}
-        unavailable: list[str] = []
-        findings: set[str] = set()
-        triaged = 0
-        indexed = 0
+        """Poll every watched source for a district and materialize the results.
 
+        ``deadline`` is the caller's; the tighter of it and this agent's own
+        catalogued ``latency_target_ms`` bounds the retrieval graph. Passing it
+        is what lets a graph park and checkpoint before the runtime kills the
+        run, rather than dying mid-chase with nothing written down.
+        """
+        if not self.reasons:
+            retrieved, unavailable = await self._read_every_feed(sources, since=since)
+            return await self._extract_and_apply(
+                district_id=district_id,
+                retrieved=retrieved,
+                unavailable=unavailable,
+                correlation_id=correlation_id,
+            )
+        return await self._poll_by_graph(
+            district_id=district_id,
+            sources=sources,
+            correlation_id=correlation_id,
+            since=since,
+            deadline=deadline,
+        )
+
+    # -------------------------------------------------------- the fixed pass
+
+    async def _read_every_feed(
+        self, sources: Sequence[SourceAdapter], *, since: datetime | None
+    ) -> tuple[tuple[tuple[str, SourceSnapshot], ...], tuple[str, ...]]:
+        """Read all four feeds in the order given. No decisions, no following."""
+        retrieved: list[tuple[str, SourceSnapshot]] = []
+        unavailable: list[str] = []
         for source in sources:
-            source_type = SOURCE_TYPES.get(source.source_id)
-            if source_type is None:
+            if source.source_id not in SOURCE_TYPES:
                 continue
             try:
                 snapshots = await self._pull_all(source, since=since)
@@ -154,51 +255,274 @@ class RecordsWatcher:
                 )
                 unavailable.append(source.source_id)
                 continue
+            retrieved.extend((source.source_id, snapshot) for snapshot in snapshots)
+        return tuple(retrieved), tuple(unavailable)
 
-            for snapshot in snapshots:
-                for record in snapshot.records:
-                    address_id = self._resolve(record, district_id)
-                    if address_id is None:
-                        continue
-                    outcome = await self._extractor.extract(
-                        record,
+    # -------------------------------------------------------- the graph pass
+
+    async def _poll_by_graph(
+        self,
+        *,
+        district_id: str,
+        sources: Sequence[SourceAdapter],
+        correlation_id: str,
+        since: datetime | None,
+        deadline: datetime | None,
+    ) -> WatchResult:
+        """Retrieve until the picture closes, then extract exactly as ever.
+
+        The two halves never meet. The graph produces snapshots; the extractor
+        turns snapshots into facts. A node cannot reach a
+        :class:`~firstdue.domain.facts.StructuralFact` because it never holds
+        one, and every fact this pass writes carries the span, the snapshot id,
+        and the provenance it would have carried under the fixed pass.
+        """
+        budget = graph_budget(
+            AGENT_ID,
+            deadline=deadline,
+            started=self._clock.now(),
+            max_steps=self._max_graph_steps,
+        )
+        retrieval = RecordsRetrieval(sources=sources, budget=budget, planner=self._planner)
+        digest = request_digest(
+            "records-retrieval",
+            district_id,
+            ",".join(sorted(source.source_id for source in sources)),
+            since.isoformat() if since is not None else "",
+        )
+        run = await run_graph(
+            retrieval.spec(),
+            RecordsGraphState(district_id=district_id, correlation_id=correlation_id, since=since),
+            agent_id=AGENT_ID,
+            agent_version=self._agent_version,
+            budget=budget,
+            request_digest=digest,
+            use_langgraph=self._use_langgraph,
+            recorded=self._traces.load(digest) if self._traces is not None else None,
+        )
+        if self._traces is not None:
+            self._traces.store(run.trace)
+
+        state = run.state
+        retrieved = tuple(
+            (retrieval.origins[snapshot.snapshot_id], snapshot)
+            for snapshot in state.snapshots
+            if snapshot.snapshot_id in retrieval.origins
+        )
+        questions = await self._open_reference_questions(state, stop=run.trace.stop)
+        result = await self._extract_and_apply(
+            district_id=district_id,
+            retrieved=retrieved,
+            unavailable=state.unavailable,
+            correlation_id=correlation_id,
+        )
+        # Parked after materialization on purpose: a conflict does not exist
+        # until the facts that disagree have both been written.
+        questions += await self._open_conflict_questions(
+            district_id=district_id, address_ids=result.addresses_touched
+        )
+        return result.model_copy(
+            update={
+                "graph_stop": str(run.trace.stop),
+                "graph_steps": len(run.trace.records),
+                "references_followed": len(state.followed),
+                "references_outstanding": len(state.outstanding),
+                "open_question_ids": questions,
+            }
+        )
+
+    async def _open_conflict_questions(
+        self, *, district_id: str, address_ids: Sequence[str]
+    ) -> tuple[str, ...]:
+        """Park a thread on every disagreement the filed record cannot settle.
+
+        **This is the thread the incident loop closes.** A conflict names an
+        attribute two sources disagree about, and no amount of further reading
+        breaks the tie -- the permit will keep saying two storeys and the lidar
+        will keep measuring three. What settles it is a person standing in the
+        building, which is months away and may arrive as a survey or as a fire.
+
+        The question names the conflict id and the canonical key deliberately.
+        ``incident-recorder`` matches a thread to an incident by *identifier*,
+        never by resemblance, and an IC resolution writes exactly those two
+        fields into the incident log. So this sentence is what makes a thread
+        opened in March closeable in August, and rewording it would open a
+        second thread beside the one already being carried -- the question id is
+        derived from the text.
+
+        ``PUBLIC``: a conflict between filed records is itself a public fact
+        about public filings, and the question quotes neither side's value.
+        """
+        if self._memory is None:
+            return ()
+        opened: list[str] = []
+        for address_id in address_ids:
+            profile = await self._profiles.get(address_id)
+            if profile is None:
+                continue
+            for conflict in profile.conflicts:
+                if conflict.status is not ConflictStatus.OPEN:
+                    continue
+                question = await self._memory.open(
+                    district_id=district_id,
+                    address_id=address_id,
+                    question=(
+                        f"Filed records do not settle {conflict.canonical_key}; "
+                        f"{conflict.conflict_id} is open."
+                    ),
+                    waiting_on="a company survey or an on-scene observation",
+                    opened_by=AGENT_ID,
+                    opened_by_version=self._agent_version,
+                    classification=Classification.PUBLIC,
+                    evidence_fact_ids=tuple(conflict.fact_ids),
+                )
+                opened.append(question.question_id)
+        return tuple(opened)
+
+    async def _open_reference_questions(
+        self, state: RecordsGraphState, *, stop: GraphStop
+    ) -> tuple[str, ...]:
+        """Open a thread for everything this pass could not finish.
+
+        One per missing filing rather than one per pass, because that is the
+        unit a later pass closes: the permit appears, that thread resolves, and
+        the others keep waiting. A single "some records are missing" question
+        would never be closeable by anything.
+
+        And one more when a ceiling stopped retrieval before it had read
+        everything, because a pass that ran out of budget and a pass that found
+        nothing outstanding produce the same empty list and mean opposite
+        things -- the same distinction the ``UNAVAILABLE`` fact exists to keep.
+
+        ``PUBLIC`` throughout: permits, violations, inspections and the
+        assessor's roll are public records, and these questions name filing
+        numbers rather than anything a filing said.
+        """
+        opened: list[str] = []
+        for reference in state.outstanding:
+            question_id = await park(
+                self._memory,
+                agent_id=AGENT_ID,
+                agent_version=self._agent_version,
+                question=f"Where is the filing cited as {reference}?",
+                classification=Classification.PUBLIC,
+                state=state.model_copy(update={"waiting_on": f"filing {reference}"}),
+            )
+            if question_id is not None:
+                opened.append(question_id)
+
+        if state.outstanding or stop is GraphStop.CLOSED:
+            return tuple(opened)
+
+        unread = tuple(
+            source_id
+            for source_id in WATCHED_SOURCES
+            if source_id not in state.queried and source_id not in state.unavailable
+        )
+        # Fixed text: the question id is derived from it, so rewording it would
+        # open a second thread beside the one already being carried.
+        question_id = await park(
+            self._memory,
+            agent_id=AGENT_ID,
+            agent_version=self._agent_version,
+            question="Which municipal feeds did retrieval not reach?",
+            classification=Classification.PUBLIC,
+            state=state.model_copy(
+                update={"waiting_on": f"a full read of: {', '.join(unread) or 'nothing'}"}
+            ),
+        )
+        if question_id is not None:
+            opened.append(question_id)
+        return tuple(opened)
+
+    # ------------------------------------------------------------ extraction
+
+    async def _extract_and_apply(
+        self,
+        *,
+        district_id: str,
+        retrieved: Sequence[tuple[str, SourceSnapshot]],
+        unavailable: Sequence[str],
+        correlation_id: str,
+    ) -> WatchResult:
+        """Turn retrieved snapshots into facts. The only place this agent writes.
+
+        Shared by both passes. Whatever decided *which* filings to read, what
+        happens to one afterwards is one function: the same screen, the same
+        triage, the same extractor, the same spans, the same derived ids.
+        """
+        pending: dict[str, list[StructuralFact]] = {}
+        findings: set[str] = set()
+        screens_unavailable = 0
+        triaged = 0
+        indexed = 0
+
+        for source_id, snapshot in retrieved:
+            source_type = SOURCE_TYPES[source_id]
+            for record in snapshot.records:
+                address_id = await self._resolve_address(record, district_id)
+                if address_id is None:
+                    continue
+                outcome = await self._extractor.extract(
+                    record,
+                    address_id=address_id,
+                    snapshot=snapshot,
+                    source_type=source_type,
+                    ingested_at=self._clock.now(),
+                    field_map=FIELD_MAPS.get(source_id, {}),
+                )
+                if outcome.screen_findings:
+                    # An ingested document tried to give instructions. The
+                    # instruction was removed, the rest of the narrative was
+                    # kept, and the attempt is on the record.
+                    await self._audit_event(
+                        AuditEventKind.INJECTION_BLOCKED,
+                        target=source_id,
                         address_id=address_id,
-                        snapshot=snapshot,
-                        source_type=source_type,
-                        ingested_at=self._clock.now(),
-                        field_map=FIELD_MAPS.get(source.source_id, {}),
+                        detail={
+                            "record_ref": record.record_ref,
+                            "patterns": ",".join(outcome.screen_findings),
+                            # The screen that actually ran. Hard-coding the
+                            # local detector here named the wrong screen on
+                            # every deployment with Model Armor configured.
+                            "screen": outcome.screen,
+                        },
                     )
-                    if outcome.screen_findings:
-                        # An ingested document tried to give instructions. The
-                        # instruction was removed, the rest of the narrative was
-                        # kept, and the attempt is on the record.
-                        await self._audit_event(
-                            AuditEventKind.INJECTION_BLOCKED,
-                            target=source.source_id,
-                            address_id=address_id,
-                            detail={
-                                "record_ref": record.record_ref,
-                                "patterns": ",".join(outcome.screen_findings),
-                                "screen": "local-injection-detector/1",
-                            },
-                        )
-                    if outcome.model_unavailable_reason == "MODEL_OUTPUT_REJECTED":
-                        await self._audit_event(
-                            AuditEventKind.MODEL_OUTPUT_REJECTED,
-                            target=source.source_id,
-                            address_id=address_id,
-                            detail={"record_ref": record.record_ref},
-                        )
-                    findings.update(outcome.screen_findings)
-                    triaged += 1 if outcome.triaged_out else 0
-                    pending.setdefault(address_id, []).extend(outcome.facts)
-                    # The screened text, not the raw record: whatever an
-                    # ingested document tried to instruct has already been
-                    # removed, and the injection attempt must not be what a
-                    # later semantic query recalls.
-                    indexed += await self._index_narrative(
-                        record, address_id=address_id, screened=outcome.screened_text
+                if outcome.screen_unavailable_reason is not None:
+                    # Nobody read this document. That is an operational fact
+                    # an investigator reconstructing the pass needs, and it
+                    # is not recoverable from an absence of facts: a document
+                    # withheld from the model and a document that said
+                    # nothing produce the same empty result and mean
+                    # opposite things.
+                    screens_unavailable += 1
+                    await self._audit_event(
+                        AuditEventKind.SCREEN_UNAVAILABLE,
+                        target=source_id,
+                        address_id=address_id,
+                        detail={
+                            "record_ref": record.record_ref,
+                            "screen": outcome.screen,
+                            "reason": outcome.screen_unavailable_reason,
+                        },
                     )
+                if outcome.model_unavailable_reason == "MODEL_OUTPUT_REJECTED":
+                    await self._audit_event(
+                        AuditEventKind.MODEL_OUTPUT_REJECTED,
+                        target=source_id,
+                        address_id=address_id,
+                        detail={"record_ref": record.record_ref},
+                    )
+                findings.update(outcome.screen_findings)
+                triaged += 1 if outcome.triaged_out else 0
+                pending.setdefault(address_id, []).extend(outcome.facts)
+                # The screened text, not the raw record: whatever an
+                # ingested document tried to instruct has already been
+                # removed, and the injection attempt must not be what a
+                # later semantic query recalls.
+                indexed += await self._index_narrative(
+                    record, address_id=address_id, screened=outcome.screened_text
+                )
 
         written: list[str] = []
         deduped = 0
@@ -233,6 +557,7 @@ class RecordsWatcher:
             written_fact_ids=tuple(written),
             unavailable_sources=tuple(unavailable),
             screen_findings=tuple(sorted(findings)),
+            documents_screen_unavailable=screens_unavailable,
             documents_triaged_out=triaged,
             narratives_indexed=indexed,
         )
@@ -252,20 +577,68 @@ class RecordsWatcher:
                 break
         return snapshots
 
-    def _resolve(self, record: SourceRecord, district_id: str) -> str | None:
-        """Which building this record is about, or None to skip it.
+    async def _resolve_address(self, record: SourceRecord, district_id: str) -> str | None:
+        """Which building this record is about, or ``None`` to skip it.
 
-        Resolution is the city adapter's job. A record that will not resolve is
-        dropped rather than attached to a best guess -- a permit filed against
-        the wrong building is worse than a permit nobody saw.
+        The city adapter first and almost always: a normalized municipal address
+        is arithmetic, and a record it settles needs nothing else.
+
+        A record it cannot settle -- "the rear structure", a filing whose
+        address line the gazetteer has never seen -- used to be dropped, on the
+        correct principle that a permit filed against the wrong building is
+        worse than a permit nobody saw. With a grounding service wired it gets
+        one more chance, and the principle survives intact: the service chooses
+        from *this district's* building ids or declines, under its own
+        confidence floor and ambiguity margin, and a decline still drops the
+        record. See :mod:`firstdue.ports.grounding`.
         """
         raw = record.address_id or str(record.fields.get("street_address") or "")
         if not raw:
             return None
         address = self._city.normalize_address(raw)
         if address is None or address.district_id != district_id:
-            return None
+            return await self._ground_address(raw, district_id)
         return address.address_id
+
+    async def _ground_address(self, reference: str, district_id: str) -> str | None:
+        """Ask the grounding service which building a stray address line means.
+
+        The candidate list is the district's own profiles, so the answer is one
+        of them or nothing -- the resolver cannot mint an id, and the membership
+        is re-checked here anyway because the consequence of a wrong binding is
+        a filing on the permanent record of a building it was never about.
+        """
+        if self._grounding is None:
+            return None
+        candidates = tuple(
+            sorted(
+                profile.address_id for profile in await self._profiles.list_by_district(district_id)
+            )
+        )
+        if not candidates:
+            return None
+        # Never raises, by contract: every failure is a decline. Guarded anyway
+        # for a third-party implementation that breaks it, because one
+        # unmatchable permit must not fail a district poll.
+        try:
+            resolution = await self._grounding.resolve_reference(
+                reference,
+                district_id=district_id,
+                candidates=candidates,
+                deadline_ms=GROUNDING_DEADLINE_MS,
+            )
+        except Exception as exc:  # pragma: no cover - the port forbids this
+            logger.warning(
+                "records_grounding_unavailable", extra={"error_type": type(exc).__name__}
+            )
+            return None
+        if not resolution.resolved or resolution.address_id not in candidates:
+            return None
+        logger.info(
+            "records_address_grounded",
+            extra={"address_id": resolution.address_id, "method": resolution.method},
+        )
+        return resolution.address_id
 
     async def _apply(
         self, address_id: str, district_id: str, facts: Sequence[StructuralFact]

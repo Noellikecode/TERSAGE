@@ -6,11 +6,15 @@
  * advanced, and a tablet user who cannot reach a control without a mouse.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AttributeGrid } from '@/components/profile/AttributeGrid';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
+import { BuildingImagery } from '@/components/incident/BuildingImagery';
 import { CommandCenter } from '@/components/CommandCenter';
 import { StatusPill } from '@/components/StatusPill';
 import { SurveyQueue } from '@/components/standby/SurveyQueue';
@@ -28,6 +32,18 @@ import {
   emission,
 } from './fixtures';
 
+/** A photograph as the imagery endpoint returns one. */
+const IMAGERY = {
+  address_id: 'sf-0450-hayes',
+  available: true,
+  provider: 'google-street-view',
+  content_type: 'image/jpeg',
+  data_url: 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA',
+  attribution: 'Imagery © 2026 Google',
+  captured_hint: 'June 2025',
+  unavailable_reason: null,
+};
+
 beforeEach(() => {
   vi.stubGlobal(
     'fetch',
@@ -35,6 +51,7 @@ beforeEach(() => {
       const url = String(input);
       const body = (value: unknown) =>
         new Response(JSON.stringify(value), { headers: { 'Content-Type': 'application/json' } });
+      if (url.includes('/imagery')) return body(IMAGERY);
       if (url.includes('/timeline')) return body([]);
       if (url.includes('/geometry')) return body(GEOMETRY);
       if (url.includes('/buildings/')) return body(PROFILE);
@@ -91,8 +108,86 @@ describe('landmarks and structure', () => {
 
   it('uses a real heading hierarchy', () => {
     renderConsole();
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('FIRST DUE');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('TERSAGE');
     expect(screen.getAllByRole('heading', { level: 2 }).length).toBeGreaterThan(0);
+  });
+
+  it('names each standby region after its own heading', () => {
+    renderConsole();
+    // Standby is three columns now: the slow loop split left and right, and
+    // the region between them. Each column has a heading of its own, because
+    // two regions with the same name are two regions a screen-reader user
+    // cannot tell apart.
+    for (const name of [
+      'District readiness',
+      'Regional fire activity',
+      'Ranked for survey',
+      'Fleet — slow loop',
+      'Fleet — slow loop, continued',
+    ]) {
+      const region = screen.getByRole('region', { name });
+      const labelledBy = region.getAttribute('aria-labelledby');
+      expect(labelledBy).toBeTruthy();
+      expect(document.getElementById(labelledBy as string)).toHaveTextContent(name);
+    }
+  });
+
+  it('puts the district bar inside the main landmark, not adrift above it', () => {
+    renderConsole();
+    // It reads as a bar under the header, but a bar of live numbers outside
+    // every landmark is content a screen reader user can only reach by
+    // stumbling into it.
+    const bar = screen.getByRole('region', { name: 'District readiness' });
+    expect(screen.getByRole('main')).toContainElement(bar);
+    // Its meters are decoration over numbers that are already text.
+    for (const meter of screen.getAllByTestId('meter')) {
+      expect(meter).toHaveAttribute('aria-hidden', 'true');
+    }
+  });
+
+  it('names the massing model region once a structure is selected', async () => {
+    renderConsole();
+    fireEvent.click(screen.getByRole('button', { name: 'sf-0450-hayes' }));
+    await waitFor(() =>
+      expect(screen.getByRole('region', { name: 'Massing model' })).toBeInTheDocument(),
+    );
+    const region = screen.getByRole('region', { name: 'Massing model' });
+    expect(document.getElementById(region.getAttribute('aria-labelledby') as string))
+      .toHaveTextContent('Massing model');
+  });
+});
+
+describe('the building imagery panel', () => {
+  it('gives the photograph alt text and shows the attribution as text', async () => {
+    render(<BuildingImagery addressId="sf-0450-hayes" />);
+    const photo = await screen.findByRole('img');
+    // The alt text names the address; "photo of a building" tells a screen
+    // reader user nothing they can act on.
+    expect(photo).toHaveAccessibleName(/photograph of sf-0450-hayes/i);
+    // Attribution is text, not a watermark burnt into the image.
+    expect(screen.getByTestId('imagery-attribution')).toHaveTextContent('Imagery © 2026 Google');
+  });
+
+  it('says an absent photograph is absent, in words', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            ...IMAGERY,
+            available: false,
+            data_url: null,
+            attribution: null,
+            unavailable_reason: 'No street-level coverage at this address.',
+          }),
+          { headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+    render(<BuildingImagery addressId="sf-0450-hayes" />);
+    expect(await screen.findByText(/No photograph available/)).toBeInTheDocument();
+    expect(screen.getByText(/No street-level coverage/)).toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 });
 
@@ -186,15 +281,37 @@ describe('keyboard operation', () => {
     expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('gives every interactive control a visible focus style', () => {
+  it('gives every interactive control a visible focus style', async () => {
     const { container } = renderConsole();
+    // With a structure selected: that is the state with the most controls on
+    // screen -- the camera views and the whole dispatch panel are in it.
+    fireEvent.click(screen.getByRole('button', { name: 'sf-0450-hayes' }));
+    await waitFor(() =>
+      expect(screen.getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument(),
+    );
 
-    const controls = container.querySelectorAll('button, select, a[href], input');
+    const controls = Array.from(
+      container.querySelectorAll('button, select, a[href], input, textarea, [tabindex]'),
+    );
     expect(controls.length).toBeGreaterThan(5);
-    for (const control of Array.from(controls)) {
+
+    // Two ways a control can be covered: its own classes, or the console-wide
+    // rule in globals.css. Read the rule rather than assuming it -- a radio
+    // with neither is focusable with nothing to show for it.
+    const globals = readFileSync(resolve(process.cwd(), 'app/globals.css'), 'utf8');
+    const rule = globals.match(/:where\(([^)]*)\):focus-visible\s*\{[^}]*outline:/);
+    expect(rule).toBeTruthy();
+    const covered = new Set(rule![1]!.split(',').map((part) => part.trim().toUpperCase()));
+    expect(covered.has('INPUT')).toBe(true);
+
+    for (const control of controls) {
       const className = control.getAttribute('class') ?? '';
       // The skip link uses `focus:` rather than `focus-visible:`; both are visible.
-      expect(className).toMatch(/focus-visible:|focus:/);
+      const styled = /focus-visible:|focus:/.test(className);
+      const globallyStyled =
+        covered.has(control.tagName) ||
+        (covered.has('[TABINDEX]') && control.hasAttribute('tabindex'));
+      expect(styled || globallyStyled).toBe(true);
     }
   });
 

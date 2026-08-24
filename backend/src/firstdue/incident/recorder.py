@@ -18,28 +18,57 @@ failure is a worse failure than the logging one.
 
 **Sealed on close.** The log is sealed at incident close, and a sealed log
 accepts nothing further.
+
+**The synthesis, and the line it does not cross.** Given a model to write with
+or a bank to remember with, the closing draft stops being a table of counts and
+becomes a piece of reasoning over the whole record -- led by the head agent's
+briefing, and closing the slow loop's open questions where a crew standing in
+the building actually settled one. See :mod:`firstdue.agents.graphs.recorder`.
+This agent has fifteen seconds and runs after the incident closes, with nothing
+waiting on it, which is what makes that affordable here and nowhere else in the
+incident loop.
+
+With neither collaborator wired -- the default, and what ``make demo`` and the
+whole test suite run -- none of it happens and the draft is the one this agent
+has always produced.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from firstdue.agents.graphs.base import (
+    DEFAULT_MAX_STEPS,
+    GraphCassette,
+    ReasoningPlanner,
+    graph_budget,
+    run_graph,
+)
+from firstdue.agents.graphs.recorder import (
+    NERIS_DRAFT_MAX_CHARS,
+    NerisGraphState,
+    NerisSynthesis,
+)
 from firstdue.domain.briefs import BriefEmission
-from firstdue.domain.enums import BenchmarkType, LogEntryType, Operation, WriteActionStatus
+from firstdue.domain.enums import BenchmarkType, LogEntryType, Operation, Scope, WriteActionStatus
 from firstdue.domain.incidents import Benchmark, Incident
 from firstdue.domain.logentries import AppendOnlyLog, IncidentLogEntry
 from firstdue.domain.policy import PolicyDecision
 from firstdue.domain.work import WriteAction
 from firstdue.errors import SourceUnavailableError
+from firstdue.extraction.recorded import request_digest
 from firstdue.observability.logging import get_logger
 from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
 from firstdue.ports.clock import Clock, IdGenerator
+from firstdue.ports.model import ModelClient
 from firstdue.ports.repositories import IncidentLogRepository, WriteActionRepository
 from firstdue.ports.writes import ExternalWriteTarget
+from firstdue.registry.descriptors import descriptor_for
+from firstdue.services.memory_bank import MemoryBank
 
 logger = get_logger(__name__)
 
@@ -50,6 +79,12 @@ RMS_TARGET: Final[str] = "department-rms"
 #: produces is a *draft*: the fields the system observed, for a human to
 #: complete and file. Nothing here files a report.
 NERIS_DRAFT_VERSION: Final[str] = "neris-draft/1"
+
+#: Printed on the artifact, and required to survive any polish. A report that
+#: lost this sentence would read as a filing, which is the one thing it is not.
+NERIS_DISCLAIMER: Final[str] = (
+    "Draft assembled from the incident log. Not a filed report; a human completes and files it."
+)
 
 
 class FlushResult(BaseModel):
@@ -96,10 +131,30 @@ class NerisDraft(BaseModel):
     log_entries: int = Field(default=0, ge=0)
     log_sealed_at: datetime | None = None
     #: Stated on the artifact: a draft for a human to complete, not a filing.
-    disclaimer: str = (
-        "Draft assembled from the incident log. Not a filed report; a human "
-        "completes and files it."
-    )
+    disclaimer: str = NERIS_DISCLAIMER
+
+    # ---- the synthesis graph. Empty or zero on a draft that did not run one,
+    # and a draft that did not run one is the default; see
+    # ``IncidentRecorder.reasons``.
+    #: The report prose. Empty when no synthesis ran, which is what keeps the
+    #: draft byte-identical to the one this agent has always produced.
+    narrative: str = Field(default="", max_length=NERIS_DRAFT_MAX_CHARS)
+    #: ``deterministic`` or ``model``. Which one shipped is the interesting
+    #: fact for a reviewer comparing two reports, not the prose itself.
+    narrative_source: str = Field(default="", max_length=20)
+    #: Why a composed draft was refused, when one was. A stable code.
+    narrative_rejection: str = Field(default="", max_length=60)
+    #: Refs the head agent judged material, highest priority first. Ids and
+    #: canonical keys -- what the report leads with, never what it asserts.
+    leading_refs: tuple[str, ...] = ()
+    #: Threads the slow loop opened that this incident closed, and threads it
+    #: examined and deliberately left open. Both are outcomes worth reporting:
+    #: an unresolved question is a correct state, and a silent one is not.
+    questions_resolved: tuple[str, ...] = ()
+    questions_left_open: tuple[str, ...] = ()
+    #: Why the synthesis stopped, and how many nodes it took to get there.
+    graph_stop: str = Field(default="", max_length=40)
+    graph_steps: int = Field(default=0, ge=0)
 
 
 class IncidentRecorder:
@@ -114,6 +169,13 @@ class IncidentRecorder:
         clock: Clock,
         ids: IdGenerator,
         rms: ExternalWriteTarget | None = None,
+        memory: MemoryBank | None = None,
+        memory_scopes: Collection[Scope] | None = None,
+        model: ModelClient | None = None,
+        planner: ReasoningPlanner | None = None,
+        traces: GraphCassette | None = None,
+        use_langgraph: bool = True,
+        max_graph_steps: int = DEFAULT_MAX_STEPS,
         agent_version: str = "1.0.0",
     ) -> None:
         self._log = incident_log
@@ -122,7 +184,35 @@ class IncidentRecorder:
         self._clock = clock
         self._ids = ids
         self._rms = rms
+        # Optional, exactly like ``rms`` above and like the collaborators on the
+        # slow-loop watchers. With neither a bank nor a model wired this agent
+        # produces the draft it has always produced, byte for byte. The
+        # synthesis is something a deployment opts into by giving the recorder
+        # somewhere to remember and something to write with.
+        self._memory = memory
+        # The bank gates recall on a memory's statutory class, and the class of
+        # memory this agent may read is a property of the *catalog* rather than
+        # of this file: reading the descriptor means a recorder cannot close a
+        # thread it would not have been allowed to be shown. Overridable so a
+        # deployment can hand it the incident grant's scopes instead.
+        self._memory_scopes = frozenset(
+            memory_scopes if memory_scopes is not None else descriptor_for(AGENT_ID).required_scopes
+        )
+        self._model = model
+        self._planner = planner
+        self._traces = traces
+        self._use_langgraph = use_langgraph
+        self._max_graph_steps = max_graph_steps
         self._agent_version = agent_version
+
+    @property
+    def reasons(self) -> bool:
+        """Whether this instance runs the synthesis graph at all.
+
+        One predicate, read here and by nothing else, so "does this deployment
+        reason" has a single answer rather than two conditions that can drift.
+        """
+        return self._memory is not None or self._model is not None
 
     # ------------------------------------------------- persist before transmit
 
@@ -440,8 +530,29 @@ class IncidentRecorder:
         )
         return sealed
 
-    async def neris_draft(self, incident: Incident) -> NerisDraft:
-        """Assemble the draft report from what was recorded.
+    async def neris_draft(
+        self, incident: Incident, *, deadline: datetime | None = None
+    ) -> NerisDraft:
+        """Assemble the draft report from what was recorded, and close what it settled.
+
+        The counted draft is the floor and is produced first, unconditionally.
+        A deployment that wired a bank or a model then runs the synthesis graph
+        over the same record: it leads the report with what the head agent
+        judged material, and it closes the slow-loop questions this incident
+        actually answered.
+
+        ``deadline`` is the caller's, and the tighter of it and the descriptor's
+        own fifteen seconds bounds the graph. It is optional because nothing
+        waits on this call; what passing it buys is a synthesis that stops
+        cleanly with a plain report rather than one killed mid-sentence.
+        """
+        draft = await self._counted_draft(incident)
+        if not self.reasons:
+            return draft
+        return await self._synthesise(incident, draft, deadline=deadline)
+
+    async def _counted_draft(self, incident: Incident) -> NerisDraft:
+        """The draft this agent has always produced. The floor and the fallback.
 
         Counts rather than contents: the draft says how many brief versions,
         resolutions, notifications, and decisions there were, and the log itself
@@ -473,6 +584,72 @@ class IncidentRecorder:
             agent_handoffs=by_type.get(LogEntryType.AGENT_HANDOFF, 0),
             log_entries=len(log.entries),
             log_sealed_at=log.sealed_at,
+        )
+
+    # ----------------------------------------------------------- the synthesis
+
+    async def _synthesise(
+        self, incident: Incident, draft: NerisDraft, *, deadline: datetime | None
+    ) -> NerisDraft:
+        """Run the synthesis over the same record, and fold what it produced in.
+
+        The counted draft goes in and a copy of it comes out. That is the shape
+        deliberately: the graph writes the report's *prose* and closes questions
+        in the bank, and it never touches a count. A synthesis that could alter
+        ``observed_facts`` would be a model amending the log's own arithmetic.
+        """
+        budget = graph_budget(
+            AGENT_ID,
+            deadline=deadline,
+            started=self._clock.now(),
+            max_steps=self._max_graph_steps,
+        )
+        synthesis = NerisSynthesis(
+            incident=incident,
+            log=self._log,
+            budget=budget,
+            disclaimer=NERIS_DISCLAIMER,
+            memory=self._memory,
+            memory_scopes=self._memory_scopes,
+            model=self._model,
+            planner=self._planner,
+            agent_version=self._agent_version,
+        )
+        digest = request_digest("neris-synthesis", incident.incident_id, str(draft.log_entries))
+        run = await run_graph(
+            synthesis.spec(),
+            NerisGraphState(
+                district_id=incident.district_id,
+                incident_id=incident.incident_id,
+                address_id=incident.address_id,
+            ),
+            agent_id=AGENT_ID,
+            agent_version=self._agent_version,
+            budget=budget,
+            request_digest=digest,
+            use_langgraph=self._use_langgraph,
+            recorded=self._traces.load(digest) if self._traces is not None else None,
+        )
+        if self._traces is not None:
+            self._traces.store(run.trace)
+
+        state = run.state
+        left_open = tuple(
+            question_id
+            for question_id in state.examined_questions
+            if question_id not in state.resolved_questions
+        )
+        return draft.model_copy(
+            update={
+                "narrative": state.narrative,
+                "narrative_source": state.narrative_source,
+                "narrative_rejection": state.draft_rejection,
+                "leading_refs": tuple(lead.ref for lead in state.leads),
+                "questions_resolved": state.resolved_questions,
+                "questions_left_open": left_open,
+                "graph_stop": str(run.trace.stop),
+                "graph_steps": len(run.trace.records),
+            }
         )
 
 

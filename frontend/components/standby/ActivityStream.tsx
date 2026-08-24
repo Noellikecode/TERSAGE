@@ -17,6 +17,7 @@ export type StreamItem =
 const NOTABLE: Record<string, { tone: 'alarm' | 'disputed' | 'confirmed' | 'muted'; label: string }> =
   {
     injection_blocked: { tone: 'alarm', label: 'injection blocked' },
+    screen_unavailable: { tone: 'disputed', label: 'screen unavailable' },
     model_output_rejected: { tone: 'disputed', label: 'model output rejected' },
     write_executed: { tone: 'confirmed', label: 'external write' },
     write_replayed: { tone: 'muted', label: 'write replayed' },

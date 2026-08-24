@@ -2,34 +2,54 @@
  * The console's gateway to the backend.
  *
  * Every browser request goes through here rather than straight to the API, for
- * one reason: **the console's credential never reaches the browser.** It is read
- * from the server environment, attached here, and the client only ever talks to
- * its own origin.
+ * one reason: **the console's credential never reaches the browser.** It is
+ * obtained on the server, attached here, and the client only ever talks to its
+ * own origin.
  *
  * That also means one place handles SSE. The incident stream is proxied as a
  * stream -- the body is piped through untouched, so `Last-Event-ID` resume and
  * frame ordering work exactly as the backend sends them.
+ *
+ * Because this route attaches a privileged credential and the console service
+ * is publicly reachable, it forwards an **allowlist** and nothing else. See
+ * `lib/api/gateway-allowlist.ts` for the list and the reasoning; anything off it
+ * is answered with a 404, which is also the answer for a traversal attempt and
+ * for a real endpoint the console has no business calling. The three cases are
+ * indistinguishable from outside on purpose.
  */
 
 import { NextRequest } from 'next/server';
 
+import { backendCredential, type BackendCredential } from '@/lib/api/backend-auth';
+import { gatewayTargetPath, type GatewayMethod } from '@/lib/api/gateway-allowlist';
+
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-const BACKEND = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://localhost:8000';
-
-/** Read at request time, never at build time, and never sent to the client. */
-function consoleToken(): string | undefined {
-  return process.env.FIRSTDUE_CONSOLE_TOKEN;
+/**
+ * Where the backend is, read at request time.
+ *
+ * `FIRSTDUE_API_BASE_URL` first: it is a plain server variable, so Cloud Run's
+ * value is read from the environment at runtime. `NEXT_PUBLIC_API_BASE_URL` is
+ * inlined by webpack at *build* time and is not set during the Docker build, so
+ * it is only good as a local-development fallback.
+ */
+function backendBaseUrl(): string {
+  return (
+    process.env.FIRSTDUE_API_BASE_URL ??
+    process.env.NEXT_PUBLIC_API_BASE_URL ??
+    'http://localhost:8000'
+  );
 }
 
-function backendHeaders(request: NextRequest): Headers {
+function backendHeaders(request: NextRequest, credential: BackendCredential): Headers {
+  // Built from scratch, not copied: a client-supplied Authorization header must
+  // never survive into the upstream request.
   const headers = new Headers();
   headers.set('Accept', request.headers.get('accept') ?? 'application/json');
 
-  const token = consoleToken();
-  if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+  if (credential.kind === 'bearer') {
+    headers.set('Authorization', credential.header);
   }
   // SSE resume: the browser sends this automatically on reconnect, and the
   // backend needs it to know where to pick up.
@@ -42,11 +62,6 @@ function backendHeaders(request: NextRequest): Headers {
     headers.set('X-Correlation-ID', correlationId);
   }
   return headers;
-}
-
-function targetUrl(request: NextRequest, path: string[]): string {
-  const search = request.nextUrl.search;
-  return `${BACKEND}/${path.join('/')}${search}`;
 }
 
 /** An unreachable backend is a state to render, not an exception to throw. */
@@ -65,11 +80,61 @@ function unreachable(message: string): Response {
   );
 }
 
+/**
+ * The single answer to everything off the allowlist.
+ *
+ * 404 rather than 403: a 403 tells the caller the endpoint exists.
+ */
+function notFound(): Response {
+  return Response.json(
+    {
+      error: {
+        code: 'NOT_FOUND',
+        message: 'no such route',
+        details: {},
+        request_id: null,
+        correlation_id: null,
+      },
+    },
+    { status: 404 },
+  );
+}
+
+interface Resolved {
+  url: string;
+  headers: Headers;
+}
+
+/**
+ * Validate, authorize and authenticate -- or hand back the response to send.
+ */
+async function resolve(
+  request: NextRequest,
+  segments: string[] | undefined,
+  method: GatewayMethod,
+): Promise<Resolved | Response> {
+  const path = gatewayTargetPath(segments ?? [], method);
+  if (!path) return notFound();
+
+  const credential = await backendCredential();
+  if (credential.kind === 'unavailable') {
+    // Never fall through to an unauthenticated upstream call.
+    return unreachable(credential.message);
+  }
+
+  return {
+    url: `${backendBaseUrl()}${path}${request.nextUrl.search}`,
+    headers: backendHeaders(request, credential),
+  };
+}
+
 export async function GET(request: NextRequest, context: { params: { path: string[] } }) {
-  const headers = backendHeaders(request);
+  const resolved = await resolve(request, context.params.path, 'GET');
+  if (resolved instanceof Response) return resolved;
+
   try {
-    const upstream = await fetch(targetUrl(request, context.params.path), {
-      headers,
+    const upstream = await fetch(resolved.url, {
+      headers: resolved.headers,
       cache: 'no-store',
     });
 
@@ -97,14 +162,16 @@ export async function GET(request: NextRequest, context: { params: { path: strin
 }
 
 export async function POST(request: NextRequest, context: { params: { path: string[] } }) {
-  const headers = backendHeaders(request);
-  headers.set('Content-Type', 'application/json');
+  const resolved = await resolve(request, context.params.path, 'POST');
+  if (resolved instanceof Response) return resolved;
+
+  resolved.headers.set('Content-Type', 'application/json');
   const body = await request.text();
 
   try {
-    const upstream = await fetch(targetUrl(request, context.params.path), {
+    const upstream = await fetch(resolved.url, {
       method: 'POST',
-      headers,
+      headers: resolved.headers,
       body: body || '{}',
       cache: 'no-store',
     });

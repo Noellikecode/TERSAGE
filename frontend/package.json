@@ -1,8 +1,8 @@
 {
-  "name": "firstdue-console",
+  "name": "tersage-console",
   "version": "0.1.0",
   "private": true,
-  "description": "FIRST DUE command center",
+  "description": "TERSAGE command center",
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",

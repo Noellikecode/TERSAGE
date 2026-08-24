@@ -98,6 +98,21 @@
       },
       "observed_at": "2022-10-02T08:00:00+00:00",
       "record_ref": "assessor/1440-025"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "construction_type": "steel-frame",
+        "footprint_area_m2": 3200,
+        "parcel": "3717-143",
+        "use_code": "commercial-office",
+        "year_built": 2018,
+        "stories": 61
+      },
+      "observed_at": "2024-08-21T08:00:00+00:00",
+      "record_ref": "assessor/3717-143"
     }
   ],
   "synthetic": true

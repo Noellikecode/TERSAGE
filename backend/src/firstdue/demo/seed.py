@@ -15,7 +15,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from firstdue.adapters.clock import DeterministicIdGenerator
 from firstdue.domain.conflict_engine import detect
@@ -356,6 +356,18 @@ def _build_profile(
     return profile
 
 
+#: Addresses whose profile is built by the slow loop rather than seeded.
+#:
+#: ``_build_profile`` writes one template -- a two-storey wood-frame dwelling --
+#: and that template is wrong for a 61-storey steel-frame tower in a way that
+#: does not stay quiet: the seeded baseline disagreed with the records the slow
+#: loop then read, and the profile carried two invented conflicts about
+#: construction type and storey count. A synthetic baseline that argues with
+#: real filings is worse than no baseline, so this address has none and every
+#: fact on it comes from a source record.
+RECORDS_ONLY: Final[frozenset[str]] = frozenset({"sf-0415-mission"})
+
+
 def build_seed(
     *,
     addresses: list[NormalizedAddress],
@@ -367,6 +379,7 @@ def build_seed(
     profiles = [
         _build_profile(ids=ids, address=address, epoch=epoch)
         for address in sorted(addresses, key=lambda a: a.address_id)
+        if address.address_id not in RECORDS_ONLY
     ]
     document: dict[str, Any] = {
         "seed_version": SEED_VERSION,

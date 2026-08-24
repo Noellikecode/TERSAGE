@@ -104,6 +104,32 @@
       },
       "observed_at": "2025-06-16T08:00:00+00:00",
       "record_ref": "permit/sf-0450-hayes/2024-11902"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "classification": "PUBLIC",
+      "document_text": "SYNTHETIC EXERCISE RECORD. Permit 2019-11204 for 415 Mission St, San Francisco, CA 94105. Tenant improvement, floors 38 through 41 of a 61-storey steel-frame office tower. Scope: interior partitions, sprinkler head relocation within the existing suppression system, return air modifications. No change to building height or to the count of occupied storeys.",
+      "fields": {
+        "permit_number": "2019-11204",
+        "permit_type": "tenant-improvement",
+        "status": "COMPLETE",
+        "stories_filed": 61
+      },
+      "observed_at": "2019-06-14T08:00:00+00:00",
+      "record_ref": "permit/sf-0415-mission/2019-11204"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "classification": "PUBLIC",
+      "document_text": "SYNTHETIC EXERCISE RECORD. Permit 2023-04417 for 415 Mission St, San Francisco, CA 94105. Mechanical work at level 62, the rooftop plant level above the highest occupied floor. Scope: replacement of two air handling units and associated ductwork. The mechanical level is counted as a storey on this filing and is not counted on the assessor's roll of occupied storeys.",
+      "fields": {
+        "permit_number": "2023-04417",
+        "permit_type": "mechanical",
+        "status": "COMPLETE",
+        "stories_filed": 62
+      },
+      "observed_at": "2023-09-02T08:00:00+00:00",
+      "record_ref": "permit/sf-0415-mission/2023-04417"
     }
   ],
   "synthetic": true

@@ -13,13 +13,49 @@ body {
 
 body {
   @apply bg-ground text-ink antialiased;
+  /* Tabular numerals, everywhere. The district bar is read as an instrument:
+     a count that changes width as it ticks reads as movement that is not
+     there. */
   font-feature-settings: 'tnum' 1;
+  /* The console owns the viewport: the shell is one screen tall, the district
+     bar is pinned under the header, and every pane below it scrolls inside
+     itself. A dispatch can never push the fleet off the bottom of the page,
+     because the page does not scroll. Contained overscroll keeps a flicked
+     pane from rubber-banding the whole surface on a tablet. */
+  overscroll-behavior: contain;
 }
 
-/* Visible focus everywhere. A monitoring surface gets driven by keyboard. */
-:where(a, button, [tabindex]):focus-visible {
+/* Panes scroll now, so their scrollbars are part of the interface. Thin, and
+   no brighter than the panel they sit in. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme('colors.line') transparent;
+}
+
+/* Visible focus everywhere. A monitoring surface gets driven by keyboard, and
+   a control whose own classes forget to say so -- a radio in the dispatch
+   panel, a native select -- still gets the ring from here. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid theme('colors.live');
   outline-offset: 2px;
+}
+
+/* The one animation on the surface: a dot that says something is out right
+   now. It carries no information on its own -- the count beside it does -- so
+   it is safe for it to stop under reduced motion, which the block below makes
+   it do. */
+@keyframes tersage-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.pulse-live {
+  animation: tersage-pulse 2s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

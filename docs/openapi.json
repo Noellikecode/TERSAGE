@@ -291,6 +291,7 @@
           "grant_revoked",
           "emergency_exception",
           "injection_blocked",
+          "screen_unavailable",
           "model_output_rejected",
           "write_executed",
           "write_replayed",
@@ -389,6 +390,101 @@
           "boolean"
         ],
         "title": "BooleanValue",
+        "type": "object"
+      },
+      "BoundingBox": {
+        "additionalProperties": false,
+        "description": "A west/south/east/north box, in degrees.\n\nCarried on the answer rather than assumed by the console, because the box\n*is* the claim: \"266 detections\" means nothing without the area it counts\nover, and an operator who widens the region through configuration must not\nsilently change what a displayed number refers to.",
+        "properties": {
+          "east": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "East",
+            "type": "number"
+          },
+          "north": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "North",
+            "type": "number"
+          },
+          "south": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "South",
+            "type": "number"
+          },
+          "west": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "West",
+            "type": "number"
+          }
+        },
+        "required": [
+          "west",
+          "south",
+          "east",
+          "north"
+        ],
+        "title": "BoundingBox",
+        "type": "object"
+      },
+      "BuildingImagery": {
+        "additionalProperties": false,
+        "description": "A photograph of one building as the console renders it, or a refusal.\n\n``data_url`` carries the bytes inline. That is deliberate and it is the\nsecurity boundary: the server fetches from the provider with the key and\nhands the browser pixels, so ``GOOGLE_MAPS_API_KEY`` never reaches a client,\na devtools network tab, a referrer header, or a screenshot of one.\n\nThe console **must render ``attribution``** beside the image whenever it is\nnon-empty. Google's Maps Platform Terms require visible attribution on\nStreet View and Static Maps imagery; a console that drops it puts the\ndepartment out of compliance with the licence the picture arrived under.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "attribution": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "captured_hint": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Captured Hint",
+            "type": "string"
+          },
+          "content_type": {
+            "default": "",
+            "maxLength": 80,
+            "title": "Content Type",
+            "type": "string"
+          },
+          "data_url": {
+            "default": "",
+            "title": "Data Url",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Provider",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Unavailable Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address_id",
+          "available"
+        ],
+        "title": "BuildingImagery",
         "type": "object"
       },
       "BuildingProfileView": {
@@ -1060,6 +1156,285 @@
         ],
         "title": "FailureClass",
         "type": "string"
+      },
+      "FireActivity": {
+        "additionalProperties": false,
+        "description": "Regional fire activity for one district, or a stated refusal.\n\n``regional_count`` and ``in_city_count`` are reported separately and are\nboth meaningful. The first is the mutual-aid and air-quality picture; the\nsecond is very nearly always zero, and :data:`VIIRS_RESOLUTION_NOTE` is\nattached so that a console can say why without inventing the explanation.",
+        "properties": {
+          "attribution": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundingBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "detections": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FireDetection"
+            },
+            "title": "Detections",
+            "type": "array"
+          },
+          "district_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "District Id",
+            "type": "string"
+          },
+          "in_city_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "In City Count",
+            "type": "integer"
+          },
+          "provider": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Provider",
+            "type": "string"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundingBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "regional_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Regional Count",
+            "type": "integer"
+          },
+          "resolution_note": {
+            "default": "",
+            "maxLength": 600,
+            "title": "Resolution Note",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Summary",
+            "type": "string"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Unavailable Reason",
+            "type": "string"
+          },
+          "weather": {
+            "$ref": "#/components/schemas/FireWeather"
+          },
+          "window_days": {
+            "default": 0,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Window Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "district_id",
+          "available",
+          "weather"
+        ],
+        "title": "FireActivity",
+        "type": "object"
+      },
+      "FireDetection": {
+        "additionalProperties": false,
+        "description": "One satellite thermal anomaly.\n\nNot \"a fire\". VIIRS reports a pixel that was hotter than its neighbours at\nthe moment of a satellite pass, which is usually a wildfire and is sometimes\na flare, a kiln, or a hot roof. The console renders these as detections\nbecause calling them fires would assert something the instrument did not\nobserve.",
+        "properties": {
+          "acquired_at": {
+            "format": "date-time",
+            "title": "Acquired At",
+            "type": "string"
+          },
+          "confidence": {
+            "enum": [
+              "low",
+              "nominal",
+              "high",
+              "unknown"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "frp_mw": {
+            "minimum": 0.0,
+            "title": "Frp Mw",
+            "type": "number"
+          },
+          "in_city": {
+            "default": false,
+            "title": "In City",
+            "type": "boolean"
+          },
+          "latitude": {
+            "maximum": 90.0,
+            "minimum": -90.0,
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "maximum": 180.0,
+            "minimum": -180.0,
+            "title": "Longitude",
+            "type": "number"
+          },
+          "satellite": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Satellite",
+            "type": "string"
+          }
+        },
+        "required": [
+          "latitude",
+          "longitude",
+          "confidence",
+          "frp_mw",
+          "acquired_at",
+          "satellite"
+        ],
+        "title": "FireDetection",
+        "type": "object"
+      },
+      "FireWeather": {
+        "additionalProperties": false,
+        "description": "Recent temperature, humidity and wind -- with the window they cover.\n\nNever \"current conditions\". :data:`POWER_IS_NOT_NOW` travels with every\navailable block and the console renders it; the window bounds say exactly\nhow far behind the values are.",
+        "properties": {
+          "attribution": {
+            "default": "",
+            "maxLength": 200,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "caveat": {
+            "default": "",
+            "maxLength": 600,
+            "title": "Caveat",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Provider",
+            "type": "string"
+          },
+          "readings": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/FireWeatherReading"
+            },
+            "title": "Readings",
+            "type": "array"
+          },
+          "unavailable_reason": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Unavailable Reason",
+            "type": "string"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "FireWeather",
+        "type": "object"
+      },
+      "FireWeatherReading": {
+        "additionalProperties": false,
+        "description": "One fire-weather parameter at one observed hour.",
+        "properties": {
+          "label": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "observed_at": {
+            "format": "date-time",
+            "title": "Observed At",
+            "type": "string"
+          },
+          "parameter": {
+            "maxLength": 20,
+            "minLength": 1,
+            "title": "Parameter",
+            "type": "string"
+          },
+          "unit": {
+            "default": "",
+            "maxLength": 20,
+            "title": "Unit",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "parameter",
+          "label",
+          "value",
+          "observed_at"
+        ],
+        "title": "FireWeatherReading",
+        "type": "object"
       },
       "FrameAnalysisRequest": {
         "additionalProperties": false,
@@ -3367,7 +3742,7 @@
   },
   "info": {
     "description": "Municipal structural intelligence as an institutional agent fleet.\n\nA decision-support prototype. It delivers information and performs clerical\nexecution. It never issues tactical recommendations, evacuation orders, crew\nassignments, or fire-behaviour predictions.",
-    "title": "FIRST DUE",
+    "title": "TERSAGE",
     "version": "0.1.0"
   },
   "openapi": "3.1.0",
@@ -3452,6 +3827,49 @@
           }
         },
         "summary": "Renderable geometry, with an SVG fallback",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/buildings/{address_id}/imagery": {
+      "get": {
+        "description": "What the building actually looks like, beside what it was measured to be.\n\nThe massing model on ``/geometry`` is derived from permits, lidar, and the\nassessor's roll. This is the photograph: the door, the windows, the bars, a\nstorey count an officer can check with their own eyes against the model\nstanding next to it. Same scope as the geometry it renders beside, because\nit is the other half of the same pane.\n\n**Always 200.** No coverage, no key, a dead provider, or a blown deadline\nall come back with ``available=false`` and a sentence in\n``unavailable_reason``. A 404 would render as a broken console, and a\nconsole that draws nothing would teach an officer that the building has no\nphotograph -- which is a claim, and a false one.\n\n**The console must render ``attribution``** under the frame whenever it is\nnon-empty. Google's Maps Platform Terms require visible attribution on\nStreet View and Static Maps imagery, and the department is the licensee.\n\nThe response carries the image inline as a data URL and never a provider\nURL: a signed Street View URL is ``GOOGLE_MAPS_API_KEY`` in a browser's\nnetwork tab.",
+        "operationId": "building_imagery_api_v1_buildings__address_id__imagery_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "address_id",
+            "required": true,
+            "schema": {
+              "title": "Address Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildingImagery"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "A photograph of the building, or a stated refusal",
         "tags": [
           "console"
         ]
@@ -3721,6 +4139,49 @@
           }
         },
         "summary": "Stage a building-department referral for a conflict",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/districts/{district_id}/fire-activity": {
+      "get": {
+        "description": "What is burning *around* the district, and how dry it has been.\n\n**Regional on purpose.** Measured against the live NASA FIRMS feed over its\nmaximum five-day window, San Francisco proper returns zero VIIRS detections\nand Northern California returns hundreds: the pixels are ~375 m and the\ninstrument exists to find wildfire, so a structure fire never registers. A\ncity-only map would be blank essentially always, which reads as an outage on\na bad day and as reassurance on a good one. So the region is the subject --\nregional activity is what drives mutual-aid demand, crew availability, smoke\nover the district, and red-flag posture -- and the city's own count is\nreported separately beside it.\n\n``resolution_note`` therefore ships with every answer and the console must\nrender it: it is what makes ``in_city_count: 0`` read as the ordinary fact\nit is rather than as a dead feed or as an all-clear.\n\n**The fire-weather block is not current conditions.** NASA POWER is\nreanalysis and lags real time by days; every reading carries the hour it\ndescribes, the block carries the window those hours span, and ``caveat``\nsays so in words. Current wind reaches the console from the National Weather\nService source in the catalog, and the two must not be presented alike.\n\nSame scope as ``/stats`` and ``/queue``: this is district situational\nawareness, and it decides nothing.\n\n**Always 200.** No map key, an unknown district, a dead provider, a spent\nrate budget, or a blown deadline all come back with ``available=false`` and\na sentence in ``unavailable_reason``. A 404 would render as a broken\nconsole, and a console that drew an empty map would be asserting that\nnothing is burning.\n\nThe response carries detections and never a provider URL: FIRMS puts its map\nkey in the request *path*, so a URL reaching the browser is the key reaching\nthe browser.",
+        "operationId": "district_fire_activity_api_v1_districts__district_id__fire_activity_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "district_id",
+            "required": true,
+            "schema": {
+              "title": "District Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FireActivity"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Regional fire activity and recent fire weather",
         "tags": [
           "console"
         ]

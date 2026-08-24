@@ -40,7 +40,10 @@ def container(tmp_path: Path) -> Container:
 async def test_the_demo_produces_the_disagreement_it_promises(container: Container) -> None:
     report = await run_slow_loop(container)
 
-    assert len(report.conflicts) == 1
+    # Two districts' worth of disagreement: the Hayes storey conflict the demo
+    # is built around, and the tower's floor-count ambiguity. The assertion that
+    # matters is which one a person is sent to first -- severity outranks count.
+    assert len(report.conflicts) == 2
     assert report.top_address_id == DISPUTED_ADDRESS_ID
 
     profile = await container.profiles.get(DISPUTED_ADDRESS_ID)
@@ -230,9 +233,14 @@ async def test_every_fact_carries_its_provenance(container: Container) -> None:
 async def test_conflicts_persist_across_a_fresh_read(container: Container) -> None:
     await run_slow_loop(container)
     stored = await container.conflicts.list_open()
-    assert len(stored) == 1
-    assert stored[0].status is ConflictStatus.OPEN
-    assert stored[0].address_id == DISPUTED_ADDRESS_ID
+    # Both districts' conflicts survive the re-read: the Hayes storey
+    # disagreement and the tower's floor-count ambiguity.
+    assert len(stored) == 2
+    # By membership rather than by position: the repository does not promise an
+    # order, and a test that depended on one would fail the day a third
+    # disagreement was added rather than the day something broke.
+    assert all(conflict.status is ConflictStatus.OPEN for conflict in stored)
+    assert DISPUTED_ADDRESS_ID in {conflict.address_id for conflict in stored}
 
 
 async def test_every_slow_loop_agent_ran_through_the_runtime(container: Container) -> None:

@@ -405,7 +405,13 @@ INCIDENT_RECORDER = _agent(
     # the runtime produced a DENIED run. The mirror image of the
     # agency-notifier finding: that one under-declared and worked by accident,
     # this one over-declared and failed once anything checked.
-    scopes={Scope.READ_PROFILE, Scope.WRITE_RMS},
+    # ``read:public-records`` is what lets this agent close the slow loop's
+    # open questions. A question carries the classification of the records
+    # that raised it, and the memory bank refuses a recall the caller holds
+    # no scope for -- so without this the recorder reads every thread as
+    # absent and silently resolves nothing. Fail-closed, and the failure is
+    # invisible: the loop looks built and never completes.
+    scopes={Scope.READ_PROFILE, Scope.WRITE_RMS, Scope.READ_PUBLIC_RECORDS},
     classifications={Classification.PUBLIC, Classification.RESTRICTED},
     write_targets=("department-rms",),
     latency_ms=15_000,
@@ -414,8 +420,9 @@ INCIDENT_RECORDER = _agent(
 )
 
 
-#: The fleet, in publication order. Eleven agents, five write targets, two
-#: loops, three publishing departments.
+#: The fleet, in publication order. Thirteen descriptors -- nine scheduled and
+#: four superseded -- across five write targets, two loops, and three
+#: publishing departments.
 #: Everything this build publishes, live and superseded alike. The catalog is
 #: the record; :data:`ACTIVE_FLEET` is what actually runs.
 FLEET: Final[tuple[AgentDescriptor, ...]] = (

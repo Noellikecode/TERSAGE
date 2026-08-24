@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 
-import { getReadiness } from '@/lib/api/client';
+import { browserGet } from '@/lib/api/client';
 import type { Readiness } from '@/lib/api/types';
 
 import { StatusPill } from './StatusPill';
@@ -31,7 +31,11 @@ export function BackendStatus({ initial }: { initial?: Readiness }) {
     const controller = new AbortController();
 
     async function poll() {
-      const result = await getReadiness({ signal: controller.signal });
+      // Through the console's own gateway, not straight at the backend: this
+      // runs in the browser, and `NEXT_PUBLIC_API_BASE_URL` is inlined at build
+      // time -- unset in the Docker build, so a direct call would be a
+      // cross-origin request to localhost that can only ever fail.
+      const result = await browserGet<Readiness>('/readyz', { signal: controller.signal });
       if (cancelled) return;
       if (result.ok) {
         setConnection(

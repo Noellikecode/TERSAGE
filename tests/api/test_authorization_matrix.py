@@ -40,10 +40,17 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("GET", f"{PREFIX}/system/status", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/stats", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/queue", Role.VIEWER),
+    # Regional fire activity is district situational awareness and decides
+    # nothing, so it carries the same scope as the stats and queue it sits
+    # beside on the same screen.
+    Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/fire-activity", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/timeline", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/narratives?q=stairwell", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/geometry", Role.VIEWER),
+    # Imagery renders beside the massing model and carries the same scope: it
+    # is the other half of the same pane.
+    Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/imagery", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/surveys", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/registry/agents", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/registry/agents/records-watcher/1.0.0", Role.VIEWER),

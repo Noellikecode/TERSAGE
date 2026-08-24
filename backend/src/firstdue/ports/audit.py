@@ -25,6 +25,11 @@ class AuditEventKind(StrEnum):
     GRANT_REVOKED = "grant_revoked"
     EMERGENCY_EXCEPTION = "emergency_exception"
     INJECTION_BLOCKED = "injection_blocked"
+    #: The document screen could not run, so the document was withheld
+    #: from the model. Distinct from a document that screened to nothing:
+    #: this records that nobody read it, which an investigator
+    #: reconstructing a pass must be able to tell from "nothing found".
+    SCREEN_UNAVAILABLE = "screen_unavailable"
     MODEL_OUTPUT_REJECTED = "model_output_rejected"
     WRITE_EXECUTED = "write_executed"
     WRITE_REPLAYED = "write_replayed"

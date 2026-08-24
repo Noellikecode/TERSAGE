@@ -1,8 +1,11 @@
 {
   "municipality_id": "san-francisco-ca",
   "jurisdiction_id": "sf-city-county",
-  "note": "Street addresses and coordinates are real public reference data. All records attached to them elsewhere in fixtures/ are synthetic.",
-  "districts": ["sffd-district-03", "sffd-district-05"],
+  "note": "Street addresses and coordinates are real public reference data, including one named landmark (415 Mission St). All records attached to them elsewhere in fixtures/ are synthetic: no filing, inspection, violation or condition here describes the real property.",
+  "districts": [
+    "sffd-district-03",
+    "sffd-district-05"
+  ],
   "addresses": [
     {
       "address_id": "sf-0450-hayes",
@@ -40,8 +43,8 @@
       "address_id": "sf-0350-rhode-island",
       "display": "350 Rhode Island St, San Francisco, CA 94103",
       "district_id": "sffd-district-05",
-      "latitude": 37.7660,
-      "longitude": -122.4030,
+      "latitude": 37.766,
+      "longitude": -122.403,
       "parcel_ref": "3958-002"
     },
     {
@@ -67,6 +70,14 @@
       "latitude": 37.7526,
       "longitude": -122.4155,
       "parcel_ref": "6520-009"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "display": "415 Mission St, San Francisco, CA 94105",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7897,
+      "longitude": -122.3972,
+      "parcel_ref": "3717-143"
     }
   ]
 }

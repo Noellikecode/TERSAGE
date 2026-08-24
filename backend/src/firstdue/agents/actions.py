@@ -11,16 +11,21 @@ into the department's own systems. An agent may do them.
 **Approval-gated.** A referral to the building department accuses a property
 owner of unpermitted construction. It commits *another agency's* time and has
 consequences for a citizen, so it is staged, prefilled, and waits for a captain
-to tap once. The case number that comes back is written onto the profile.
+to tap once. The case number that comes back is written onto the profile, and
+the referral only leaves the building -- as an email to the receiving agency --
+on the far side of that tap. There is no path from a detected conflict to a
+building department's inbox that does not pass through a human.
 
 Every write carries a derived idempotency key and records its compensating
 action before it executes. Run the flow twice and the receiving systems dedupe;
-nothing is filed twice, no crew is invited twice, and no second case number
-exists.
+nothing is filed twice, no crew is invited twice, no second case number exists,
+and the building department is not told twice.
 """
 
 from __future__ import annotations
 
+import re
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any, Final
 
@@ -50,6 +55,7 @@ from firstdue.errors import NotFoundError, StaleVersionError, ValidationError
 from firstdue.observability.logging import get_logger
 from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
 from firstdue.ports.clock import Clock, IdGenerator
+from firstdue.ports.model import ModelClient, ProseResult
 from firstdue.ports.office import (
     CalendarClient,
     CalendarEvent,
@@ -76,10 +82,37 @@ REFERRAL_AGENT_ID: Final[str] = "referral-clerk"
 WORK_ORDER_TARGET: Final[str] = "inspection-work-orders"
 PLAN_TARGET: Final[str] = "preincident-plan-store"
 REFERRAL_TARGET: Final[str] = "building-referral-intake"
+#: The delivery of an approved referral, audited as its own external write.
+#: Separate from ``REFERRAL_TARGET`` because filing the referral and telling the
+#: receiving agency about it are two effects, and an investigator has to be able
+#: to see that the second one happened.
+REFERRAL_MAIL_TARGET: Final[str] = "building-referral-mail"
 
 #: How far ahead a survey is scheduled, and how long a company is held for it.
 SURVEY_LEAD = timedelta(days=3)
 SURVEY_DURATION = timedelta(hours=2)
+
+#: The sentence that keeps a referral a report of a disagreement rather than an
+#: accusation of a code violation. A draft that loses it is a different
+#: document, whatever else it says, so it is checked literally.
+REFERRAL_DISCLAIMER: Final[str] = "makes no determination of code compliance"
+
+REFERRAL_TEMPLATE_ID: Final[str] = "referral-narrative"
+#: Well inside ``ReferralRecord.narrative``'s own 8000-character bound. The cap
+#: is the caller's, not the model's -- a referral a captain will not read is a
+#: referral that gets approved without being read.
+REFERRAL_DRAFT_MAX_CHARS: Final[int] = 4000
+#: A referral is drafted in the slow loop, where nobody is waiting on a fire
+#: ground. Generous, and still a hard bound.
+REFERRAL_DRAFT_DEADLINE_MS: Final[int] = 8000
+
+#: Matches the shape of a fact id, so a draft that *invents* a citation is
+#: caught as well as one that drops a real one. Best effort by construction: it
+#: can only see ids that look like ids.
+_FACT_ID_TOKEN = re.compile(r"\bfact[_-][A-Za-z0-9_-]+")
+#: Any severity claim in the drafted text, so a model cannot restate a level-2
+#: disagreement as a level-5 one while keeping every other check happy.
+_SEVERITY_CLAIM = re.compile(r"severity\s+(\d+)", re.IGNORECASE)
 
 
 class DispatchResult(BaseModel):
@@ -127,6 +160,10 @@ class ApprovalResult(BaseModel):
     referral_id: str
     approval_id: str
     case_number: str
+    #: The mail transport's own id for the referral email, when one was sent.
+    #: ``None`` means no recipient is configured, which is the honest state of
+    #: a deployment that files referrals without emailing them -- not a failure.
+    notification_ref: str | None = None
     #: True when the referral was already filed; the same case number stands.
     replayed: bool = False
 
@@ -152,7 +189,30 @@ class ActionFlow:
         ids: IdGenerator,
         audit: AuditSink | None = None,
         agent_version: str = "1.0.0",
+        model: ModelClient | None = None,
+        referral_mailer: MailClient | None = None,
+        referral_recipients: tuple[str, ...] = (),
     ) -> None:
+        """Wire the flow.
+
+        Args:
+            model: optional. Polishes the referral draft and nothing else. With
+                ``None`` -- the default, and fake mode -- the deterministic
+                template is the referral, byte for byte.
+            referral_mailer: optional. Where the approved referral goes, when
+                that is not where the crew notification goes. The two are
+                different problems: notifying a firefighter means reaching an
+                inbox inside the department's own Workspace domain, and filing
+                a referral means reaching an address outside it. A deployment
+                with delegated Workspace credentials and an API-key transport
+                can therefore use each for what it is good at. Defaults to
+                ``mailer``, which is one client doing both.
+            referral_recipients: the building department's intake addresses.
+                Empty means an approved referral is filed and never emailed,
+                which is the correct behaviour for a deployment that has not
+                been given anywhere to send it. It is never a reason to send to
+                a guessed address.
+        """
         self._profiles = profiles
         self._conflicts = conflicts
         self._queue = queue
@@ -168,6 +228,9 @@ class ActionFlow:
         self._ids = ids
         self._audit = audit
         self._agent_version = agent_version
+        self._model = model
+        self._referral_mailer = referral_mailer or mailer
+        self._referral_recipients = referral_recipients
 
     # ------------------------------------------------------------- dispatch
 
@@ -178,8 +241,19 @@ class ActionFlow:
         company: str,
         crew_email: str,
         correlation_id: str,
+        prior_referrals: Sequence[ReferralRecord] = (),
     ) -> DispatchResult:
-        """Cut the work order, hold the calendar, notify the crew, write the plan."""
+        """Cut the work order, hold the calendar, notify the crew, write the plan.
+
+        Args:
+            prior_referrals: what this parcel or this department has already
+                been sent, so a redraft can address a rejection rather than
+                repeat it. Passed in rather than fetched: the referral history
+                belongs to whoever is calling, and an agent that reaches for a
+                repository to widen its own context is an agent whose blast
+                radius is no longer written down. Defaults to the referrals
+                already carried on the profile.
+        """
         profile = await self._profiles.get(entry.address_id)
         if profile is None:
             raise NotFoundError("profile not found", details={"address_id": entry.address_id})
@@ -211,7 +285,11 @@ class ActionFlow:
         )
 
         referral_id, approval_id = await self._stage_referral(
-            profile, entry=entry, now=now, correlation_id=correlation_id
+            profile,
+            entry=entry,
+            now=now,
+            correlation_id=correlation_id,
+            prior_referrals=prior_referrals or profile.open_referrals,
         )
 
         logger.info(
@@ -411,11 +489,17 @@ class ActionFlow:
         entry: SurveyQueueEntry,
         now: datetime,
         correlation_id: str,
+        prior_referrals: Sequence[ReferralRecord] = (),
     ) -> tuple[str | None, str | None]:
         """Stage a referral for the worst open conflict, if there is one.
 
         Staged, never filed. Filing accuses a property owner of unpermitted
         construction, and that is a captain's decision.
+
+        Nothing here sends anything. The draft is written, the approval is
+        staged, and the building department hears nothing until
+        :meth:`approve_referral` runs -- which is why the mail client is not
+        touched anywhere in this method.
         """
         open_conflicts = [c for c in profile.conflicts if c.status is ConflictStatus.OPEN]
         if not open_conflicts:
@@ -433,7 +517,9 @@ class ActionFlow:
             conflict_id=conflict.conflict_id,
             receiving_department=Department.BUILDING,
             supporting_fact_ids=conflict.fact_ids,
-            narrative=self._referral_narrative(profile, conflict),
+            narrative=await self._draft_narrative(
+                profile, conflict, prior_referrals=prior_referrals
+            ),
             status=ReferralStatus.AWAITING_APPROVAL,
             idempotency_key=self._ids.idempotency_key("referral", conflict.conflict_id),
             drafted_at=now,
@@ -485,14 +571,112 @@ class ActionFlow:
             "records; it makes no determination of code compliance."
         )
 
+    async def _draft_narrative(
+        self,
+        profile: BuildingProfile,
+        conflict: Conflict,
+        *,
+        prior_referrals: Sequence[ReferralRecord] = (),
+    ) -> str:
+        """The referral text a captain will read, polished but not authored.
+
+        The deterministic template is the floor and the fallback. A model may
+        restructure it, add context a reader needs, and answer a rejection this
+        parcel already collected -- and every one of those is a change to how
+        the same facts are *presented*. It may not add a fact, cite a record
+        that is not in the conflict, restate the severity, or drop the sentence
+        that says this is a disagreement rather than a violation. Those are
+        checked afterwards rather than asked for in the prompt, because a
+        prompt is a request and a check is a guarantee.
+
+        A rejected or failed draft is not an error. The deterministic text
+        stands, the fallback is recorded, and the captain gets a referral that
+        is worse-written and exactly as true.
+        """
+        deterministic = self._referral_narrative(profile, conflict)
+        if self._model is None:
+            return deterministic
+
+        try:
+            result = await self._model.compose(
+                template_id=REFERRAL_TEMPLATE_ID,
+                fields={
+                    # The floor goes in as a field. The model is rewriting a
+                    # document it has been handed, not answering a question
+                    # about a building it has to reconstruct.
+                    "deterministic_narrative": deterministic,
+                    "address_id": profile.address_id,
+                    "rule_id": conflict.rule_id,
+                    "severity": conflict.severity,
+                    "supporting_fact_ids": list(conflict.fact_ids),
+                    "prior_outcomes": _prior_outcomes(prior_referrals),
+                },
+                max_chars=REFERRAL_DRAFT_MAX_CHARS,
+                deadline_ms=REFERRAL_DRAFT_DEADLINE_MS,
+            )
+        except Exception as exc:
+            # Deliberately every exception, not a curated list. Polish must
+            # never block a filing.
+            #
+            # Any model failure at all: a timeout, an outage, a client that
+            # raised something nobody anticipated. A referral that cannot be
+            # staged because the wording service is down is a conflict nobody
+            # ever sees, which is strictly worse than a plain one.
+            await self._record_draft_fallback(
+                profile, conflict, reason="model_unavailable", error=type(exc).__name__
+            )
+            return deterministic
+
+        rejection = _reject_draft(result, conflict=conflict)
+        if rejection is not None:
+            await self._record_draft_fallback(profile, conflict, reason=rejection)
+            return deterministic
+        return result.text.strip()
+
+    async def _record_draft_fallback(
+        self,
+        profile: BuildingProfile,
+        conflict: Conflict,
+        *,
+        reason: str,
+        error: str | None = None,
+    ) -> None:
+        """Record that the deterministic text is what shipped, and why.
+
+        The fallback is the interesting event, not the polish: a reviewer
+        comparing two referrals needs to know which one a model touched. The
+        reason is a stable code -- never the draft, which is exactly the kind of
+        text this system does not put in an audit record.
+        """
+        detail = {"conflict_id": conflict.conflict_id, "reason": reason}
+        if error is not None:
+            detail["error_type"] = error
+        await self._audit_event(
+            AuditEventKind.MODEL_OUTPUT_REJECTED,
+            actor=REFERRAL_AGENT_ID,
+            target=REFERRAL_TARGET,
+            address_id=profile.address_id,
+            detail=detail,
+        )
+        logger.info(
+            "referral_draft_fell_back",
+            extra={"conflict_id": conflict.conflict_id, "reason": reason},
+        )
+
     async def approve_referral(
         self, referral_id: str, *, approved_by: str, correlation_id: str
     ) -> ApprovalResult:
-        """File the referral a human just approved, and record the case number.
+        """File the referral a human just approved, email it, record the case number.
+
+        This is the only place a referral reaches the building department, and
+        it is reachable only from a human decision. The order is deliberate:
+        the approval is granted, the referral is marked filed with its approver
+        on it, and *then* the email goes out -- so there is no window in which
+        a message exists that a stored record cannot account for.
 
         Idempotent on the referral's own key: the receiving system dedupes, so
         approving twice returns the first case number rather than opening a
-        second case against the same property.
+        second case against the same property, and sends no second email.
         """
         referral = await self._referrals.get(referral_id)
         if referral is None:
@@ -503,6 +687,9 @@ class ActionFlow:
             raise NotFoundError("approval request not found", details={"referral_id": referral_id})
 
         if referral.status is ReferralStatus.FILED and referral.case_number:
+            # The first approval already filed and already sent. Returning here
+            # is what makes a replayed approval send zero additional emails --
+            # the mail client's own key is the second line, not the first.
             return ApprovalResult(
                 referral_id=referral_id,
                 approval_id=approval.approval_id,
@@ -596,6 +783,7 @@ class ActionFlow:
                 "replayed": str(receipt.replayed),
             },
         )
+        notification_ref = await self._mail_referral(filed, approval=approval, now=now)
         await self._write_back_case_number(filed, now=now)
 
         logger.info(
@@ -603,6 +791,7 @@ class ActionFlow:
             extra={
                 "referral_id": referral_id,
                 "case_number": receipt.external_ref,
+                "notified": notification_ref is not None,
                 "replayed": receipt.replayed,
             },
         )
@@ -610,8 +799,71 @@ class ActionFlow:
             referral_id=referral_id,
             approval_id=approval.approval_id,
             case_number=receipt.external_ref,
+            notification_ref=notification_ref,
             replayed=receipt.replayed,
         )
+
+    async def _mail_referral(
+        self, referral: ReferralRecord, *, approval: ApprovalRequest, now: datetime
+    ) -> str | None:
+        """Send the approved referral to the building department.
+
+        Guarded twice on purpose. The caller only reaches this after recording
+        the approval, and this method refuses a referral that is not filed by a
+        named human anyway -- because "there is no code path that emails a
+        referral without an approval" is a claim that should survive somebody
+        adding a code path.
+
+        Keyed on the referral rather than on the attempt, so a redelivery, a
+        restart mid-approval, or a second tap on the same card all resolve to
+        one message. No compensating action is recorded: an email cannot be
+        recalled, and the undo for what it announces -- "Withdraw the referral"
+        -- is already on the filing action this message reports.
+        """
+        if not self._referral_recipients:
+            return None
+        if referral.status is not ReferralStatus.FILED or not referral.approved_by:
+            raise ValidationError(
+                "a referral email may only follow a recorded human approval",
+                details={"referral_id": referral.referral_id},
+            )
+
+        key = self._ids.idempotency_key("referral-mail", referral.referral_id)
+        message = MailMessage(
+            message_id=f"msg_ref_{referral.referral_id}"[:120],
+            to=self._referral_recipients,
+            subject=(
+                f"SFFD referral {referral.case_number}: {referral.address_id}"[:200]
+                if referral.case_number
+                else f"SFFD referral: {referral.address_id}"[:200]
+            ),
+            body="\n".join(
+                (
+                    referral.narrative,
+                    "",
+                    f"Fire department case reference: {referral.case_number}.",
+                    f"Approved for filing by {referral.approved_by} on "
+                    f"{(referral.filed_at or now).date().isoformat()}.",
+                    f"Approval record {approval.approval_id}, rule {approval.rule_id}.",
+                )
+            ),
+        )
+        sent = await self._referral_mailer.send(message, idempotency_key=key)
+        await self._audit_event(
+            AuditEventKind.WRITE_EXECUTED,
+            actor=REFERRAL_AGENT_ID,
+            target=REFERRAL_MAIL_TARGET,
+            address_id=referral.address_id,
+            detail={
+                "referral_id": referral.referral_id,
+                "approval_id": approval.approval_id,
+                # The transport's message id. Not a secret, and the only handle
+                # that leads from this audit line to the message that was sent.
+                "external_ref": sent.external_ref or "",
+                "approved": "true",
+            },
+        )
+        return sent.external_ref
 
     async def _write_back_case_number(self, referral: ReferralRecord, *, now: datetime) -> None:
         """Record the returned case number on the profile timeline.
@@ -708,3 +960,53 @@ class ActionFlow:
         )
         stored = await self._compensations.record(compensation)
         return stored.compensation_id
+
+
+# ------------------------------------------------------------ draft checking
+
+
+def _prior_outcomes(referrals: Sequence[ReferralRecord]) -> list[dict[str, str]]:
+    """What this parcel's earlier referrals came back as.
+
+    Status, case number, and conflict -- the shape of an outcome, not its
+    prose. A redraft needs to know the building department rejected the last
+    one; it does not need the last one's wording, and handing a model an
+    earlier narrative is how the earlier narrative's mistakes get repeated.
+    """
+    return [
+        {
+            "referral_id": referral.referral_id,
+            "status": str(referral.status),
+            "conflict_id": referral.conflict_id,
+            "case_number": referral.case_number or "",
+        }
+        for referral in referrals
+    ]
+
+
+def _reject_draft(result: ProseResult, *, conflict: Conflict) -> str | None:
+    """Why a polished draft cannot be used, or ``None`` when it can.
+
+    Every check is against the conflict record, not against the deterministic
+    prose: what must survive is the *evidence*, and a rule phrased against the
+    template would pass any draft that copied the template's sentences and
+    still let a new claim in beside them.
+    """
+    if not result.accepted:
+        return "not_accepted"
+
+    text = result.text.strip()
+    if not text:
+        return "empty"
+    if len(text) > REFERRAL_DRAFT_MAX_CHARS:
+        return "over_length"
+
+    if any(fact_id not in text for fact_id in conflict.fact_ids):
+        return "fact_id_dropped"
+    if set(_FACT_ID_TOKEN.findall(text)) - set(conflict.fact_ids):
+        return "fact_id_introduced"
+    if set(_SEVERITY_CLAIM.findall(text)) - {str(conflict.severity)}:
+        return "severity_altered"
+    if REFERRAL_DISCLAIMER not in text:
+        return "disclaimer_dropped"
+    return None

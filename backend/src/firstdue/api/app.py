@@ -49,10 +49,28 @@ def _lifespan_factory(settings: Settings) -> object:
         # cannot be resolved to a pinned version must not be able to run.
         seeded_registry = await seed_registry(container.registry, now=container.clock.now())
 
+        # One pass, before readiness, when the operator asked for it. The
+        # console's own framing is that months of survey work are already
+        # state -- so it must open on a ranked queue rather than on an empty
+        # district nobody can act on. Failure here is logged and shrugged off:
+        # a demo that could not prime is still a working console, and refusing
+        # to start over it would turn a convenience into an outage.
+        primed = 0
+        if settings.demo_prime_slow_loop:
+            from firstdue.demo.scenario import run_slow_loop
+
+            try:
+                for district_id in container.city.list_districts():
+                    report = await run_slow_loop(container, district_id=district_id, approve=False)
+                    primed += report.queue_size
+            except Exception as exc:  # pragma: no cover - see docstring above
+                logger.warning("demo_prime_failed", extra={"error_type": type(exc).__name__})
+
         lifecycle.mark_started(container.clock.now())
         lifecycle.note("mode", container.mode)
         lifecycle.note("municipality", container.city.municipality_id)
         lifecycle.note("seeded_profiles", str(loaded))
+        lifecycle.note("primed_queue", str(primed))
         lifecycle.note("storage_backend", container.storage_label)
         lifecycle.note("event_backend", container.event_label)
         lifecycle.note(
@@ -94,7 +112,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     container = build_container(resolved)
 
     app = FastAPI(
-        title="FIRST DUE",
+        title="TERSAGE",
         version=__version__,
         description=DESCRIPTION,
         lifespan=_lifespan_factory(resolved),  # type: ignore[arg-type]
@@ -135,12 +153,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Health, status, the registry, and the internal surfaces are on every
     # service: a load balancer probes all of them, and both loops publish and
-    # consume events. The two loop routers are what the split actually splits.
+    # consume events.
     app.include_router(health.router)
     app.include_router(system.router, prefix=resolved.api_prefix)
     app.include_router(registry.router, prefix=resolved.api_prefix)
     app.include_router(internal.router, prefix=resolved.api_prefix)
-    if resolved.serves_slow_loop:
+    # The console is on both backend services and on neither agent worker; it is
+    # not a loop surface. See :attr:`Settings.serves_console` -- mounting it on
+    # the slow loop meant the service the console proxy points at served none of
+    # it.
+    if resolved.serves_console:
         app.include_router(console.router, prefix=resolved.api_prefix)
     if resolved.serves_incident_loop:
         app.include_router(incidents.router, prefix=resolved.api_prefix)

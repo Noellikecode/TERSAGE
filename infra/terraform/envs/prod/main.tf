@@ -18,6 +18,22 @@
 locals {
   environment = "prod"
   policy_dir  = "${path.module}/../../policy"
+
+  # Cloud Run custom audiences: one per service, fixed before apply.
+  #
+  # The backend refuses to start in live mode without INTERNAL_PUSH_AUDIENCE,
+  # and the value has to be the audience of the service being started -- a push
+  # token minted for the slow loop must not open the incident loop. The
+  # generated URL cannot be that value, because it does not exist until the
+  # service is created and feeding it back into the same service's environment
+  # is a cycle Terraform will not resolve.
+  #
+  # A custom audience is a stable string, so both sides of the check -- the env
+  # var the service verifies against, and the audience every caller mints for
+  # -- are known at plan time. It is additive: the generated URL keeps working
+  # as an audience too.
+  slow_audience     = "https://firstdue-slow"
+  incident_audience = "https://firstdue-incident"
 }
 
 provider "google" {
@@ -73,51 +89,139 @@ module "secrets" {
   project_id  = var.project_id
   environment = local.environment
 
-  # Keys are static; the emails resolve at apply time. See the module's
-  # `accessors` description for why that distinction matters.
+  # Every service that mounts a secret must be able to read it, agent workers
+  # included: a worker whose identity cannot open CALLBACK_SECRET never becomes
+  # ready, and the failure surfaces as a revision that will not start rather
+  # than as a permission error anywhere obvious.
+  #
+  # `resend-api-key` is the outbound one: `referral-clerk` emails the building
+  # department, and only after a captain approves -- never on its own. It reuses
+  # `local.secret_readers`, which already covers the slow loop, the incident
+  # loop, and all nine agent identities. That is a superset of "could run
+  # referral-clerk", and one list that cannot drift is worth more here than a
+  # second, narrower one that can.
   accessors = {
-    callback-secret = {
-      slow     = module.iam.service_emails["firstdue-slow"]
-      incident = module.iam.service_emails["firstdue-incident"]
-    }
-    console-token-secret = {
-      slow     = module.iam.service_emails["firstdue-slow"]
-      incident = module.iam.service_emails["firstdue-incident"]
-      console  = module.iam.service_emails["firstdue-console"]
-    }
+    callback-secret     = local.secret_readers
+    google-maps-api-key = local.secret_readers
+    nrel-api-key        = local.secret_readers
+    resend-api-key      = local.secret_readers
+    socrata-app-token   = local.secret_readers
   }
 
   depends_on = [module.services]
 }
 
 locals {
+  # Accessor keys are static; only the emails resolve at apply time. See the
+  # secrets module's `accessors` description for why that distinction matters.
+  secret_readers = merge(
+    {
+      slow     = module.iam.service_emails["firstdue-slow"]
+      incident = module.iam.service_emails["firstdue-incident"]
+    },
+    { for id, email in module.iam.agent_emails : "agent-${id}" => email },
+  )
+}
+
+locals {
   common_env = {
-    APP_ENV                       = local.environment
-    USE_FAKE_AGENTS               = "false"
-    STORAGE_BACKEND               = "firestore"
-    EVENT_BACKEND                 = "pubsub"
-    GCP_PROJECT_ID                = var.project_id
-    VERTEX_LOCATION               = var.region
-    GEMINI_MODEL                  = var.gemini_model
-    GCS_PLANS_BUCKET              = module.storage.plans_bucket
-    MODEL_ARMOR_TEMPLATE          = var.model_armor_template
-    OTEL_ENABLED                  = "true"
-    OTEL_SERVICE_NAME             = "firstdue"
-    VECTOR_SEARCH_ENABLED         = tostring(var.vector_search_enabled)
-    VECTOR_SEARCH_ENDPOINT        = module.vectors.endpoint_id
-    LOG_JSON                      = "true"
-    INTERNAL_PUSH_SERVICE_ACCOUNT = module.iam.service_emails["firstdue-pubsub-push"]
+    APP_ENV                = local.environment
+    USE_FAKE_AGENTS        = "false"
+    STORAGE_BACKEND        = "firestore"
+    EVENT_BACKEND          = "pubsub"
+    GCP_PROJECT_ID         = var.project_id
+    VERTEX_LOCATION        = var.vertex_location
+    GEMINI_MODEL           = var.gemini_model
+    GCS_PLANS_BUCKET       = module.storage.plans_bucket
+    MODEL_ARMOR_TEMPLATE   = var.model_armor_template
+    OTEL_ENABLED           = "true"
+    OTEL_SERVICE_NAME      = "firstdue"
+    VECTOR_SEARCH_ENABLED  = tostring(var.vector_search_enabled)
+    VECTOR_SEARCH_ENDPOINT = module.vectors.endpoint_id
+    LOG_JSON               = "true"
+
+    # Backend feature switches, one plain name/value line each and deliberately
+    # so: the setting names are still settling on the backend side, and a rename
+    # should be a one-line change per environment rather than an edit buried in
+    # a merge() or a conditional.
+    #
+    # Shared rather than per-service, like CONSOLE_AUDIENCE above and unlike
+    # INTERNAL_PUSH_AUDIENCE: which service happens to run the grounding call or
+    # open a memory-bank question is the backend's routing decision, not
+    # something this file should track.
+    GROUNDING_SEARCH_ENABLED = tostring(var.grounding_search_enabled)
+    MEMORY_BANK_ENABLED      = tostring(var.memory_bank_enabled)
+    RESEND_FROM_ADDRESS      = var.resend_from_address
+    # Two identities, comma-separated, because two different callers reach the
+    # internal endpoints: Pub/Sub pushes events, Cloud Scheduler ticks the slow
+    # loop. They are deliberately separate service accounts -- the bus and the
+    # clock are not the same principal, and one being compromised should not
+    # confer the other's reach -- so the authorized list has two entries rather
+    # than the scheduler borrowing the push identity. Collapsing them would have
+    # traded a real separation for a one-line config change.
+    #
+    # Parsed at startup: every entry must be an email or the process refuses to
+    # boot, and an empty list refuses all traffic rather than failing open. A
+    # malformed join is therefore a dead service, not a quiet 401 on every tick.
+    INTERNAL_PUSH_SERVICE_ACCOUNT = join(",", [
+      module.iam.service_emails["firstdue-pubsub-push"],
+      module.iam.service_emails["firstdue-scheduler"],
+    ])
+
+    # Console auth is a different trust boundary from the push endpoint, and
+    # deliberately a separate setting even though the string is currently the
+    # same one: the push endpoint admits a single service account minting for
+    # the fleet, the console admits people.
+    #
+    # Shared rather than per-service on purpose. INTERNAL_PUSH_AUDIENCE has to
+    # differ per service -- a push token for one service must not open another
+    # -- but the console audience is one audience for one console, and which
+    # services answer console traffic is the backend's decision, not something
+    # this file should have to track. A per-service copy would silently go
+    # stale the next time that routing changes.
+    CONSOLE_AUDIENCE      = local.incident_audience
+    CONSOLE_ROLE_BINDINGS = var.console_role_bindings
   }
 
-  secret_env = {
-    CALLBACK_SECRET = {
-      secret  = module.secrets.secret_names["callback-secret"]
+  # CONSOLE_TOKEN_SECRET used to be mounted here and was never read: `Settings`
+  # has no such field and ignores extras, so it was a secret handed to three
+  # services for nothing. The console authenticates with an OIDC token it mints
+  # from the metadata server, not a static shared token.
+  secret_env = merge(
+    {
+      CALLBACK_SECRET = {
+        secret  = module.secrets.secret_names["callback-secret"]
+        version = "latest"
+      }
+    },
+    local.source_key_env,
+  )
+
+  # Optional third-party keys. Without them the Google Solar API (roof geometry)
+  # and the NREL EV hazard registry report UNCONFIGURED and the system degrades
+  # silently -- every dashboard healthy, two sources quietly absent. Without
+  # `resend-api-key` the referral email is unconfigured the same way: the
+  # captain's approval still lands and the referral is still staged, it just is
+  # not delivered by mail.
+  #
+  # Cloud Run resolves a secret reference when the container starts and refuses
+  # to start if the secret has no version, so these cannot simply be mounted
+  # and left empty: an unset key would take the whole service down instead of
+  # degrading one source. Listing a key in `live_source_keys` is the operator's
+  # statement that `gcloud secrets versions add` has already run for it.
+  source_key_env = {
+    for key in var.live_source_keys :
+    local.source_key_env_names[key] => {
+      secret  = module.secrets.secret_names[key]
       version = "latest"
     }
-    CONSOLE_TOKEN_SECRET = {
-      secret  = module.secrets.secret_names["console-token-secret"]
-      version = "latest"
-    }
+  }
+
+  source_key_env_names = {
+    google-maps-api-key = "GOOGLE_MAPS_API_KEY"
+    nrel-api-key        = "NREL_API_KEY"
+    resend-api-key      = "RESEND_API_KEY"
+    socrata-app-token   = "SOCRATA_APP_TOKEN"
   }
 }
 
@@ -130,7 +234,14 @@ module "slow_service" {
   image           = var.backend_image
   service_account = module.iam.service_emails["firstdue-slow"]
 
-  environment_variables        = merge(local.common_env, { FIRSTDUE_LOOP = "slow" })
+  custom_audiences = [local.slow_audience]
+
+  environment_variables = merge(local.common_env, {
+    FIRSTDUE_LOOP = "slow"
+    # This service's own audience, merged over the shared map: one value across
+    # every service would mean a token minted for any of them opened all of them.
+    INTERNAL_PUSH_AUDIENCE = local.slow_audience
+  })
   secret_environment_variables = local.secret_env
 
   min_instances   = 0
@@ -158,7 +269,12 @@ module "incident_service" {
   image           = var.backend_image
   service_account = module.iam.service_emails["firstdue-incident"]
 
-  environment_variables        = merge(local.common_env, { FIRSTDUE_LOOP = "incident" })
+  custom_audiences = [local.incident_audience]
+
+  environment_variables = merge(local.common_env, {
+    FIRSTDUE_LOOP          = "incident"
+    INTERNAL_PUSH_AUDIENCE = local.incident_audience
+  })
   secret_environment_variables = local.secret_env
 
   min_instances   = 1
@@ -189,8 +305,19 @@ module "console_service" {
   service_account = module.iam.service_emails["firstdue-console"]
 
   environment_variables = {
-    NODE_ENV              = "production"
+    NODE_ENV = "production"
+    # A plain server variable, deliberately not the NEXT_PUBLIC_ one. Next.js
+    # inlines `process.env.NEXT_PUBLIC_*` at *build* time -- in server route
+    # handlers as well as client bundles -- and the Docker build sets no such
+    # value, so a NEXT_PUBLIC name compiles to undefined and whatever Cloud Run
+    # supplies at runtime is never read. The gateway route handler reads this
+    # name first and treats the NEXT_PUBLIC one only as a local-dev fallback.
     FIRSTDUE_API_BASE_URL = module.incident_service.url
+    # The console holds no static token. It mints an OIDC token from the
+    # metadata server for the incident service's audience, which is what that
+    # service verifies against and what Cloud Run checks before admitting the
+    # request. Its invoker binding is on the incident service below.
+    FIRSTDUE_API_AUDIENCE = local.incident_audience
   }
 
   min_instances         = 0
@@ -235,13 +362,19 @@ module "pubsub" {
 
   push_endpoint        = "${module.slow_service.url}/api/v1/internal/events/push"
   push_service_account = module.iam.service_emails["firstdue-pubsub-push"]
-  push_audience        = module.slow_service.url
+  push_audience        = local.slow_audience
 
   # Each agent's subscriptions push to that agent's own worker.
   agent_push_endpoints = {
     for id, url in module.agent_workers.worker_urls :
     id => "${url}/api/v1/internal/events/push"
   }
+
+  # Endpoint and audience are different strings. A subscription pushes to the
+  # worker's generated URL and mints its token for the worker's own audience;
+  # minting for the slow loop's audience -- which is what one shared value did
+  # -- means Cloud Run rejects the push before the app ever sees it.
+  agent_push_audiences = module.agent_workers.worker_audiences
 
   depends_on = [module.slow_service, module.agent_workers]
 }
@@ -253,7 +386,7 @@ module "scheduler" {
   environment     = local.environment
   target_url      = "${module.slow_service.url}/api/v1/internal/scheduler/tick"
   service_account = module.iam.service_emails["firstdue-scheduler"]
-  audience        = module.slow_service.url
+  audience        = local.slow_audience
   district_id     = var.district_id
   paused          = var.scheduler_paused
 

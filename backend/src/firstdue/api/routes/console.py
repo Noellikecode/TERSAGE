@@ -45,6 +45,8 @@ from firstdue.domain.values import FactValue
 from firstdue.domain.work import SurveyRecord
 from firstdue.errors import NotFoundError, ValidationError
 from firstdue.observability.metrics import METRICS
+from firstdue.ports.fireactivity import FireActivity, FireActivityClient
+from firstdue.ports.imagery import BuildingImagery, ImageryClient
 from firstdue.services.surveys import SurveyService
 
 router = APIRouter(tags=["console"])
@@ -396,6 +398,64 @@ async def district_queue(
     return QueueView(district_id=district_id, entries=views, count=len(entries))
 
 
+def _fire_activity_client(container: Container) -> FireActivityClient:
+    """The wired fire-activity client.
+
+    Built once per process in :mod:`firstdue.container`. The adapter fronts
+    someone else's quota with a cache and a token bucket, and one rebuilt per
+    request would arrive with an empty cache and a full bucket.
+    """
+    return container.fire_activity
+
+
+@router.get(
+    "/districts/{district_id}/fire-activity",
+    response_model=FireActivity,
+    summary="Regional fire activity and recent fire weather",
+)
+async def district_fire_activity(
+    district_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> FireActivity:
+    """What is burning *around* the district, and how dry it has been.
+
+    **Regional on purpose.** Measured against the live NASA FIRMS feed over its
+    maximum five-day window, San Francisco proper returns zero VIIRS detections
+    and Northern California returns hundreds: the pixels are ~375 m and the
+    instrument exists to find wildfire, so a structure fire never registers. A
+    city-only map would be blank essentially always, which reads as an outage on
+    a bad day and as reassurance on a good one. So the region is the subject --
+    regional activity is what drives mutual-aid demand, crew availability, smoke
+    over the district, and red-flag posture -- and the city's own count is
+    reported separately beside it.
+
+    ``resolution_note`` therefore ships with every answer and the console must
+    render it: it is what makes ``in_city_count: 0`` read as the ordinary fact
+    it is rather than as a dead feed or as an all-clear.
+
+    **The fire-weather block is not current conditions.** NASA POWER is
+    reanalysis and lags real time by days; every reading carries the hour it
+    describes, the block carries the window those hours span, and ``caveat``
+    says so in words. Current wind reaches the console from the National Weather
+    Service source in the catalog, and the two must not be presented alike.
+
+    Same scope as ``/stats`` and ``/queue``: this is district situational
+    awareness, and it decides nothing.
+
+    **Always 200.** No map key, an unknown district, a dead provider, a spent
+    rate budget, or a blown deadline all come back with ``available=false`` and
+    a sentence in ``unavailable_reason``. A 404 would render as a broken
+    console, and a console that drew an empty map would be asserting that
+    nothing is burning.
+
+    The response carries detections and never a provider URL: FIRMS puts its map
+    key in the request *path*, so a URL reaching the browser is the key reaching
+    the browser.
+    """
+    return await _fire_activity_client(container).fetch(district_id=district_id)
+
+
 # --------------------------------------------------------------- buildings
 
 
@@ -504,6 +564,52 @@ async def building_geometry(
         has_disputed_mass=profile.geometry.has_disputed_mass,
         total_height_m=round(profile.geometry.total_height_m, 2),
     )
+
+
+def _imagery_client(container: Container) -> ImageryClient:
+    """The wired imagery client.
+
+    Built once per process in :mod:`firstdue.container`, beside vision, because
+    the adapter owns a response cache and a token bucket: a client rebuilt per
+    request would arrive with an empty cache and a full bucket, which is how a
+    metered API gets billed twice for the same building.
+    """
+    return container.imagery
+
+
+@router.get(
+    "/buildings/{address_id}/imagery",
+    response_model=BuildingImagery,
+    summary="A photograph of the building, or a stated refusal",
+)
+async def building_imagery(
+    address_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_geometry_read)],
+) -> BuildingImagery:
+    """What the building actually looks like, beside what it was measured to be.
+
+    The massing model on ``/geometry`` is derived from permits, lidar, and the
+    assessor's roll. This is the photograph: the door, the windows, the bars, a
+    storey count an officer can check with their own eyes against the model
+    standing next to it. Same scope as the geometry it renders beside, because
+    it is the other half of the same pane.
+
+    **Always 200.** No coverage, no key, a dead provider, or a blown deadline
+    all come back with ``available=false`` and a sentence in
+    ``unavailable_reason``. A 404 would render as a broken console, and a
+    console that draws nothing would teach an officer that the building has no
+    photograph -- which is a claim, and a false one.
+
+    **The console must render ``attribution``** under the frame whenever it is
+    non-empty. Google's Maps Platform Terms require visible attribution on
+    Street View and Static Maps imagery, and the department is the licensee.
+
+    The response carries the image inline as a data URL and never a provider
+    URL: a signed Street View URL is ``GOOGLE_MAPS_API_KEY`` in a browser's
+    network tab.
+    """
+    return await _imagery_client(container).fetch(address_id=address_id)
 
 
 @router.get(

@@ -247,6 +247,12 @@ class LogEntryType(StrEnum):
     #: because "who was told" is the first question after an incident where
     #: somebody was not told.
     AGENT_HANDOFF = "AGENT_HANDOFF"
+    #: What each woken agent was pointed at, in ids and canonical keys. The
+    #: second question after an incident, once "who was told" is answered:
+    #: they were told, and what were they told to look at. Stored in the log
+    #: rather than beside it because a focus is exactly the kind of decision the
+    #: log exists to make replayable. See :mod:`firstdue.incident.focus`.
+    FOCUS_COMPOSED = "FOCUS_COMPOSED"
 
 
 class BenchmarkType(StrEnum):

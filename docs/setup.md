@@ -119,15 +119,111 @@ curl -X POST http://localhost:8000/api/v1/internal/events/push \
 ```
 
 In live mode it verifies a Google-issued OIDC token instead, checking the
-signature, the audience (`INTERNAL_PUSH_AUDIENCE`), and the pushing service
-account (`INTERNAL_PUSH_SERVICE_ACCOUNT`). Both become required at startup when
-`EVENT_BACKEND=pubsub`.
+signature, the audience (`INTERNAL_PUSH_AUDIENCE`), and the calling service
+account against `INTERNAL_PUSH_SERVICE_ACCOUNT`. Both become required at
+startup when `EVENT_BACKEND=pubsub`.
+
+**`INTERNAL_PUSH_SERVICE_ACCOUNT` is a comma-separated list, and configuring a
+single account is the mistake the setting is shaped to prevent.** Two Google
+services call in, as two separate IAM identities on purpose: Pub/Sub pushes
+events as the push service account, and Cloud Scheduler ticks the slow loop as
+its own. Set one value and Pub/Sub authenticates perfectly while every
+scheduled tick is refused — a 401 nobody is watching, and a slow loop that has
+quietly not run for a week. Collapsing the two identities in IAM would have
+"fixed" it by deleting the separation.
+
+```bash
+INTERNAL_PUSH_SERVICE_ACCOUNT=fd-pubsub-push@PROJECT.iam.gserviceaccount.com,fd-scheduler@PROJECT.iam.gserviceaccount.com
+```
+
+Terraform derives that value from the two service accounts it creates, so a
+deployed environment sets it for you; you write it by hand only when running
+live mode outside Terraform. The parsing is strict, and each rule is there
+because the alternative fails invisibly:
+
+- **Every entry must be an email address.** One that is not is a *startup*
+  failure, not a runtime 401 — a principal that can never match is a refusal
+  nobody would think to look for.
+- **An empty list refuses all traffic.** There is no wildcard and no
+  fail-open: an internal endpoint that accepts anyone is an open door into the
+  event stream. A value of `", "` is set, is unusable, and is refused at
+  startup for exactly that reason rather than starting a process that turns
+  away every caller it has.
+- Whitespace and repeated commas are formatting artifacts and are ignored.
 
 Dead-lettered envelopes are listed at
 `GET /api/v1/internal/events/dead-letters`, with the same authentication.
 
 Copy `.env.example` to `.env` to change settings. **Never put a secret value in
 either file** — `.env` is gitignored, `.env.example` is scanned by gitleaks.
+
+## Console authentication
+
+Two settings, and the second one is the one that will bite you.
+
+### `CONSOLE_AUDIENCE`
+
+The OIDC audience the console API verifies a caller's token against. **Live
+mode will not start without it on any process that serves the console** — which
+is every process where `FIRSTDUE_AGENT` is unset. An agent worker is not a
+console: it holds one agent's identity, is not publicly invokable, and has no
+operator in front of it, so it is not held hostage to an audience it never
+verifies against.
+
+In the deployed topology the value is the Cloud Run **custom audience**,
+`https://firstdue-incident`. A custom audience is used rather than the service
+URL because it survives the service being torn down and recreated at a
+different address.
+
+This is deliberately **not** `INTERNAL_PUSH_AUDIENCE`. That one is Pub/Sub
+calling the fleet; this one is an officer's browser calling the incident
+service. They are separate trust boundaries and separate settings, and each has
+to be set on its own even in a deployment that happens to give them the same
+string.
+
+### `CONSOLE_ROLE_BINDINGS`
+
+Comma-separated `email:role`, where a role is `viewer`, `captain`, or `chief`.
+
+```bash
+CONSOLE_ROLE_BINDINGS=captain@example.gov:captain,chief@example.gov:chief
+```
+
+**This one is deliberately not required at startup, and that is the sharp
+edge.** A live deployment that leaves it empty comes up, serves, and lets every
+authenticated caller sign in and read — and **no referral and no utility
+shutoff can be approved by anyone**, because an unbound principal is a viewer.
+The backend logs `console_role_bindings_empty` and keeps serving, on the
+judgment that a read-only console is still worth having and refusing to start
+would take it down too. But say it plainly, because this project's whole
+argument rests on the human approval gates being real: **with an empty binding
+map those gates exist and are unreachable.** A gate nobody can pass is not a
+gate.
+
+The parsing is strict in the other direction:
+
+- A **typo'd role name** is a startup failure. So is an entry that is not
+  `email:role`, and so is binding one principal to two different roles —
+  last-wins would decide silently which authority an officer holds.
+- An **unbound principal gets `viewer`**, the least authority the system has,
+  which is the right answer for a caller nobody has vouched for.
+- Emails are lower-cased on both sides of the comparison.
+
+### What this is, and what it is not
+
+**This is principal-level binding, not per-user single sign-on.** What a
+verified token establishes is that Google issued it for this audience and that
+the email on it is one `CONSOLE_ROLE_BINDINGS` names. There is no session, no
+group membership, and no directory lookup, and the binding list is
+configuration an operator maintains by hand. The role is never read from a
+token claim — a Google-issued ID token carries no custom claims at all, so a
+`firstdue_role` claim could never be present, and defaulting off one meant
+every live caller was a viewer.
+
+A console that needs real per-user authentication needs an **identity-aware
+proxy in front of it**. That is a deployment decision this process cannot make
+for itself, and claiming otherwise would be claiming an authentication story
+the code does not have.
 
 ## Real Google credentials
 
@@ -184,7 +280,7 @@ done
 
 ```bash
 gcloud storage buckets create gs://firstdue-plans-dev \
-  --location=us-west1 --project=firstdue-dev
+  --location=us-central1 --project=firstdue-dev
 
 openssl rand -hex 32     # becomes CALLBACK_SECRET; never commit it
 ```
@@ -192,9 +288,13 @@ openssl rand -hex 32     # becomes CALLBACK_SECRET; never commit it
 ### Verify the two model ids before the first live call
 
 `GEMINI_MODEL` and `GEMMA_MODEL` default to `gemini-3.5-flash` and
-`gemma-3-4b-it`. **Neither has been resolved against a real Vertex endpoint.**
-If either is wrong, every live model call fails at once and nothing else will
-tell you why:
+`gemma-4-26b-a4b-it-maas`. **Both defaults were wrong once, in different ways,
+and both were corrected against a real Vertex endpoint on Aug 21.**
+`gemini-3.5-flash` is real but 404s in `us-central1` — it answers on `global`,
+which is why `VERTEX_LOCATION` defaults to `global`. `gemma-3-4b-it`, the
+previous default, does not exist on Vertex at all; the `-maas` suffix marks the
+managed endpoint that is callable through `generateContent`. If either id is
+wrong, every live model call fails at once and nothing else will tell you why:
 
 ```bash
 gcloud ai model-garden models list --project=firstdue-dev --region=us-central1 \

@@ -45,6 +45,12 @@ COLLECTION_NAMES: Final[tuple[str, ...]] = (
     "idempotency",
     "agent_runs",
     "compensations",
+    # The Memory Bank. Separate from ``agent_runs`` because what they hold has
+    # different lifetimes: a run record dies with its run, while an open
+    # question outlives the process, the deployment, and the release, waiting
+    # for a municipal record that may be months late.
+    "open_questions",
+    "memory_checkpoints",
 )
 
 

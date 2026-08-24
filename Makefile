@@ -45,7 +45,7 @@ demo: seed ## Start the credential-free demo (API + console)
 	@echo "  console http://localhost:$(FRONT_PORT)"
 	@echo "  console token derived from DEMO_SEED; see \`firstdue status\`"
 	@trap 'kill 0' EXIT INT TERM; \
-	 USE_FAKE_AGENTS=true PORT=$(API_PORT) $(UV) run firstdue serve & \
+	 USE_FAKE_AGENTS=true DEMO_PRIME_SLOW_LOOP=true PORT=$(API_PORT) $(UV) run firstdue serve & \
 	 cd $(FRONT) && \
 	   FIRSTDUE_CONSOLE_TOKEN=$$($(UV) run --directory .. firstdue status | awk '/^  chief/{print $$2}') \
 	   NEXT_PUBLIC_API_BASE_URL=http://localhost:$(API_PORT) $(NPM) run dev -- -p $(FRONT_PORT) & \
@@ -53,7 +53,7 @@ demo: seed ## Start the credential-free demo (API + console)
 
 .PHONY: serve
 serve: ## Start only the API
-	USE_FAKE_AGENTS=true PORT=$(API_PORT) $(UV) run firstdue serve --reload
+	USE_FAKE_AGENTS=true DEMO_PRIME_SLOW_LOOP=true PORT=$(API_PORT) $(UV) run firstdue serve --reload
 
 .PHONY: console
 console: ## Start only the console

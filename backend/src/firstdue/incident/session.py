@@ -21,6 +21,7 @@ catalog now says so.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+from datetime import datetime
 from typing import Any, Final
 
 from firstdue.agents.fleet import FleetRunner
@@ -101,6 +102,13 @@ class IncidentSession:
             clock=container.clock,
             ids=container.ids,
             rms=container.write_targets.get("department-rms"),
+            # Synthesis and loop-closing. The recorder runs after the incident
+            # has closed, so it is the one incident agent with room to reason:
+            # nothing waits on it and its output is a draft a human reviews.
+            memory=container.memory,
+            model=container.model,
+            use_langgraph=container.settings.langgraph_enabled,
+            max_graph_steps=container.settings.agent_graph_max_steps,
         )
         self.controller = IncidentController(
             incidents=container.incidents,
@@ -129,6 +137,14 @@ class IncidentSession:
             intake=IntakeReader(model=container.model, screen=container.screen),
             registry=container.registry,
             waker=_FleetWaker(self),
+            # The head reads what the slow loop accumulated -- profile, conflicts
+            # and the questions it could not settle -- and writes a focus the
+            # other incident agents read. It points at ids; it never asserts.
+            incident_log=container.incident_log,
+            memory=container.memory,
+            grounding=container.grounding,
+            use_langgraph=container.settings.langgraph_enabled,
+            max_graph_steps=container.settings.agent_graph_max_steps,
         )
         self.fusion = SensorFusion(vision=container.vision, ids=container.ids)
         self.resources = ResourceAgent(
@@ -139,6 +155,14 @@ class IncidentSession:
             audit=container.audit,
             clock=container.clock,
             ids=container.ids,
+            # ``log`` is the predicate for reasoning at all: it is how the
+            # notifier reads the head's focus and what it has already told a
+            # partner. Without it the deterministic rule table is what runs.
+            log=container.incident_log,
+            memory=container.memory,
+            model=container.model,
+            use_langgraph=container.settings.langgraph_enabled,
+            max_graph_steps=container.settings.agent_graph_max_steps,
         )
         #: Persisted emissions, in order, per incident. What the stream replays.
         self._emissions: dict[str, list[BriefEmission]] = {}
@@ -566,6 +590,15 @@ class IncidentSession:
                 missing_scopes=entry.missing_scopes,
             )
 
+        # Composed last, on purpose. The instant brief has already emitted and
+        # every routed agent has already been woken, so a graph that stalls or
+        # fails here costs a commander nothing -- ADR 0004 makes stage one
+        # model-free by construction, and the focus is guidance layered on top
+        # of a fleet that is already moving, never a gate in front of it.
+        await self._compose_focus(
+            incident_id, reading=reading, grant=grant, now=now, correlation_id=correlation_id
+        )
+
         logger.info(
             "intake_intercepted",
             extra={
@@ -585,6 +618,51 @@ class IncidentSession:
             emission=emission,
             woken_agent_ids=started,
         )
+
+    async def _compose_focus(
+        self,
+        incident_id: str,
+        *,
+        reading: IntakeReading,
+        grant: Any,
+        now: datetime,
+        correlation_id: str,
+    ) -> None:
+        """Write the head agent's briefing, or carry on without one.
+
+        Every failure path here is a shrug. A focus is *guidance* -- it points
+        the other incident agents at ids the head judged material -- and each of
+        them already degrades to its own deterministic behaviour when
+        ``read_focus`` returns nothing. An exception escaping this method would
+        turn an optional improvement into an incident-loop outage, which is the
+        opposite trade from the one this system makes everywhere else.
+        """
+        if not self.interceptor.composes_focus:
+            return
+        try:
+            incident = await self._container.incidents.get(incident_id)
+            snapshot = (
+                await self._container.snapshots.get(incident.profile_snapshot_id)
+                if incident is not None
+                else None
+            )
+            if snapshot is None:
+                return
+            focus = await self.interceptor.compose_focus(
+                incident_id=incident_id,
+                snapshot=snapshot,
+                now=now,
+                reading=reading,
+                authorised_scopes=frozenset(grant.scopes),
+                correlation_id=correlation_id,
+            )
+            if focus is not None:
+                await self.interceptor.record_focus(focus, now=now)
+        except Exception as exc:  # pragma: no cover - defensive, see docstring
+            logger.warning(
+                "focus_not_composed",
+                extra={"incident_id": incident_id, "error_type": type(exc).__name__},
+            )
 
     async def _intake_amendment(
         self, incident: Any, reading: IntakeReading

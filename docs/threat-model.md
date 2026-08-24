@@ -1,6 +1,6 @@
 # Threat model
 
-FIRST DUE reads eleven municipal and federal sources, runs a fleet of agents
+FIRST DUE reads ten live municipal and federal feeds, runs a fleet of agents
 against them, and puts the result in front of a fire officer who has ninety
 seconds. This document is what we think can go wrong with that, what stops each
 thing, and what does not.

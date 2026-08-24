@@ -85,6 +85,23 @@ variable "cpu_boost" {
   type    = bool
   default = true
 }
+variable "custom_audiences" {
+  description = <<-EOT
+    Extra OIDC audiences this service accepts, alongside its generated URL.
+
+    The backend refuses to start without INTERNAL_PUSH_AUDIENCE, and the value
+    has to be *this* service's audience -- a push token minted for the slow
+    loop must not open the incident loop. The generated URL cannot supply it:
+    it does not exist until the service is created, so using it as the env var
+    is a self-reference Terraform will not resolve.
+
+    A custom audience is a stable string chosen before apply, which breaks the
+    cycle. It is additive: the generated URL keeps working as an audience, so
+    callers that already mint tokens for it are unaffected.
+  EOT
+  type        = list(string)
+  default     = []
+}
 
 resource "google_cloud_run_v2_service" "service" {
   project             = var.project_id
@@ -92,6 +109,7 @@ resource "google_cloud_run_v2_service" "service" {
   name                = var.name
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
+  custom_audiences    = var.custom_audiences
 
   template {
     service_account                  = var.service_account

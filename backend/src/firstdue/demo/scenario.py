@@ -287,6 +287,14 @@ def build_agents(
         ids=container.ids,
         audit=container.audit,
         vectors=container.vectors,
+        # Reasoning is opt-in per process, and it is these two arguments that
+        # switch it on. Without a bank there is nowhere to park a question, so
+        # the graph does not run and the fixed pass is what executes -- which
+        # is exactly what fake mode and the whole test suite exercise today.
+        memory=container.memory,
+        grounding=container.grounding,
+        use_langgraph=container.settings.langgraph_enabled,
+        max_graph_steps=container.settings.agent_graph_max_steps,
     )
     geometry = GeometryWatcher(
         profiles=container.profiles,
@@ -299,6 +307,10 @@ def build_agents(
         facts=container.facts,
         materializer=materializer,
         clock=container.clock,
+        memory=container.memory,
+        grounding=container.grounding,
+        use_langgraph=container.settings.langgraph_enabled,
+        max_graph_steps=container.settings.agent_graph_max_steps,
     )
     structure_watch = StructureWatch(
         profiles=container.profiles,
@@ -323,6 +335,15 @@ def build_agents(
         clock=container.clock,
         ids=container.ids,
         audit=container.audit,
+        # The model may polish the referral; it may not author it. A draft that
+        # drops a fact id or the no-determination sentence is rejected and the
+        # deterministic template ships instead.
+        model=container.model,
+        # Where an approved referral is emailed. The mailer is separate from
+        # ``mailer`` because crew notification and inter-agency filing are
+        # different acts with different consequences and different recipients.
+        referral_mailer=container.referral_mailer,
+        referral_recipients=container.settings.referral_recipients,
     )
     return records, geometry, hazards, structure_watch, actions
 

@@ -50,6 +50,18 @@ locals {
   warm = {
     for id, spec in local.agents : id => spec.loop == "incident" ? 1 : 0
   }
+
+  # Each worker's own OIDC audience, chosen before apply.
+  #
+  # The backend refuses to start in live mode without INTERNAL_PUSH_AUDIENCE,
+  # and it must be *this* worker's audience: a push token minted for one worker
+  # must not be accepted by another. The generated URL cannot be that value --
+  # it does not exist until the service is created, so feeding it back into the
+  # same service's environment is a cycle. A custom audience is a stable string
+  # derived from the name, which the URL is not needed for.
+  audiences = {
+    for id, _ in local.agents : id => "https://firstdue-agent-${id}"
+  }
 }
 
 resource "google_cloud_run_v2_service" "worker" {
@@ -59,6 +71,7 @@ resource "google_cloud_run_v2_service" "worker" {
   location            = var.region
   name                = "firstdue-agent-${each.key}"
   deletion_protection = false
+  custom_audiences    = [local.audiences[each.key]]
 
   # No unauthenticated ingress. A worker is reached by Pub/Sub push and by the
   # scheduler, both of which authenticate.
@@ -105,6 +118,14 @@ resource "google_cloud_run_v2_service" "worker" {
       env {
         name  = "FIRSTDUE_LOOP"
         value = local.agents[each.key].loop
+      }
+
+      # Per worker, and deliberately not part of the shared environment map: a
+      # single value across every service would mean any worker accepted a push
+      # token minted for any other.
+      env {
+        name  = "INTERNAL_PUSH_AUDIENCE"
+        value = local.audiences[each.key]
       }
 
       dynamic "env" {
@@ -160,6 +181,11 @@ resource "google_cloud_run_v2_service_iam_member" "invoker" {
 
 output "worker_urls" {
   value = { for id, svc in google_cloud_run_v2_service.worker : id => svc.uri }
+}
+
+output "worker_audiences" {
+  description = "agent id -> the OIDC audience that worker accepts. Push subscriptions mint tokens for this."
+  value       = local.audiences
 }
 
 output "worker_names" {

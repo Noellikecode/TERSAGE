@@ -26,10 +26,28 @@ EPOCH = datetime(2026, 8, 20, 8, 0, 0, tzinfo=UTC)
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Tests never inherit a developer's live-mode environment."""
+    """Tests never inherit a developer's live-mode environment.
+
+    Two mechanisms, because there are two ways one leaks in.
+
+    ``os.environ`` is stripped by prefix, as before. But ``Settings`` also reads
+    ``.env``, and that file is where a developer keeps real provider keys -- so
+    adding one silently changed what the suite exercised. It happened: storing a
+    Resend key made two demo tests fail, because an approved referral started
+    emailing on top of the crew notification and the assertion counted sends.
+
+    Stripping ever more prefixes would only defer that to the next key added.
+    So the file is taken out of scope entirely: a test run reads defaults and
+    what the test sets, never the machine it runs on.
+    """
     for key in list(os.environ):
         if key.startswith(("USE_FAKE", "GCP_", "GCS_", "VERTEX_", "FIRESTORE_")):
             monkeypatch.delenv(key, raising=False)
+
+    from firstdue.settings import Settings, clear_settings_cache
+
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+    clear_settings_cache()
 
 
 @pytest.fixture(autouse=True)

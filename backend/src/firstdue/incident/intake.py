@@ -342,7 +342,10 @@ class IntakeReader:
         public interface and that is the exact shape of a prompt injection.
         The screen fails *closed on the model*: if it could not run, no model
         call is made and the intake reports nothing, rather than a model being
-        handed unscreened text under time pressure.
+        handed unscreened text under time pressure. A live screen having an
+        outage arrives here as a verdict that says so and takes that same
+        branch -- it used to arrive as an exception nothing caught, so a Model
+        Armor outage did not degrade the intake, it took the request down.
         """
 
         def rejected(reason: str, *, screen: str = "", model_ref: str = "") -> IntakeReading:
@@ -365,7 +368,7 @@ class IntakeReader:
         findings: tuple[str, ...] = ()
         screened = False
         if self._screen is not None:
-            verdict = self._screen.inspect(text)
+            verdict = await self._screen.inspect(text)
             screen_name = verdict.screen
             findings = verdict.findings
             screened = verdict.blocked

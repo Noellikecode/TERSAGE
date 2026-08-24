@@ -41,6 +41,19 @@ google = [
   "google-cloud-modelarmor>=0.2,<1",       # the ingested-document screen
   "opentelemetry-sdk>=1.27,<2",
   "opentelemetry-exporter-gcp-trace>=1.7,<2",
+  # The two slow-loop watchers that have to look things up run a reasoning
+  # graph: decide what to read, notice what is ambiguous, ask again, stop.
+  # LangGraph is the *executor* for that graph, not the graph -- the nodes and
+  # the router are ordinary code in `agents/graphs/`, and a built-in driver
+  # runs the identical set when the package is absent. So these belong here
+  # beside the Google clients rather than in the base dependencies: fake mode,
+  # `make demo`, and the whole test suite must run without them installed.
+  "langgraph>=1.0,<2",
+  "langchain-core>=1.0,<2",
+  # Gemini for the planner's one job: choose which of a closed list of lookups
+  # to do next. It reaches Vertex AI, under the same project and
+  # service-account identity as every other model call in the fleet.
+  "langchain-google-vertexai>=3.0,<4",
 ]
 
 [project.scripts]
@@ -63,6 +76,14 @@ dev = [
   "google-genai>=2.0,<3",
   "google-cloud-firestore>=2.19,<3",
   "google-cloud-pubsub>=2.23,<3",
+  # Same argument, for the same reason. The reasoning graphs compile against
+  # LangGraph's `StateGraph` and the planner against `ChatVertexAI`, so both
+  # seams are type-checked against the real API rather than against an
+  # `ignore_missing_imports` hole -- and a release that moves either one breaks
+  # the type check rather than the first live pass over a district.
+  "langgraph>=1.0,<2",
+  "langchain-core>=1.0,<2",
+  "langchain-google-vertexai>=3.0,<4",
 ]
 
 [build-system]

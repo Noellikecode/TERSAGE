@@ -84,6 +84,20 @@
       },
       "observed_at": "2025-06-07T08:00:00+00:00",
       "record_ref": "inspection/sf-0621-clement/2025-0123"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "classification": "PUBLIC",
+      "document_text": "SYNTHETIC EXERCISE RECORD. Annual high-rise inspection at 415 Mission St. Standpipe system flow-tested at the roof manifold and at floors 20, 40 and 60. Fire pump exercised. Alarm and voice evacuation verified floor by floor. Stair pressurisation tested. No findings.",
+      "fields": {
+        "inspection_type": "high-rise-annual",
+        "outcome": "PASS",
+        "sprinklered": true,
+        "standpipe": true,
+        "stair_pressurisation": true
+      },
+      "observed_at": "2024-03-19T08:00:00+00:00",
+      "record_ref": "inspection/sf-0415-mission/2024-hr-annual"
     }
   ],
   "synthetic": true

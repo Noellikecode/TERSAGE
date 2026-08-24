@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import pytest
@@ -32,7 +33,10 @@ def test_district_stats_report_what_the_slow_loop_found(loaded: TestClient) -> N
 
     assert body["profiles"] > 0
     assert body["facts"] > 0
-    assert body["open_conflicts"] == 1
+    assert body["open_conflicts"] == 2
+    # Only the Hayes storey disagreement is high severity. The tower's
+    # floor-count ambiguity is a records-keeping difference, not a finding about
+    # the building, and it must not rank alongside one.
     assert body["high_severity_conflicts"] == 1
     assert body["queued_for_survey"] + body["dispatched"] > 0
     assert body["profiles_never_surveyed"] > 0
@@ -245,3 +249,117 @@ def test_a_survey_that_could_not_get_in_resolves_nothing(loaded: TestClient) -> 
     )
     after = loaded.get(f"{PREFIX}/buildings/{DISPUTED_ADDRESS_ID}").json()
     assert after["conflicts"][0]["status"] == "OPEN"
+
+
+def test_imagery_comes_back_as_bytes_and_never_as_a_signed_url(
+    loaded: TestClient,
+) -> None:
+    """The key stays server-side. A data URL is the whole point of the endpoint."""
+    response = loaded.get(f"{PREFIX}/buildings/{DISPUTED_ADDRESS_ID}/imagery")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["available"] is True
+    assert body["data_url"].startswith("data:image/svg+xml;base64,")
+    assert body["attribution"]
+
+    rendered = response.text
+    assert "maps.googleapis.com" not in rendered
+    assert "key=" not in rendered
+    assert "GOOGLE_MAPS_API_KEY" not in rendered
+
+
+def test_fake_mode_imagery_admits_in_the_picture_that_it_is_synthetic(
+    loaded: TestClient,
+) -> None:
+    body = loaded.get(f"{PREFIX}/buildings/{DISPUTED_ADDRESS_ID}/imagery").json()
+    assert body["provider"] == "synthetic"
+
+    svg = base64.b64decode(body["data_url"].split(",", 1)[1]).decode("utf-8")
+    assert "SYNTHETIC" in svg
+
+
+def test_imagery_for_an_unknown_address_refuses_rather_than_404s(loaded: TestClient) -> None:
+    """A 404 would render as a broken console; the refusal renders as a refusal."""
+    response = loaded.get(f"{PREFIX}/buildings/sf-nowhere-at-all/imagery")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["data_url"] == ""
+    assert body["unavailable_reason"]
+
+
+def test_fire_activity_is_regional_and_reports_the_city_separately(
+    loaded: TestClient,
+) -> None:
+    """The product decision, on the wire.
+
+    A city-only query returns nothing from VIIRS essentially always, so the
+    region is the subject and the city's own count travels beside it with the
+    sentence that makes a zero readable.
+    """
+    response = loaded.get(f"{PREFIX}/districts/{DISTRICT}/fire-activity")
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["available"] is True
+    assert body["regional_count"] > 0
+    assert body["in_city_count"] == 0
+    assert body["window_days"] == 5
+    # The box is on the answer, because a count means nothing without its area.
+    assert body["region"] == {"west": -124.5, "south": 36.5, "east": -119.5, "north": 40.5}
+    assert body["city"]["west"] == -122.55
+    assert "none inside the city" in body["summary"]
+    assert "375 m" in body["resolution_note"]
+    assert "not evidence that nothing is burning" in body["resolution_note"]
+
+
+def test_fake_mode_fire_activity_admits_in_the_data_that_it_is_synthetic(
+    loaded: TestClient,
+) -> None:
+    """An invented wildfire that did not say so is the worst failure here."""
+    body = loaded.get(f"{PREFIX}/districts/{DISTRICT}/fire-activity").json()
+
+    assert body["provider"] == "synthetic"
+    assert all(d["satellite"].startswith("SYNTHETIC") for d in body["detections"])
+    assert "no NASA endpoint was contacted" in body["attribution"]
+    assert "Nothing was observed" in body["summary"]
+
+
+def test_fire_weather_never_presents_itself_as_current_conditions(
+    loaded: TestClient,
+) -> None:
+    """NASA POWER is reanalysis. NWS remains the live source for wind."""
+    weather = loaded.get(f"{PREFIX}/districts/{DISTRICT}/fire-activity").json()["weather"]
+
+    assert weather["available"] is True
+    assert weather["window_start"] and weather["window_end"]
+    assert {r["parameter"] for r in weather["readings"]} == {"T2M", "RH2M", "WS10M"}
+    # Every value names the hour it describes, not the hour it was fetched.
+    assert all(r["observed_at"] for r in weather["readings"])
+    assert "reanalysis, not observation" in weather["caveat"]
+    assert "National Weather Service" in weather["caveat"]
+
+
+def test_fire_activity_for_an_unknown_district_refuses_rather_than_404s(
+    loaded: TestClient,
+) -> None:
+    """A 404 would render as a broken console; the refusal renders as a refusal."""
+    response = loaded.get(f"{PREFIX}/districts/sffd-district-nowhere/fire-activity")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["available"] is False
+    assert body["detections"] == []
+    assert body["unavailable_reason"]
+    assert body["weather"]["available"] is False
+
+
+def test_fire_activity_never_carries_a_provider_url(loaded: TestClient) -> None:
+    """FIRMS puts its map key in the request path, so a URL in the body is the key."""
+    rendered = loaded.get(f"{PREFIX}/districts/{DISTRICT}/fire-activity").text
+
+    assert "firms.modaps.eosdis.nasa.gov" not in rendered
+    assert "api/area/csv" not in rendered
+    assert "FIRMS_MAP_KEY" not in rendered

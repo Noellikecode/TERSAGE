@@ -101,13 +101,14 @@ TRIAGE_MAX_CHARS: Final[int] = 4_000
 #: The schema reference recorded on the triage span.
 TRIAGE_SCHEMA_REF: Final[str] = "firstdue.schemas.TriageResult"
 
-#: The triage contract. ``extract`` is required, so a model that answers at all
-#: has to answer the question it was asked.
-
-#: Deliberately narrow. Triage is asked whether the document *speaks to* an
-#: attribute, never what the attribute is -- a triage model that reported values
-#: would be a second, cheaper extractor nobody reviewed.
-#: The two answers triage may give. Compared exactly, after stripping.
+#: The triage contract, and deliberately narrow: triage is asked whether the
+#: document *speaks to* an attribute, never what the attribute is -- a triage
+#: model that reported values would be a second, cheaper extractor nobody
+#: reviewed.
+#:
+#: The two answers triage may give. Compared exactly, after stripping. There is
+#: no third answer and no field to carry one; see :data:`TRIAGE_PROMPT` for why
+#: one token is a tighter contract here than a JSON object was.
 TRIAGE_EXTRACT: Final[str] = "EXTRACT"
 TRIAGE_SKIP: Final[str] = "SKIP"
 

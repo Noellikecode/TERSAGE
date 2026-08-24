@@ -48,3 +48,6 @@ infra/terraform/**/backend.hcl
 *.tfstate
 *.tfstate.*
 tfplan
+
+# Local strategy notes, never published.
+CONTEXT.strategy.local.md

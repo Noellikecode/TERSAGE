@@ -10,8 +10,16 @@ still does what the in-memory version does.
 Run it with::
 
     STAGING_BASE_URL=https://firstdue-incident-....run.app \\
-    STAGING_TOKEN=$(gcloud auth print-identity-token) \\
+    STAGING_TOKEN=$(gcloud auth print-identity-token \\
+                      --audiences=https://firstdue-incident) \\
     make smoke-staging
+
+The audience is not optional and a bare user credential cannot supply it. The
+incident service verifies a console token against its own Cloud Run *custom
+audience*, so a token minted for anything else -- including the one
+``gcloud auth print-identity-token`` hands back by default, which carries
+gcloud's own client id -- is rejected before any endpoint here runs. Choosing an
+audience requires a service account or an impersonated one.
 
 Nothing here writes anything a human has to clean up: the incident it opens is
 closed in a finally block, and the referral it exercises is read, not filed.

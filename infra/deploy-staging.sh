@@ -104,6 +104,11 @@ deployed ${TAG}
 
 smoke test:
   STAGING_BASE_URL=${INCIDENT_URL} \\
-  STAGING_TOKEN=\$(gcloud auth print-identity-token) \\
+  STAGING_TOKEN=\$(gcloud auth print-identity-token --audiences=https://firstdue-incident) \\
   make smoke-staging
+
+  The audience is not optional. The incident service verifies a console token
+  against its own custom audience, so a token minted for anything else is
+  rejected before any endpoint runs. --audiences needs a service account or an
+  impersonated one; a bare user credential cannot choose an audience.
 NEXT

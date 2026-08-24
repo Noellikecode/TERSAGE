@@ -203,6 +203,19 @@
       },
       "observed_at": "2024-03-03T08:00:00+00:00",
       "record_ref": "parcel/1440-025"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "classification": "PUBLIC",
+      "document_text": null,
+      "fields": {
+        "parcel": "3717-143",
+        "block": "3717",
+        "lot": "143",
+        "zoning": "C-3-O(SD)"
+      },
+      "observed_at": "2024-01-08T08:00:00+00:00",
+      "record_ref": "parcel/3717-143"
     }
   ],
   "synthetic": true
