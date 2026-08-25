@@ -183,3 +183,38 @@ def test_an_absent_or_unusable_area_falls_back_rather_than_guessing() -> None:
 
     for bad in (None, "", "not-a-number", 0, -5):
         assert _footprint_of_area(bad, DEFAULT_FOOTPRINT) == DEFAULT_FOOTPRINT
+
+
+def test_staleness_decides_before_a_metered_request_is_spent() -> None:
+    """Filter first, fetch second.
+
+    Fetching every candidate and filtering after is the same answer and a Solar
+    request per structure in the district -- 135 calls to re-derive the handful
+    whose records moved since the last flight, on every boot.
+    """
+    import inspect
+
+    from firstdue.agents import geometry_watcher
+
+    source = inspect.getsource(geometry_watcher.GeometryWatcher.poll)
+    stale_at = source.index("geometry_is_stale(profile)")
+    fetch_at = source.index("fetch(address_id=address_id)")
+    assert stale_at < fetch_at, "point sources must be asked only about stale profiles"
+
+
+def test_the_seeded_flight_predates_the_permit_that_disputes_it() -> None:
+    """Otherwise `geometry-watcher` skips the district on every pass.
+
+    The seed used to date its spec five days *after* the newest
+    geometry-invalidating fact, so no seeded profile was ever stale and the
+    agent that measures a building never ran in the demo at all. The model on
+    screen was the seed's own literal under a caption reading "measured height".
+    """
+    from firstdue.agents.geometry_watcher import geometry_is_stale
+    from firstdue.demo.seed import load_seed, profiles_from_seed
+    from firstdue.settings import get_settings
+
+    settings = get_settings()
+    profiles = profiles_from_seed(load_seed(settings.demo_state_dir))
+    stale = [p.address_id for p in profiles if geometry_is_stale(p)]
+    assert stale, "no seeded profile is stale, so the watcher will skip every one"

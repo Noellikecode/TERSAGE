@@ -317,9 +317,21 @@ def _build_profile(
         )
 
     total_height = sum(level.height_m for level in levels)
+    # The last flight, and it predates the permit that disputes it.
+    #
+    # This used to be `epoch - 400 days`, five days *after* the newest
+    # geometry-invalidating fact -- so `geometry_is_stale` was false for every
+    # seeded profile and `geometry-watcher` skipped the whole district on every
+    # pass. The massing model on screen was this literal, and the agent that is
+    # supposed to measure a building never ran in the demo at all.
+    #
+    # 420 days puts it before the 2025-07 permit, which is the sequence the
+    # staleness rule exists for: a permit filed after the last flight describes
+    # work the flight could not have seen, so the spec is re-derived. The demo
+    # still opens with a model; the first pass replaces it with a measured one.
     geometry = GeometrySpec(
         address_id=address.address_id,
-        generated_at=epoch - timedelta(days=400),
+        generated_at=epoch - timedelta(days=420),
         footprint=((0.0, 0.0), (11.5, 0.0), (11.5, 22.0), (0.0, 22.0)),
         levels=tuple(levels),
         roof_segments=(

@@ -266,11 +266,23 @@ class GeometryWatcher:
         # target list is empty against real data and full against a fixture --
         # which is the second half of why this agent measured nothing live.
         if address_ids:
-            targets = sorted(address_ids)
+            candidates = sorted(address_ids)
         else:
-            targets = sorted(
+            candidates = sorted(
                 p.address_id for p in await self._profiles.list_by_district(district_id)
             )
+
+        # Staleness decides *before* any point source is asked. Fetching first
+        # and filtering after is the same answer and a metered request per
+        # structure in the district: a Solar call for all 135 to re-derive the
+        # two whose records moved since the last flight.
+        targets: list[str] = []
+        for address_id in candidates:
+            profile = await self._profiles.get(address_id)
+            if profile is None or profile.district_id != district_id:
+                continue
+            if geometry_is_stale(profile):
+                targets.append(address_id)
 
         # Solar and 3DEP answer about **one address**, and asking them about a
         # district raises `address_required` before a request is even made.
@@ -310,10 +322,7 @@ class GeometryWatcher:
 
         for address_id in targets:
             profile = await self._profiles.get(address_id)
-            if profile is None or profile.district_id != district_id:
-                continue
-            was_stale = geometry_is_stale(profile)
-            if not was_stale:
+            if profile is None:  # pragma: no cover - filtered above
                 continue
             if profile.geometry is not None:
                 invalidated.append(address_id)
