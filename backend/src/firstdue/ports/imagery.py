@@ -195,9 +195,7 @@ class ImageryClient(Protocol):
         """
         ...
 
-    async def fetch(
-        self, *, address_id: str, view: ImageryView = "street"
-    ) -> BuildingImagery:
+    async def fetch(self, *, address_id: str, view: ImageryView = "street") -> BuildingImagery:
         """Return imagery for one address, from one direction.
 
         Never raises for a missing address, an unconfigured key, a dead

@@ -72,9 +72,7 @@ class FakeImageryClient:
         self._available = available
         self._city = city
 
-    async def fetch(
-        self, *, address_id: str, view: ImageryView = "street"
-    ) -> BuildingImagery:
+    async def fetch(self, *, address_id: str, view: ImageryView = "street") -> BuildingImagery:
         address = self._city.get_address(address_id)
         if address is None:
             return BuildingImagery.refused(address_id, unavailable("address_unresolved"))
@@ -84,7 +82,7 @@ class FakeImageryClient:
         # The two views are drawn differently on purpose. A placeholder that
         # looked the same from the kerb and from above would let somebody
         # believe the aerial panel was showing them a roof.
-        digest = hashlib.sha256(f"{view}:{address_id}".encode("utf-8")).digest()
+        digest = hashlib.sha256(f"{view}:{address_id}".encode()).digest()
         svg = (
             _render_aerial(digest, display=address.display)
             if view == "aerial"

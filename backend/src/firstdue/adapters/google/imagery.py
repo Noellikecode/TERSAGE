@@ -121,9 +121,7 @@ class UnconfiguredImageryClient:
 
     provider_label: Final[str] = ""
 
-    async def fetch(
-        self, *, address_id: str, view: ImageryView = "street"
-    ) -> BuildingImagery:
+    async def fetch(self, *, address_id: str, view: ImageryView = "street") -> BuildingImagery:
         # Every view is equally unconfigured without a key.
         return BuildingImagery.refused(address_id, unavailable("unconfigured"))
 
@@ -175,9 +173,7 @@ class GoogleImageryClient:
         self.cache_hits = 0
         self.upstream_calls = 0
 
-    async def fetch(
-        self, *, address_id: str, view: ImageryView = "street"
-    ) -> BuildingImagery:
+    async def fetch(self, *, address_id: str, view: ImageryView = "street") -> BuildingImagery:
         now = self._clock.now()
         cache_key = address_id if view == "street" else f"{address_id}#{view}"
         cached = self._cache.get(cache_key)
