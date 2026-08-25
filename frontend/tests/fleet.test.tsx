@@ -1,5 +1,5 @@
 /**
- * The fleet panel: nine agents, nine visuals, nine terminals.
+ * The fleet panel: nine agents as rows, and one pane about the selected one.
  *
  * The failures these prevent are specific. A rail where every agent looks the
  * same tells an officer nothing about which one is doing what. A terminal that
@@ -8,9 +8,13 @@
  * empty one, because somebody will believe it. And a terminal that prints a
  * document breaks the one guarantee this system makes about the records it
  * reads: a record that never held a document cannot leak one.
+ *
+ * The panel draws one agent's visual and terminal at a time, so a test that
+ * wants a particular agent's says so with `select`. That is the assertion, not
+ * a workaround: the pane is supposed to show exactly the agent asked for.
  */
 
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
 import { AgentRail } from '@/components/standby/AgentRail';
@@ -100,16 +104,20 @@ function renderFleet(overrides: Partial<Parameters<typeof AgentRail>[0]> = {}) {
   );
 }
 
+/** Pin an agent in the detail pane, the way a click does. */
+function select(agentId: string) {
+  fireEvent.click(screen.getByTestId(`fleet-row-${agentId}`));
+}
+
 describe('one panel shows one loop', () => {
   it('lists no incident agent in standby: they are not idle, they are not running', () => {
     renderFleet();
 
     for (const id of SLOW_IDS) {
-      expect(screen.getByTestId(`fleet-visual-${id}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`fleet-row-${id}`)).toBeInTheDocument();
     }
     for (const id of INCIDENT_IDS) {
-      expect(screen.queryByTestId(`fleet-visual-${id}`)).not.toBeInTheDocument();
-      expect(screen.queryByTestId(`fleet-terminal-${id}`)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`fleet-row-${id}`)).not.toBeInTheDocument();
     }
   });
 
@@ -117,25 +125,26 @@ describe('one panel shows one loop', () => {
     renderFleet({ loop: 'INCIDENT', incident: INCIDENT });
 
     for (const id of INCIDENT_IDS) {
-      expect(screen.getByTestId(`fleet-visual-${id}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`fleet-row-${id}`)).toBeInTheDocument();
     }
     for (const id of SLOW_IDS) {
-      expect(screen.queryByTestId(`fleet-visual-${id}`)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`fleet-row-${id}`)).not.toBeInTheDocument();
     }
     expect(screen.getByLabelText('Incident fleet')).toBeInTheDocument();
   });
 
-  it('shows only the slow loop when asked for it, in full cards', () => {
+  it('shows only the slow loop when asked for it, and every agent has a full pane', () => {
     renderFleet({ loop: 'SLOW', incident: INCIDENT });
 
-    // The slow loop does not stop when a fire starts. It gets a column, not a
-    // row of chips: every agent still carries its visual and its terminal.
+    // The slow loop does not stop when a fire starts. Every agent is listed and
+    // every one of them still has its visual and its terminal when asked for.
     for (const id of SLOW_IDS) {
+      select(id);
       expect(screen.getByTestId(`fleet-visual-${id}`)).toBeInTheDocument();
       expect(screen.getByTestId(`fleet-terminal-${id}`)).toBeInTheDocument();
     }
     for (const id of INCIDENT_IDS) {
-      expect(screen.queryByTestId(`fleet-visual-${id}`)).not.toBeInTheDocument();
+      expect(screen.queryByTestId(`fleet-row-${id}`)).not.toBeInTheDocument();
     }
   });
 
@@ -144,30 +153,30 @@ describe('one panel shows one loop', () => {
     // the filter were an id list it would leak into standby; it does not.
     const newcomer = agent({ agent_id: 'evacuation-router', loop: 'INCIDENT' });
     renderFleet({ agents: [...FLEET, newcomer] });
-    expect(screen.queryByTestId('fleet-visual-evacuation-router')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fleet-row-evacuation-router')).not.toBeInTheDocument();
 
     // And the same agent re-published into the slow loop is listed in standby,
     // with no change to this component.
     renderFleet({ agents: [agent({ agent_id: 'evacuation-router', loop: 'SLOW' })] });
-    expect(screen.getByTestId('fleet-visual-evacuation-router')).toBeInTheDocument();
+    expect(screen.getByTestId('fleet-row-evacuation-router')).toBeInTheDocument();
   });
 
-  it('lays the cards out from the width it is given, not from a prop', () => {
+  it('draws one row per agent and exactly one detail pane', () => {
     renderFleet();
-    const list = screen.getByLabelText('Fleet');
-    // `auto-fit` gets two or three columns as the main content area and one in
-    // a 400px column, without the caller being asked which.
-    expect(list.style.gridTemplateColumns).toContain('auto-fit');
-    expect(list.style.display).toBe('grid');
+    expect(within(screen.getByLabelText('Fleet')).getAllByRole('button')).toHaveLength(
+      SLOW_IDS.length,
+    );
+    expect(screen.getAllByTestId('fleet-detail')).toHaveLength(1);
   });
 });
 
 describe('every agent gets its own visual', () => {
   it('draws a visual for each of the nine, and no two are the same drawing', () => {
     renderFleet({ loop: 'SLOW', geometry: GEOMETRY_SCANNED, sources: STATS.sources });
-    const slowKinds = SLOW_IDS.map((id) =>
-      screen.getByTestId(`fleet-visual-${id}`).getAttribute('data-visual'),
-    );
+    const slowKinds = SLOW_IDS.map((id) => {
+      select(id);
+      return screen.getByTestId(`fleet-visual-${id}`).getAttribute('data-visual');
+    });
     cleanup();
 
     renderFleet({
@@ -176,9 +185,10 @@ describe('every agent gets its own visual', () => {
       geometry: GEOMETRY_SCANNED,
       sources: STATS.sources,
     });
-    const incidentKinds = INCIDENT_IDS.map((id) =>
-      screen.getByTestId(`fleet-visual-${id}`).getAttribute('data-visual'),
-    );
+    const incidentKinds = INCIDENT_IDS.map((id) => {
+      select(id);
+      return screen.getByTestId(`fleet-visual-${id}`).getAttribute('data-visual');
+    });
 
     const kinds = [...slowKinds, ...incidentKinds];
     expect(kinds).toHaveLength(9);
@@ -189,6 +199,7 @@ describe('every agent gets its own visual', () => {
 
   it('reads the ranking weights the ranker actually uses', () => {
     renderFleet();
+    select('structure-watch');
     const visual = screen.getByTestId('fleet-visual-structure-watch');
     expect(visual).toHaveTextContent('conflict 0.40');
     expect(visual).toHaveTextContent('decay 0.25');
@@ -198,6 +209,7 @@ describe('every agent gets its own visual', () => {
 
   it('reports registry reachability from the district source health', () => {
     renderFleet({ sources: STATS.sources });
+    select('hazard-watcher');
     // tier-ii-confidential is UNCONFIGURED and unavailable in the fixture; the
     // other three registries report no health at all, and say so.
     expect(screen.getByTestId('fleet-visual-hazard-watcher')).toHaveTextContent(
@@ -207,12 +219,14 @@ describe('every agent gets its own visual', () => {
 
   it('says a visual has no data rather than drawing a zero', () => {
     renderFleet();
+    select('geometry-watcher');
     expect(screen.getByTestId('fleet-visual-geometry-watcher')).toHaveTextContent(
       /No derived geometry/i,
     );
     cleanup();
 
     renderFleet({ loop: 'INCIDENT', incident: INCIDENT });
+    select('sensor-fusion');
     expect(screen.getByTestId('fleet-visual-sensor-fusion')).toHaveTextContent(
       /No structure loaded/i,
     );
@@ -220,6 +234,7 @@ describe('every agent gets its own visual', () => {
 
   it('shows face coverage per face when a structure is on screen', () => {
     renderFleet({ loop: 'INCIDENT', incident: INCIDENT, geometry: GEOMETRY_SCANNED });
+    select('sensor-fusion');
     expect(screen.getByTestId('fleet-visual-sensor-fusion')).toHaveTextContent(
       '1 of 4 faces scanned',
     );
@@ -227,6 +242,7 @@ describe('every agent gets its own visual', () => {
 
   it('shows the interceptor fanning out to the agents the intake woke', () => {
     renderFleet({ loop: 'INCIDENT', incident: { ...INCIDENT, intake: INTAKE } });
+    select('incident-interceptor');
     const visual = screen.getByTestId('fleet-visual-incident-interceptor');
     expect(visual).toHaveTextContent('1 agent woken');
     expect(visual).toHaveTextContent('sensor-fusion');
@@ -236,18 +252,24 @@ describe('every agent gets its own visual', () => {
 describe('the reasoning terminal', () => {
   it('shows only that agent’s activity', () => {
     renderFleet();
-    const records = screen.getByTestId('fleet-terminal-records-watcher');
-    const clerk = screen.getByTestId('fleet-terminal-referral-clerk');
 
     // The injection block belongs to the records watcher and to nobody else.
+    select('records-watcher');
+    const records = screen.getByTestId('fleet-terminal-records-watcher');
     expect(within(records).getByText(/injection blocked/)).toBeInTheDocument();
-    expect(clerk).not.toHaveTextContent('injection blocked');
-    expect(clerk).toHaveTextContent('external write');
     expect(records).not.toHaveTextContent('external write');
+
+    select('referral-clerk');
+    const clerk = screen.getByTestId('fleet-terminal-referral-clerk');
+    expect(clerk).toHaveTextContent('external write');
+    expect(clerk).not.toHaveTextContent('injection blocked');
+    // And the one that was showing is gone, rather than both being on screen.
+    expect(screen.queryByTestId('fleet-terminal-records-watcher')).not.toBeInTheDocument();
   });
 
   it('renders the decision, not a document, for a policy line', () => {
     renderFleet({ loop: 'INCIDENT', incident: INCIDENT });
+    select('agency-notifier');
     const notifier = screen.getByTestId('fleet-terminal-agency-notifier');
     expect(notifier).toHaveTextContent('require approval');
     expect(notifier).toHaveTextContent('approval.required');
@@ -255,6 +277,7 @@ describe('the reasoning terminal', () => {
 
   it('says nothing happened rather than inventing a line', () => {
     renderFleet();
+    select('hazard-watcher');
     const idle = screen.getByTestId('fleet-terminal-hazard-watcher');
     expect(idle).toHaveTextContent('no activity this session');
     expect(idle.querySelectorAll('li')).toHaveLength(1);
@@ -275,11 +298,13 @@ describe('the reasoning terminal', () => {
     };
     renderFleet({ events: [...EVENTS, leaky] });
 
-    const terminals = document.querySelectorAll('[data-testid^="fleet-terminal-"]');
-    expect(terminals.length).toBeGreaterThan(0);
-    for (const terminal of terminals) {
+    // Every agent's pane, not just the one that happens to open.
+    for (const id of SLOW_IDS) {
+      select(id);
+      const terminal = screen.getByTestId(`fleet-terminal-${id}`);
       expect(terminal.textContent ?? '').not.toContain('Ignore previous instructions');
     }
+    select('records-watcher');
     const records = screen.getByTestId('fleet-terminal-records-watcher');
     // The identifier and the field name survive; the value does not.
     expect(records).toHaveTextContent('record_ref=permit/2018-04871');
@@ -288,10 +313,12 @@ describe('the reasoning terminal', () => {
 
   it('gives every terminal a label a screen reader can find it by', () => {
     renderFleet();
+    select('records-watcher');
     expect(screen.getByLabelText('records-watcher reasoning terminal')).toBeInTheDocument();
     cleanup();
 
     renderFleet({ loop: 'INCIDENT', incident: INCIDENT });
+    select('incident-recorder');
     expect(screen.getByLabelText('incident-recorder reasoning terminal')).toBeInTheDocument();
   });
 });
@@ -302,61 +329,91 @@ describe('identity and state', () => {
       s.agent_id === 'structure-watch' ? { ...s, pinned_version: '0.9.0' } : s,
     );
     renderFleet({ subscriptions: drifted });
+    select('structure-watch');
 
     expect(screen.getByText(/@0.9.0/)).toBeInTheDocument();
     expect(screen.getByText(/catalog has 1.0.0/)).toBeInTheDocument();
   });
 
-  it('names every card for a screen reader, and never by colour alone', () => {
+  it('states every row’s state in text, never by colour alone', () => {
     renderFleet();
     // "active", not "running": nothing told this console what the agent is
     // doing right now, only that it recorded work this session.
-    const card = screen.getByRole('listitem', { name: /^records-watcher, active/ });
-    expect(within(card).getByText('active')).toBeInTheDocument();
-    expect(screen.getByRole('listitem', { name: /^hazard-watcher, idle/ })).toBeInTheDocument();
+    expect(screen.getByTestId('fleet-row-records-watcher')).toHaveTextContent('active');
+    expect(screen.getByTestId('fleet-row-records-watcher')).toHaveAttribute(
+      'data-state',
+      'active',
+    );
+    expect(screen.getByTestId('fleet-row-hazard-watcher')).toHaveTextContent('idle');
   });
 
   it('says "running" only when a caller reports what the agent is doing now', () => {
     renderFleet({
       activity: { 'hazard-watcher': { throughput: 3, current: 'Polling epa-frs' } },
     });
-    const card = screen.getByRole('listitem', { name: /^hazard-watcher, running/ });
-    expect(within(card).getByText('Polling epa-frs')).toBeInTheDocument();
-    expect(within(card).getByText('3 runs')).toBeInTheDocument();
+    const row = screen.getByTestId('fleet-row-hazard-watcher');
+    expect(row).toHaveAttribute('data-state', 'running');
+    expect(row).toHaveTextContent('3 runs');
+
+    select('hazard-watcher');
+    expect(screen.getByText('Polling epa-frs')).toBeInTheDocument();
   });
 
-  it('keeps superseded agents listed and visibly retired', () => {
+  it('opens on a working agent rather than on an idle one', () => {
+    // Never an empty pane, and never one showing something that has done
+    // nothing while an agent beside it is working.
+    renderFleet();
+    expect(screen.getByTestId('fleet-detail-records-watcher')).toBeInTheDocument();
+  });
+
+  it('holds the selection after the pointer leaves, so it survives being talked over', () => {
+    renderFleet();
+    select('referral-clerk');
+    fireEvent.mouseEnter(screen.getByTestId('fleet-row-hazard-watcher'));
+    expect(screen.getByTestId('fleet-detail-hazard-watcher')).toBeInTheDocument();
+
+    // Pointer leaves the list: the pinned agent comes back, not an empty pane.
+    fireEvent.mouseLeave(screen.getByLabelText('Fleet'));
+    expect(screen.getByTestId('fleet-detail-referral-clerk')).toBeInTheDocument();
+  });
+
+  it('reaches every agent by keyboard, and previews on focus', () => {
+    renderFleet();
+    fireEvent.focus(screen.getByTestId('fleet-row-geometry-watcher'));
+    expect(screen.getByTestId('fleet-detail-geometry-watcher')).toBeInTheDocument();
+  });
+
+  it('keeps superseded agents listed and visibly retired, and explains them once', () => {
     const retired = agent({
       agent_id: 'survey-ranker',
       deprecated_at: '2026-08-21T12:00:00+00:00',
     });
     renderFleet({ agents: [...FLEET, retired] });
 
-    const group = screen.getByTestId('superseded-agents');
+    fireEvent.click(screen.getByTestId('superseded-agents'));
+    const group = screen.getByTestId('fleet-detail-superseded');
     expect(group).toHaveTextContent('survey-ranker @1.0.0');
-    // Retired agents are catalogued, not scheduled: no card, no terminal.
+    // The explanation is long, and it belongs on the screen exactly once.
+    expect(screen.getAllByText(/names the agent version that produced it/)).toHaveLength(1);
+    // Retired agents are catalogued, not scheduled: no row, no terminal.
+    expect(screen.queryByTestId('fleet-row-survey-ranker')).not.toBeInTheDocument();
     expect(screen.queryByTestId('fleet-terminal-survey-ranker')).not.toBeInTheDocument();
   });
 });
 
 describe('a fire does not stop the slow loop', () => {
-  it('gives the slow loop its own column of full cards during an incident', () => {
+  it('lists every slow agent, with its pane, during an incident', () => {
     renderFleet({ loop: 'SLOW', incident: INCIDENT });
 
-    // Not a strip of chips: a rail that shrank would say the slow loop had
-    // stopped, and it has not -- it is still writing facts while the fire
-    // burns, one column over.
+    // A panel that vanished, or that dropped agents, would say the slow loop
+    // had stopped. It has not -- it is still writing facts while the fire
+    // burns, and every one of them is still reachable.
     const list = screen.getByLabelText('Fleet');
     for (const id of SLOW_IDS) {
-      expect(within(list).getByTestId(`fleet-visual-${id}`)).toBeInTheDocument();
+      expect(within(list).getByTestId(`fleet-row-${id}`)).toBeInTheDocument();
+      select(id);
+      expect(screen.getByTestId(`fleet-detail-${id}`)).toBeInTheDocument();
     }
-    expect(screen.queryByLabelText('Slow-loop fleet, still running')).not.toBeInTheDocument();
-  });
-
-  it('still honours a caller that asks for the compressed strip', () => {
-    renderFleet({ compressed: true, loop: 'SLOW' });
-    expect(screen.getByLabelText('Slow-loop fleet, still running')).toBeInTheDocument();
-    expect(screen.queryByTestId('fleet-visual-records-watcher')).not.toBeInTheDocument();
   });
 });
 
@@ -526,5 +583,23 @@ describe('the terminal types the newest line and then stops', () => {
     const box = screen.getByTestId('fleet-terminal-hazard-watcher');
     expect(box).toHaveTextContent('no activity this session');
     expect(box.querySelectorAll('li')).toHaveLength(1);
+  });
+});
+
+describe('the count on the heading matches the rows under it', () => {
+  it('counts what is scheduled, not what is catalogued', () => {
+    // A superseded agent is listed so an old brief stays readable. It is not
+    // running, and counting it puts a number on the heading that the rows
+    // below it contradict -- which is how "6 acting now" appeared over four
+    // agents.
+    const retired = agent({
+      agent_id: 'survey-ranker',
+      deprecated_at: '2026-08-21T12:00:00+00:00',
+    });
+    renderFleet({ agents: [...FLEET, retired] });
+
+    const rows = screen.getAllByTestId(/^fleet-row-/);
+    expect(rows).toHaveLength(SLOW_IDS.length);
+    expect(screen.getByTestId('superseded-agents')).toHaveTextContent('1 superseded');
   });
 });

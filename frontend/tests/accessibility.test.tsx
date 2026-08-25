@@ -114,16 +114,15 @@ describe('landmarks and structure', () => {
 
   it('names each standby region after its own heading', () => {
     renderConsole();
-    // Standby is three columns now: the slow loop split left and right, and
-    // the region between them. Each column has a heading of its own, because
+    // Standby is two columns: the fleet on the left and the region beside it.
+    // Each region has a heading of its own, because
     // two regions with the same name are two regions a screen-reader user
-    // cannot tell apart.
+    // cannot tell apart. The slow loop is one region now, not two halves.
     for (const name of [
       'District readiness',
       'Regional fire activity',
       'Ranked for survey',
       'Slow loop',
-      'Slow loop, continued',
     ]) {
       const region = screen.getByRole('region', { name });
       const labelledBy = region.getAttribute('aria-labelledby');

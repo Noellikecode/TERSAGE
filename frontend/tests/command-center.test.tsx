@@ -264,16 +264,21 @@ describe('standby', () => {
     expect(screen.getAllByText('@1.0.0').length).toBeGreaterThan(0);
   });
 
-  it('offers every ranked structure as a chip, in rank order', () => {
+  it('groups ranked structures by score, in rank order, without numbering them', () => {
     renderConsole();
     const strip = screen.getByLabelText('Ranked structures');
-    const chips = Array.from(strip.children) as HTMLElement[];
-    expect(chips).toHaveLength(2);
-    // The rank is a backend value and stays; the score and the rule text went
-    // with the queue panel rather than being restated without their reasons.
-    expect(within(chips[0]!).getByText('1')).toBeInTheDocument();
-    expect(within(chips[0]!).getByRole('button', { name: ADDRESS })).toBeInTheDocument();
-    expect(within(chips[1]!).getByRole('button', { name: 'sf-1215-fell' })).toBeInTheDocument();
+    const bands = Array.from(strip.children) as HTMLElement[];
+    // Two structures, two distinct scores, so two bands of one.
+    expect(bands).toHaveLength(2);
+    expect(within(bands[0]!).getByText('0.87')).toBeInTheDocument();
+    expect(within(bands[0]!).getByRole('button', { name: ADDRESS })).toBeInTheDocument();
+    expect(within(bands[1]!).getByText('0.42')).toBeInTheDocument();
+    expect(within(bands[1]!).getByRole('button', { name: 'sf-1215-fell' })).toBeInTheDocument();
+
+    // No rank number. The ranker produces a handful of scores and a long tie
+    // at the bottom; a number on every row claims an order inside that tie.
+    expect(within(bands[0]!).queryByText('1')).not.toBeInTheDocument();
+    // The rule reads as words; the raw id belongs to the agent's own panel.
     expect(screen.queryByText('rank.open-conflict-severity')).not.toBeInTheDocument();
   });
 
@@ -296,73 +301,61 @@ describe('the layout', () => {
     expect(within(bar).getByText('Structures')).toBeInTheDocument();
   });
 
-  it('gives standby the same three columns an incident uses', () => {
+  it('gives standby the same shape an incident uses: fleet, then the region', () => {
     renderConsole();
-    // Two fleet columns flanking, both the slow loop, and the region between
-    // them. The shape does not change at dispatch, so an officer does not
-    // re-learn the screen at the moment a fire starts.
+    // One fleet column, then everything else. The shape does not change at
+    // dispatch, so an officer does not re-learn the screen at the moment a fire
+    // starts -- only which loop the column is showing.
     const columns = screen.getAllByRole('region', { name: /loop/i });
-    expect(columns).toHaveLength(2);
+    expect(columns).toHaveLength(1);
 
-    const [left, right] = columns as [HTMLElement, HTMLElement];
+    const [fleet] = columns as [HTMLElement];
     const activity = screen.getByRole('region', { name: 'Regional fire activity' });
     const structures = screen.getByRole('region', { name: 'Ranked for survey' });
 
-    expect(left.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(fleet.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       activity.compareDocumentPosition(structures) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(structures.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('splits the slow loop across the two columns, in catalog order, without repeating a card', () => {
-    // The panel scopes itself by loop, and both standby columns are the same
-    // loop -- so the layout hands each an explicit half. The fixture publishes
-    // one slow agent, which lands on the left; the right column says where the
-    // fleet went rather than falling through to "empty catalog", which would be
-    // true of the catalog and false of the column.
+  it('gives the whole slow loop one column, never a half', () => {
+    // The loop used to be cut down the middle across two flanks. One panel owns
+    // one selection, so two panels would mean two panes for one fleet -- and a
+    // column holding half the fleet attributes shared write targets against
+    // half the fleet, which is how one agent's work surfaces in another's box.
     renderConsole();
-    const [left, right] = screen.getAllByRole('region', { name: /loop/i }) as [
-      HTMLElement,
-      HTMLElement,
-    ];
-    expect(left).toHaveAccessibleName('Slow loop');
-    expect(right).toHaveAccessibleName('Slow loop, continued');
+    const [fleet] = screen.getAllByRole('region', { name: /loop/i }) as [HTMLElement];
+    expect(fleet).toHaveAccessibleName('Slow loop');
 
-    expect(within(left).getAllByText(/records-watcher/).length).toBeGreaterThan(0);
-    expect(within(right).queryByText(/records-watcher/)).not.toBeInTheDocument();
-    expect(
-      within(right).getByText(/slow-loop agents are shown on the left/),
-    ).toBeInTheDocument();
-    expect(within(right).queryByText(/empty catalog/)).not.toBeInTheDocument();
+    expect(within(fleet).getAllByText(/records-watcher/).length).toBeGreaterThan(0);
+    expect(within(fleet).queryByText(/empty catalog/)).not.toBeInTheDocument();
 
-    // Neither column claims the incident loop, which is not running.
-    expect(within(left).queryByText(/incident-controller/)).not.toBeInTheDocument();
-    expect(within(right).queryByText(/incident-controller/)).not.toBeInTheDocument();
+    // It does not claim the incident loop, which is not running.
+    expect(within(fleet).queryByText(/incident-controller/)).not.toBeInTheDocument();
   });
 
-  it('cuts a real slow fleet in half, left column first', () => {
+  it('lists a real slow fleet whole, in catalog order', () => {
     const slow = ['a', 'b', 'c', 'd', 'e'].map((id) => ({
       ...AGENTS[0]!,
       agent_id: `slow-${id}`,
       ref: `slow-${id}@1.0.0`,
     }));
     renderConsole({ initialAgents: [...slow, AGENTS[1]!] });
-    const [left, right] = screen.getAllByRole('region', { name: /loop/i }) as [
-      HTMLElement,
-      HTMLElement,
-    ];
-    // Five agents split three/two, in the order the registry published them.
-    for (const id of ['slow-a', 'slow-b', 'slow-c']) {
-      expect(within(left).getAllByText(new RegExp(id)).length).toBeGreaterThan(0);
-      expect(within(right).queryByText(new RegExp(`${id}\\b`))).not.toBeInTheDocument();
-    }
-    for (const id of ['slow-d', 'slow-e']) {
-      expect(within(right).getAllByText(new RegExp(id)).length).toBeGreaterThan(0);
-      expect(within(left).queryByText(new RegExp(`${id}\\b`))).not.toBeInTheDocument();
-    }
-    expect(left).toHaveTextContent('3 of 5');
-    expect(right).toHaveTextContent('2 of 5');
+    const [fleet] = screen.getAllByRole('region', { name: /loop/i }) as [HTMLElement];
+
+    // All five, in the order the registry published them. Catalog order and not
+    // activity: a row that moved when its agent wrote a fact would be
+    // unreadable at exactly the moment it was worth reading.
+    const rows = within(fleet).getAllByTestId(/^fleet-row-slow-/);
+    expect(rows.map((row) => row.getAttribute('data-testid'))).toEqual([
+      'fleet-row-slow-a',
+      'fleet-row-slow-b',
+      'fleet-row-slow-c',
+      'fleet-row-slow-d',
+      'fleet-row-slow-e',
+    ]);
+    expect(fleet).toHaveTextContent('5 agents');
   });
 
   it('keeps the massing model out of standby until a structure is selected', async () => {
@@ -376,9 +369,9 @@ describe('the layout', () => {
     // The camera views belong to the model wherever it is rendered.
     const model = screen.getByRole('region', { name: 'Massing model' });
     expect(within(model).getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument();
-    // The fleet columns did not go anywhere to make room for it: the structure
-    // opens inside the middle column, under the ranked strip.
-    expect(screen.getAllByRole('region', { name: /loop/i })).toHaveLength(2);
+    // The fleet column did not go anywhere to make room for it: the structure
+    // opens in the column beside it, under the ranked strip.
+    expect(screen.getAllByRole('region', { name: /loop/i })).toHaveLength(1);
     expect(
       screen
         .getByRole('region', { name: 'Ranked for survey' })
@@ -668,22 +661,19 @@ describe('the dispatch transition', () => {
     expect(offscreen).toHaveTextContent(/agents/);
   });
 
-  it('reorganises into three columns: incident fleet, structure, incident fleet', async () => {
+  it('reorganises at dispatch: the incident fleet, then the structure', async () => {
     await dispatch();
     const columns = screen.getAllByRole('region', { name: /loop/i });
-    expect(columns).toHaveLength(2);
+    expect(columns).toHaveLength(1);
 
-    const [incidentFleet, continuedFleet] = columns as [HTMLElement, HTMLElement];
-    // The left column carries the agents acting right now.
+    const [incidentFleet] = columns as [HTMLElement];
+    // The column carries the agents acting right now, whole and unsplit.
     expect(within(incidentFleet).getAllByText(/incident-controller/).length).toBeGreaterThan(0);
+    // Not the slow loop: that leaves the screen at dispatch and says so in a
+    // line of its own, which the test below this one pins.
     expect(within(incidentFleet).queryByText(/records-watcher/)).not.toBeInTheDocument();
-    // Both flanking columns now carry the incident loop, split in catalog
-    // order. Neither carries a slow-loop agent.
-    expect(within(continuedFleet).queryByText(/records-watcher/)).not.toBeInTheDocument();
-    // The right column carries the loop that did not stop because a fire did.
 
-
-    // And the structure sits between them, still split model-then-photograph.
+    // And the structure sits beside it, still split model-then-photograph.
     const model = screen.getByRole('region', { name: 'Massing model' });
     const imagery = screen.getByRole('region', { name: 'Building imagery' });
     expect(
@@ -692,22 +682,15 @@ describe('the dispatch transition', () => {
     expect(
       model.compareDocumentPosition(imagery) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      imagery.compareDocumentPosition(continuedFleet) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
   });
 
-  it('names each fleet column after the loop it was asked for', async () => {
+  it('names the fleet column after the loop it was asked for', async () => {
     await dispatch();
-    // The console names the loop per column and the panel answers which agents
-    // match. Nothing here filters the agent list -- two places deciding that is
-    // how the two answers drift apart -- so the headings are the contract.
-    const [incidentFleet, continuedFleet] = screen.getAllByRole('region', { name: /loop/i }) as [
-      HTMLElement,
-      HTMLElement,
-    ];
+    // The console names the loop and the panel answers which agents match.
+    // Nothing here filters the agent list -- two places deciding that is how
+    // the two answers drift apart -- so the heading is the contract.
+    const [incidentFleet] = screen.getAllByRole('region', { name: /loop/i }) as [HTMLElement];
     expect(incidentFleet).toHaveAccessibleName(/incident loop/i);
-    expect(continuedFleet).toHaveAccessibleName(/incident loop, continued/i);
   });
 
   it('shows the elapsed clock and the incident identity', async () => {

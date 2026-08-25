@@ -50,6 +50,7 @@ import { AttributeGrid } from '@/components/profile/AttributeGrid';
 import { ConflictPanel, type ResolutionSubmission } from '@/components/profile/ConflictPanel';
 import { Timeline } from '@/components/profile/Timeline';
 import { AgentRail } from '@/components/standby/AgentRail';
+import { RankedBands } from '@/components/standby/RankedBands';
 import { DispatchPanel, SAMPLE_CALLS } from '@/components/standby/DispatchPanel';
 import { DistrictStrip } from '@/components/standby/DistrictStrip';
 import {
@@ -57,7 +58,6 @@ import {
   normalizeFireActivity,
   type FireActivity,
 } from '@/components/standby/FireActivityMap';
-import { StatusPill } from '@/components/StatusPill';
 import { browserGet, browserPost } from '@/lib/api/client';
 import { useBriefStream } from '@/lib/api/stream';
 import type {
@@ -144,13 +144,6 @@ const AUTO_PASS_MS = 25000;
 const AUTO_PASS_INCIDENT_MS = 60000;
 const AUTO_CALL_MS = 50000;
 const CALL_WARNING_MS = 6000;
-
-/** Queue rows carry a backend status; only the ones off the default are shown. */
-function queueTone(status: string) {
-  if (status === 'DISPATCHED') return 'live' as const;
-  if (status === 'SURVEYED') return 'confirmed' as const;
-  return 'muted' as const;
-}
 
 /**
  * What one slow-loop pass reported, in one line.
@@ -816,30 +809,37 @@ export function CommandCenter({
   const railAgents = agents.length > 0 ? agents : agentList;
 
   /**
-   * Standby's two fleet columns, split from one loop.
+   * One flank per loop, whole.
    *
-   * `FleetPanel` scopes itself by `loop`, and in standby both columns are the
-   * same loop -- so asking it twice would draw the whole slow fleet twice. The
-   * split is therefore the layout's to make, and it is made exactly here: the
-   * slow-loop descriptors in catalog order, cut in half, left column first.
+   * These used to be four halves: the slow loop cut down the middle across both
+   * standby flanks, the incident loop cut the same way during an incident. That
+   * was a layout answer to a panel that drew nine full cards, and it stopped
+   * being one when the panel became rows and a single pane -- two panels would
+   * mean two panes, each with its own selection, for one fleet.
    *
-   * Catalog order and not, say, activity: an agent that jumped columns when it
-   * wrote a fact would make the fleet unreadable at exactly the moment it was
-   * worth reading. The order the registry publishes is stable across renders,
-   * so a card stays where an officer last saw it.
+   * It also closes a gap the split left open. `FleetPanel` builds its
+   * attribution set from the agents it is handed, so a column holding half the
+   * fleet knew half the fleet, and one agent's work on a shared write target
+   * could surface inside another's reasoning box. A whole loop cannot.
    */
-  const [slowLeft, slowRight, slowTotal] = useMemo(() => {
-    const slow = railAgents.filter((agent) => agent.loop === 'SLOW');
-    const cut = Math.ceil(slow.length / 2);
-    return [slow.slice(0, cut), slow.slice(cut), slow.length] as const;
-  }, [railAgents]);
+  const slowFleet = useMemo(
+    () => railAgents.filter((agent) => agent.loop === 'SLOW'),
+    [railAgents],
+  );
+  const incidentFleet = useMemo(
+    () => railAgents.filter((agent) => agent.loop === 'INCIDENT'),
+    [railAgents],
+  );
 
-  /** The incident loop, split the same way and for the same reason. */
-  const [incidentLeft, incidentRight, incidentTotal] = useMemo(() => {
-    const acting = railAgents.filter((agent) => agent.loop === 'INCIDENT');
-    const cut = Math.ceil(acting.length / 2);
-    return [acting.slice(0, cut), acting.slice(cut), acting.length] as const;
-  }, [railAgents]);
+  /**
+   * How many of each loop are actually scheduled.
+   *
+   * Superseded agents are listed -- a brief recorded two years ago names the
+   * version that produced it -- but they are not running, and counting them
+   * puts a number on the heading that the rows below it contradict.
+   */
+  const slowRunning = slowFleet.filter((agent) => !agent.deprecated_at).length;
+  const incidentRunning = incidentFleet.filter((agent) => !agent.deprecated_at).length;
 
   /**
    * The fleet panel's contract.
@@ -1076,34 +1076,15 @@ export function CommandCenter({
       >
         {passRunning ? 'Slow-loop pass running: sources, facts, conflicts, ranking.' : passNotice}
       </p>
-      {(queue?.entries ?? []).length === 0 ? (
-        <p className="mt-1 text-micro text-muted">No ranked structures yet</p>
-      ) : (
-        <ul className="mt-1.5 flex flex-wrap gap-1" aria-label="Ranked structures">
-          {(queue?.entries ?? []).map((entry) => (
-            <li
-              key={entry.entry_id}
-              className={`flex items-center gap-1.5 border bg-surface px-2 py-1 ${
-                selected === entry.address_id ? 'border-live' : 'border-line'
-              }`}
-            >
-              <span aria-hidden="true" className="font-mono text-micro text-muted">
-                {entry.rank}
-              </span>
-              <button
-                type="button"
-                onClick={() => openProfile(entry.address_id)}
-                className="font-mono text-micro text-ink underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
-              >
-                {entry.address_id}
-              </button>
-              {entry.status !== 'RANKED' && (
-                <StatusPill tone={queueTone(entry.status)} label={entry.status.toLowerCase()} />
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+      {/* Grouped by score, not numbered one to a hundred. The ranker produces
+          a handful of distinct scores and a long tie at the bottom; a rank
+          number on every row claimed an order inside that tie which does not
+          exist. See `RankedBands`. */}
+      <RankedBands
+        entries={queue?.entries ?? []}
+        selectedAddressId={selected}
+        onSelect={openProfile}
+      />
     </section>
   );
 
@@ -1216,13 +1197,13 @@ export function CommandCenter({
              the region -- what is burning out there and what the weather is
              doing -- then the ranked structures, then whichever one is open.
              Stacks below `lg`, where three columns is one unreadable column. */
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden">
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)] lg:overflow-hidden">
             {fleetRegion({
               id: 'standby-fleet-heading',
               heading: 'Slow loop',
-              note: `${slowLeft.length} of ${slowTotal}`,
+              note: `${slowRunning} agents`,
               loop: 'SLOW',
-              columnAgents: slowLeft,
+              columnAgents: slowFleet,
               className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
             })}
 
@@ -1248,42 +1229,22 @@ export function CommandCenter({
               )}
             </div>
 
-            {fleetRegion({
-              id: 'standby-fleet-continued-heading',
-              heading: '',
-              srHeading: 'Slow loop, continued',
-              note: `${slowRight.length} of ${slowTotal}`,
-              loop: 'SLOW',
-              columnAgents: slowRight,
-              // Only ever seen when this column is empty, which is not the
-              // normal state -- so it is an empty state rather than standing
-              // text, and it earns its place: falling through to the panel's
-              // own "the registry reported an empty catalog" would be true of
-              // the catalog and false of this column.
-              ...(slowTotal > 0
-                ? { emptyNote: `All ${slowTotal} slow-loop agents are shown on the left.` }
-                : {}),
-              // With no slow agents at all the panel's own "empty catalog" line
-              // is the true one, so this note stands down and lets it through.
-              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
-            })}
           </div>
         )}
 
         {incident && (
-          /* Incident: three columns. The agents acting right now are on the
-             left, the structure and the brief are in the middle, and the slow
-             loop is on the right -- still there, still full cards. It did not
-             stop because a fire started, and a column that vanished at dispatch
-             would tell an officer it had. Stacks below `lg`, where three
-             columns is one unreadable column. */
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden">
+          /* Incident: the agents acting right now on the left, the structure
+             and the brief filling the rest. The slow loop leaves the screen and
+             says so in a line of its own below -- it did not stop because a fire
+             started, and an officer should not have to assume either way.
+             Stacks below `lg`, where two columns is one unreadable column. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)] lg:overflow-hidden">
             {fleetRegion({
               id: 'incident-fleet-heading',
               heading: 'Incident loop',
-              note: `${incidentLeft.length} of ${incidentTotal} · acting now`,
+              note: `${incidentRunning} acting now`,
               loop: 'INCIDENT',
-              columnAgents: incidentLeft,
+              columnAgents: incidentFleet,
               className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
             })}
 
@@ -1342,7 +1303,7 @@ export function CommandCenter({
                 className="shrink-0 border-t border-line bg-surface px-4 py-1.5 font-mono text-micro text-muted"
                 data-testid="slow-loop-offscreen"
               >
-                slow loop · {slowTotal} agents · off screen, still running ·{' '}
+                slow loop · {slowRunning} agents · off screen, still running ·{' '}
                 {passRunning
                   ? 'pass in progress'
                   : passAt === null
@@ -1351,16 +1312,6 @@ export function CommandCenter({
               </p>
             </div>
 
-            {fleetRegion({
-              id: 'incident-fleet-continued-heading',
-              heading: '',
-              srHeading: 'Incident loop, continued',
-              note: `${incidentRight.length} of ${incidentTotal} · acting now`,
-              loop: 'INCIDENT',
-              columnAgents: incidentRight,
-              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
-              emptyNote: 'All incident agents are shown on the left.',
-            })}
           </div>
         )}
       </main>

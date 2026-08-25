@@ -187,7 +187,13 @@ arrives two months after everyone stopped waiting.
 
 ## Reasoning
 
-Six agents run LangGraph graphs on Gemini through Vertex AI. A graph decides
+Five agents run LangGraph graphs on Gemini through Vertex AI —
+`records-watcher`, `hazard-watcher`, `incident-interceptor`, `agency-notifier`
+and `incident-recorder`. The other four are deterministic: `geometry-watcher`
+measures, `structure-watch` scores, `sensor-fusion` registers frames to faces,
+`referral-clerk` drafts from the worst open conflict. That split is worth
+stating rather than blurring — `structure-watch` holds no model on purpose,
+because a model that could invent a conflict could invent its absence. A graph decides
 what to look up, what to cross-check, and when it is done. The nodes and the
 router are ordinary code; LangGraph is the executor, and a built-in driver runs
 the identical node set when it is not used.
@@ -306,6 +312,52 @@ Slow-loop passes run on their own, so the fleet ticks over.
 On dispatch the page reorganises. Incident agents to the left, the massing model
 and a photograph of the building in the middle, the slow loop to the right —
 still there, still in full cards, because it did not stop.
+
+## Known gaps
+
+Four, found by auditing the running build on 2026-08-24. All four survive the
+current commit; none is a doc error.
+
+**Nothing runs concurrently.** `asyncio.gather`, `TaskGroup`, `create_task` and
+`as_completed` return zero hits across `backend/src`, graphs included. Both
+loops are strictly serial, and so is `wake_all`, which starts routed agents one
+at a time. The dependency structure is already a DAG: `records-watcher`,
+`hazard-watcher` and `geometry-watcher` read disjoint sources and write disjoint
+canonical keys, `structure-watch` joins them, `referral-clerk` follows.
+`wake_all`'s own docstring states the woken agents are not each other's
+prerequisites, which is the precondition for concurrency, stated and unused.
+`FleetRunner` still mints the grant and enforces the deadline per agent, so
+governance is untouched by the change.
+
+**The slow loop is a scheduled pipeline, not a handoff.** `run_slow_loop`
+iterates a hardcoded tuple of four agent ids and then runs `referral-clerk`.
+Every pass goes through the runtime, so authority and run records are real, but
+nothing hands anything to anything and the order is a literal in the source. The
+incident loop is where genuine agent-to-agent routing lives: seven wake rules
+matched against the catalog by declared capability, no rule naming an agent.
+Describe the two loops differently, because they are different.
+
+**The demo clock un-retires four agents.** `SUPERSEDED_AT` is
+`2026-08-21 12:00 UTC`; fake mode runs at `2026-08-20 08:00`; routing asks
+`descriptor.is_deprecated(now)`. Verified against the running build — a dispatch
+woke `brief-reconciler@1.0.0` and `incident-controller@1.0.0`, both
+`started: True`. The console's fleet rail filters on the field rather than on
+`now`, so one panel lists them as superseded while another shows them running.
+Moving `SUPERSEDED_AT` before the demo clock is a one-line fix and changes no
+logic.
+
+**`preincident-plan-store` names the wrong owner.** `geometry-watcher` declares
+`Capability.WRITE`, `write_targets=("preincident-plan-store",)` and
+`Scope.WRITE_PREINCIDENT_PLAN`, and its constructor takes no plan store — it has
+never written one. The plan is written by `structure-watch`, through
+`ActionFlow`, which declares neither the target nor the scope. So the catalog
+names an owner that cannot write, and the real writer writes on undeclared
+authority. `test_every_external_write_target_has_an_owning_agent` compares
+declared targets to *configured* targets and passes. The missing invariant is
+the other one: every target a handler writes must be declared by the agent whose
+id that handler runs under.
+
+---
 
 ## Verification
 

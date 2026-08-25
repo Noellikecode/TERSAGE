@@ -1,7 +1,7 @@
 /**
- * The fleet panel: one card per agent, for one loop at a time.
+ * The fleet panel: a list of agents, and one pane about the selected one.
  *
- * Two rules this panel exists to hold.
+ * Three rules this panel exists to hold.
  *
  * **A loop that is not running is not listed.** The incident agents do not
  * idle -- they do not exist until a dispatch wakes them -- so listing them in
@@ -13,10 +13,15 @@
  *
  * **The slow loop does not stop when a fire starts.** During an incident the
  * console runs two of these side by side -- the incident loop on the left of
- * the structure, the slow loop on its right -- and both get full cards,
- * because a rail that vanished, or shrank to a row of chips, would tell an
- * officer the rest of the fleet had stopped. It has not; it is in the next
- * column, still writing facts while the fire burns.
+ * the structure, the slow loop on its right -- because a panel that vanished
+ * would tell an officer the rest of the fleet had stopped. It has not; it is
+ * in the next column, still writing facts while the fire burns.
+ *
+ * **One panel, one selection.** The rows are the fleet at rest; the pane is the
+ * one agent being asked about. Drawing all nine agents' provenance, glyphs and
+ * terminals at once put five screens of scroll on the page before anything had
+ * happened, and made the thing an officer wanted -- which agents are working --
+ * the hardest thing to find.
  *
  * Superseded agents are never dropped. A brief recorded two years ago names
  * the agent version that produced it, and an id deleted from the catalog turns
@@ -24,8 +29,16 @@
  * They stay listed, visibly retired, and are not counted as idle fleet.
  */
 
-import { AgentCard, type AgentActivity, type FleetContext } from '@/components/fleet/AgentCard';
-import { StatusPill } from '@/components/StatusPill';
+import { useCallback, useMemo, useState } from 'react';
+
+import {
+  FleetDetail,
+  SupersededDetail,
+  type AgentActivity,
+  type FleetContext,
+} from '@/components/fleet/FleetDetail';
+import { FleetRow, type FleetState } from '@/components/fleet/FleetRow';
+import { agentDecisions, attributableEvents } from '@/components/fleet/derive';
 import type {
   AgentDescriptorView,
   AuditEventView,
@@ -36,13 +49,14 @@ import type {
   SubscriptionView,
 } from '@/lib/api/types';
 
+export type { AgentActivity, FleetContext };
+
 /**
  * One-shot motion, tied to a change that actually happened.
  *
- * A card flashes when its newest line is new and when its recorded count
- * ticks, and then stops. Nothing here loops: a permanent animation reads as
- * "working" even when nothing is happening, which is the same lie as a
- * fabricated log line, drawn instead of written.
+ * Nothing here loops: a permanent animation reads as "working" even when
+ * nothing is happening, which is the same lie as a fabricated log line, drawn
+ * instead of written.
  *
  * `globals.css` already flattens animations under `prefers-reduced-motion`;
  * the guard is repeated here so this component carries its own promise.
@@ -63,34 +77,21 @@ const MOTION_CSS = `
 }
 `;
 
-/**
- * The cards lay themselves out from the width they are given.
- *
- * `auto-fit` rather than a prop: in standby the panel is the main content area
- * and gets two or three columns, in an incident it is a 400px column and gets
- * one, and neither the caller nor a breakpoint has to be told which.
- */
-const CARD_GRID = {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 23rem), 1fr))',
-  gap: '0.5rem',
-  alignContent: 'start',
-} as const;
+/** The id the superseded group answers to. Not an agent id, and it cannot
+ *  collide with one: agent ids never carry a colon. */
+const SUPERSEDED_KEY = 'fleet:superseded';
 
 export interface FleetPanelProps {
   agents: AgentDescriptorView[];
   /**
    * The whole published fleet, when this panel draws only part of it.
    *
-   * Standby renders two columns, each handed half the slow loop. Event
-   * attribution needs the *full* roster regardless: a write target can be
-   * shared, and the rule for a shared target is "another fleet member's
-   * work is that member's line". A column that only knew its own half
-   * would claim the other half's writes and show one agent doing another's
-   * work, in the exact panel an officer reads to see what each one did.
+   * Event attribution needs the *full* roster: a write target can be shared,
+   * and the rule for a shared target is "another fleet member's work is that
+   * member's line". A panel that only knew part of the fleet would claim the
+   * rest's writes and show one agent doing another's work.
    *
-   * Falls back to `agents` when absent, so a single-panel caller is
-   * unaffected.
+   * Falls back to `agents` when absent.
    */
   fleetRoster?: AgentDescriptorView[];
   subscriptions: SubscriptionView[];
@@ -115,66 +116,6 @@ export interface FleetPanelProps {
   sources?: SourceHealthView[];
   /** Live run state, when a caller has it. Nothing here invents one. */
   activity?: Record<string, AgentActivity>;
-  /**
-   * Legacy: collapse to a row of chips. No current call site uses it -- the
-   * slow loop gets its own column during an incident now -- and it is kept
-   * only so a caller mid-rewrite renders something rather than nothing.
-   */
-  compressed?: boolean;
-}
-
-function CompressedStrip({
-  agents,
-  pinned,
-  activity,
-  label,
-}: {
-  agents: AgentDescriptorView[];
-  pinned: Map<string, string>;
-  activity: Record<string, AgentActivity>;
-  label: string;
-}) {
-  return (
-    <ul className="flex flex-wrap gap-1.5" aria-label={label}>
-      {agents.map((agent) => (
-        <li key={agent.ref}>
-          <StatusPill
-            tone={activity[agent.agent_id]?.current ? 'live' : 'muted'}
-            label={`${agent.agent_id} @${pinned.get(agent.agent_id) ?? agent.version}`}
-            title={`${agent.role_summary} Published by ${agent.publisher_department}.`}
-          />
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function SupersededGroup({ agents }: { agents: AgentDescriptorView[] }) {
-  return (
-    <li
-      className="border border-dashed border-line p-3"
-      style={{ gridColumn: '1 / -1' }}
-      data-testid="superseded-agents"
-    >
-      <p className="text-micro uppercase tracking-widest text-muted">Superseded · still catalogued</p>
-      <ul className="mt-2 flex flex-wrap gap-1.5">
-        {agents.map((agent) => (
-          <li key={agent.ref}>
-            <StatusPill
-              tone="muted"
-              label={`${agent.agent_id} @${agent.version}`}
-              title={`${agent.role_summary} Superseded, no longer scheduled.`}
-            />
-          </li>
-        ))}
-      </ul>
-      <p className="mt-2 text-micro leading-5 text-muted">
-        Not scheduled and given no worker. They stay resolvable because a brief recorded two years
-        ago names the agent version that produced it, and an id deleted from the catalog would make
-        that record unreadable.
-      </p>
-    </li>
-  );
 }
 
 export function FleetPanel({
@@ -188,7 +129,6 @@ export function FleetPanel({
   geometry = null,
   sources = [],
   activity = {},
-  compressed = false,
 }: FleetPanelProps) {
   const pinned = new Map(subscriptions.map((s) => [s.agent_id, s.pinned_version]));
   // The descriptor decides, never a list of ids kept in the console.
@@ -197,14 +137,66 @@ export function FleetPanel({
   const live = scoped.filter((agent) => !agent.deprecated_at);
   const superseded = scoped.filter((agent) => agent.deprecated_at);
 
-  const context: FleetContext = {
-    events,
-    decisions,
-    incident,
-    geometry,
-    sources,
-    fleetIds: new Set((fleetRoster ?? agents).map((agent) => agent.agent_id)),
-  };
+  const context: FleetContext = useMemo(
+    () => ({
+      events,
+      decisions,
+      incident,
+      geometry,
+      sources,
+      fleetIds: new Set((fleetRoster ?? agents).map((agent) => agent.agent_id)),
+    }),
+    [events, decisions, incident, geometry, sources, fleetRoster, agents],
+  );
+
+  /**
+   * Three states, because the console knows three different things. "running"
+   * means a caller told us what this agent is doing right now; "active" means
+   * it has recorded work this session and nothing more is claimed; "idle" means
+   * nothing was recorded. Collapsing the middle one into "running" would put a
+   * word on the screen no record supports.
+   */
+  const rows = useMemo(
+    () =>
+      live.map((agent) => {
+        const recorded =
+          attributableEvents(events, agent, context.fleetIds).length +
+          agentDecisions(decisions, agent).length;
+        const act = activity[agent.agent_id];
+        const state: FleetState = act?.current ? 'running' : recorded > 0 ? 'active' : 'idle';
+        return {
+          agent,
+          state,
+          // The same rule the card used: a supplied run count wins, and the
+          // console never invents one it was not given.
+          metric: act ? `${act.throughput} runs` : `${recorded} recorded`,
+        };
+      }),
+    [live, events, decisions, activity, context.fleetIds],
+  );
+
+  /**
+   * Catalog order, not activity order.
+   *
+   * The first working agent opens the pane so it is never empty and never opens
+   * on something idle. Ordering by activity instead would move the selection
+   * out from under somebody the moment an agent wrote a fact, which is exactly
+   * when they were reading it.
+   */
+  const opening =
+    rows.find((row) => row.state === 'running')?.agent.agent_id ??
+    rows.find((row) => row.state === 'active')?.agent.agent_id ??
+    rows[0]?.agent.agent_id ??
+    (superseded.length > 0 ? SUPERSEDED_KEY : null);
+
+  // Click pins; hover and focus only preview. The pinned one is what the pane
+  // falls back to when the pointer leaves, which is what lets somebody talk
+  // over this without the pane emptying under them.
+  const [held, setHeld] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const shown = preview ?? held ?? opening;
+
+  const clearPreview = useCallback(() => setPreview(null), []);
 
   if (live.length === 0 && superseded.length === 0) {
     return (
@@ -216,38 +208,73 @@ export function FleetPanel({
     );
   }
 
-  if (compressed) {
-    return (
-      <CompressedStrip
-        agents={live}
-        pinned={pinned}
-        activity={activity}
-        label={
-          scope === 'INCIDENT' ? 'Incident fleet' : 'Slow-loop fleet, still running'
-        }
-      />
-    );
-  }
+  const shownRow = rows.find((row) => row.agent.agent_id === shown);
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <style>{MOTION_CSS}</style>
+
       <ul
-        className="min-h-0 flex-1 overflow-y-auto pr-1"
-        style={CARD_GRID}
+        className="shrink-0"
         aria-label={scope === 'INCIDENT' ? 'Incident fleet' : 'Fleet'}
+        onMouseLeave={clearPreview}
+        onBlur={clearPreview}
       >
-        {live.map((agent) => (
-          <AgentCard
-            key={agent.ref}
-            agent={agent}
-            pinnedVersion={pinned.get(agent.agent_id)}
-            activity={activity[agent.agent_id]}
-            context={context}
+        {rows.map((row) => (
+          <FleetRow
+            key={row.agent.ref}
+            agent={row.agent}
+            state={row.state}
+            metric={row.metric}
+            selected={row.agent.agent_id === shown}
+            onSelect={() => setHeld(row.agent.agent_id)}
+            onPreview={() => setPreview(row.agent.agent_id)}
           />
         ))}
-        {superseded.length > 0 && <SupersededGroup agents={superseded} />}
+
+        {superseded.length > 0 && (
+          <li>
+            <button
+              type="button"
+              onClick={() => setHeld(SUPERSEDED_KEY)}
+              onMouseEnter={() => setPreview(SUPERSEDED_KEY)}
+              onFocus={() => setPreview(SUPERSEDED_KEY)}
+              aria-current={shown === SUPERSEDED_KEY ? 'true' : undefined}
+              data-testid="superseded-agents"
+              className={`flex w-full items-baseline gap-2 border-l-2 px-2 py-1 text-left text-micro transition-colors ${
+                shown === SUPERSEDED_KEY
+                  ? 'border-line bg-surface text-ink'
+                  : 'border-transparent text-muted hover:bg-surface hover:text-ink'
+              }`}
+            >
+              <span aria-hidden="true">·</span>
+              <span className="flex-1 truncate">
+                {superseded.length} superseded · still catalogued
+              </span>
+            </button>
+          </li>
+        )}
       </ul>
+
+      {/* The pane. `aria-live` because the thing that changed is here and not
+          where the pointer is. */}
+      <div
+        className="min-h-0 flex-1 overflow-y-auto border-t border-line pt-2"
+        aria-live="polite"
+        data-testid="fleet-detail"
+      >
+        {shown === SUPERSEDED_KEY ? (
+          <SupersededDetail agents={superseded} />
+        ) : shownRow ? (
+          <FleetDetail
+            agent={shownRow.agent}
+            state={shownRow.state}
+            pinnedVersion={pinned.get(shownRow.agent.agent_id)}
+            activity={activity[shownRow.agent.agent_id]}
+            context={context}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

@@ -7,23 +7,23 @@
  * department is pinned to is a fact an officer can read here.
  *
  * This module is now a thin entry point. The panel itself lives in
- * `components/fleet/`, because "the fleet" grew from a rail of identical rows
- * into a column of cards -- each with its own visual and its own reasoning
- * terminal -- and a rail of identical rows told an officer nothing about which
- * agent was doing what.
+ * `components/fleet/`, where the fleet is a list of one-line rows and a single
+ * pane about whichever agent is selected. The visual and the reasoning
+ * terminal each agent grew are still there -- in the pane, drawn once, rather
+ * than nine at a time down a page five screens tall.
  *
  * One panel shows one loop, and the loop defaults to the slow one. In standby
  * the incident agents are not idle, they are not running at all, and listing
  * them would claim a readiness state this system does not have. When a fire
  * starts the console renders two of these instead: the incident loop beside
  * the structure, and the slow loop in a column of its own on the right, still
- * in full cards. The slow loop does not stop when a fire starts, and a fleet
- * that vanished -- or shrank to a row of chips -- would say it had.
+ * listed and still selectable. The slow loop does not stop when a fire starts,
+ * and a fleet that vanished would say it had.
  */
 
 import { FleetPanel, type FleetPanelProps } from '@/components/fleet/FleetPanel';
 
-export type { AgentActivity } from '@/components/fleet/AgentCard';
+export type { AgentActivity } from '@/components/fleet/FleetPanel';
 
 export type AgentRailProps = FleetPanelProps;
 

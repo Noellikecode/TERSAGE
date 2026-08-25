@@ -212,8 +212,8 @@ describe('the fleet rail counts the fleet the department actually runs', () => {
     // that number look wrong to anybody who counts.
     render(<AgentRail agents={[active, retired]} subscriptions={[]} />);
 
-    expect(screen.getByText('structure-watch')).toBeInTheDocument();
-    expect(screen.queryByText('survey-ranker')).not.toBeInTheDocument();
+    expect(screen.getByTestId('fleet-row-structure-watch')).toBeInTheDocument();
+    expect(screen.queryByTestId('fleet-row-survey-ranker')).not.toBeInTheDocument();
   });
 
   it('keeps superseded agents visible, and says why they are kept', () => {
@@ -221,7 +221,10 @@ describe('the fleet rail counts the fleet the department actually runs', () => {
     // two-year-old brief can still name what produced it.
     render(<AgentRail agents={[active, retired]} subscriptions={[]} />);
 
-    const group = screen.getByTestId('superseded-agents');
+    // Listed as one line, and the reason they are kept is a click away rather
+    // than forty words repeated in every fleet column.
+    fireEvent.click(screen.getByTestId('superseded-agents'));
+    const group = screen.getByTestId('fleet-detail-superseded');
     expect(group).toHaveTextContent('survey-ranker @1.0.0');
     expect(group).toHaveTextContent(/names the agent version that produced it/);
   });
