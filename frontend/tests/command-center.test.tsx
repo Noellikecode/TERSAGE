@@ -254,7 +254,7 @@ describe('standby', () => {
   it('reports source availability honestly, including unconfigured ones', () => {
     renderConsole();
     expect(screen.getByText(/1 UNAVAILABLE: tier-ii-confidential/)).toBeInTheDocument();
-    expect(screen.getByText(/1 fixture/)).toBeInTheDocument();
+    expect(screen.getByText(/1 simulated/)).toBeInTheDocument();
   });
 
   it('shows the fleet with publisher and pinned version', () => {
@@ -435,15 +435,15 @@ describe('regional fire activity', () => {
     expect(within(panel).getByText(/375 m and built for wildfire/)).toBeInTheDocument();
   });
 
-  it('plots the detections and outlines the city without inventing one inside it', async () => {
+  it('reports the detections as counts, with no map to misread', async () => {
+    // The scatter drew dots on a black rectangle with no coastline, no grid
+    // and no coordinates, and stretched to fill the column -- so the largest
+    // thing on the console said "nothing is happening in your city" and gave
+    // nobody a way to check where anything was. The counts say it plainly.
     renderConsole();
     const panel = await screen.findByRole('region', { name: 'Regional fire activity' });
-    const svg = within(panel).getByTestId('fire-activity-scatter');
-    // One circle per reported detection, and none of them stands for the city.
-    expect(svg.querySelectorAll('circle')).toHaveLength(2);
-    expect(within(panel).getByTestId('fire-activity-city-outline')).toBeInTheDocument();
-    expect(svg.querySelector('[data-band="high"]')).toBeTruthy();
-    expect(svg.querySelector('[data-band="nominal"]')).toBeTruthy();
+    expect(within(panel).queryByTestId('fire-activity-scatter')).not.toBeInTheDocument();
+    expect(within(panel).getByTestId('fire-activity-counts')).toBeInTheDocument();
   });
 
   it('labels the fire weather with its window and refuses to pass as current', async () => {

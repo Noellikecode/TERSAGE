@@ -173,7 +173,10 @@ class ProfileReading:
 
     @property
     def open_conflicts(self) -> tuple[Conflict, ...]:
-        return self.profile.open_conflicts
+        # The live disagreement per rule and attribute, not every historical
+        # finding about it. Ranking all of them ranks one problem three times
+        # and puts three identical rows in front of a captain.
+        return self.profile.current_conflicts
 
     @property
     def changed(self) -> bool:

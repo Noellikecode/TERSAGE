@@ -204,8 +204,16 @@ export function normalizeFireActivity(raw: unknown): FireActivity | null {
   if (!isRecord(raw)) return null;
 
   const detections = readDetections(pick(raw, ['detections', 'fires', 'hotspots']));
-  const bbox = readBBox(pick(raw, ['bbox', 'bbox_queried', 'query_bbox', 'region_bbox', 'queried_bbox']));
-  const cityBBox = readBBox(pick(raw, ['city_bbox', 'in_city_bbox', 'municipality_bbox']));
+  // `region` and `city` are what this backend actually sends. The rest are
+  // kept because a FIRMS-shaped payload names the same thing several ways, and
+  // reading only the alternatives is how this map spent its life saying "no
+  // bounding box reported" while holding one.
+  const bbox = readBBox(
+    pick(raw, ['bbox', 'bbox_queried', 'query_bbox', 'region_bbox', 'queried_bbox', 'region']),
+  );
+  const cityBBox = readBBox(
+    pick(raw, ['city_bbox', 'in_city_bbox', 'municipality_bbox', 'city']),
+  );
 
   const counts = pick(raw, ['counts', 'count']);
   const countsRecord = isRecord(counts) ? counts : null;
@@ -234,7 +242,7 @@ export function normalizeFireActivity(raw: unknown): FireActivity | null {
     bbox,
     cityBBox,
     cityLabel: str(pick(raw, ['city_label', 'city', 'municipality'])) ?? 'San Francisco',
-    regionLabel: str(pick(raw, ['region_label', 'region'])) ?? 'the region',
+    regionLabel: str(pick(raw, ['region_label', 'region_name'])) ?? 'the region',
     detections,
     regionalCount,
     inCityCount,
@@ -247,19 +255,7 @@ export function normalizeFireActivity(raw: unknown): FireActivity | null {
 
 type Band = 'high' | 'nominal' | 'low' | 'unreported';
 
-const BAND_FILL: Record<Band, string> = {
-  high: '#f87171',
-  nominal: '#fbbf24',
-  low: '#8b97a8',
-  unreported: 'none',
-};
 
-const BAND_WORD: Record<Band, string> = {
-  high: 'high',
-  nominal: 'nominal',
-  low: 'low',
-  unreported: 'not reported',
-};
 
 /** VIIRS letters, MODIS percentages, and the absence of either. */
 export function confidenceBand(confidence: string | number | null): Band {
@@ -277,15 +273,8 @@ export function confidenceBand(confidence: string | number | null): Band {
   return Number.isFinite(parsed) ? confidenceBand(parsed) : 'unreported';
 }
 
-function clamp(value: number, low: number, high: number): number {
-  return Math.min(high, Math.max(low, value));
-}
 
 /** Radius in user units, from fire radiative power. Area, not radius, scales. */
-function radiusFor(frp: number | null): number {
-  if (frp === null || frp <= 0) return 1.4;
-  return clamp(Math.sqrt(frp) * 0.85, 1.6, 7);
-}
 
 /** A day, in UTC, so a label does not move with the reader's timezone. */
 function day(iso: string | null): string | null {
@@ -335,99 +324,6 @@ function Reading({
         </span>
       </dd>
     </div>
-  );
-}
-
-function Scatter({ activity }: { activity: FireActivity }) {
-  const bbox = activity.bbox;
-  if (!bbox) {
-    return (
-      <p className="border border-dashed border-line px-3 py-4 text-micro text-muted">
-        No bounding box reported, so there is nothing to project the detections onto.
-      </p>
-    );
-  }
-
-  const lonSpan = bbox.east - bbox.west;
-  const latSpan = bbox.north - bbox.south;
-  if (lonSpan <= 0 || latSpan <= 0) {
-    return (
-      <p className="border border-dashed border-line px-3 py-4 text-micro text-muted">
-        The reported bounding box has no extent; nothing is drawn against it.
-      </p>
-    );
-  }
-
-  const width = 320;
-  // Longitude degrees are shorter than latitude degrees away from the equator.
-  // Correcting for it keeps the region the shape it is on the ground.
-  const midLat = (bbox.north + bbox.south) / 2;
-  const lonScale = Math.max(0.1, Math.cos((midLat * Math.PI) / 180));
-  const height = Math.round(clamp((width * latSpan) / (lonSpan * lonScale), 120, 320));
-
-  const x = (lon: number) => ((lon - bbox.west) / lonSpan) * width;
-  const y = (lat: number) => ((bbox.north - lat) / latSpan) * height;
-
-  const city = activity.cityBBox;
-  const plotted = activity.detections.filter((d) => inside(bbox, d));
-
-  return (
-    <svg
-      viewBox={`0 0 ${width} ${height}`}
-      className="h-auto w-full border border-line bg-surface"
-      role="img"
-      data-testid="fire-activity-scatter"
-      aria-label={`${plotted.length} satellite thermal detections plotted over the queried region, ${bbox.south.toFixed(2)} to ${bbox.north.toFixed(2)} north, ${bbox.west.toFixed(2)} to ${bbox.east.toFixed(2)} east.`}
-    >
-      {city && (
-        <g data-testid="fire-activity-city-outline">
-          {/* The city, marked so it is locatable inside the wider region. An
-              outline only: there is no detection in it to draw, and a marker
-              standing in for one would be the console inventing a fire. */}
-          <rect
-            x={x(city.west)}
-            y={y(city.north)}
-            width={Math.max(2, x(city.east) - x(city.west))}
-            height={Math.max(2, y(city.south) - y(city.north))}
-            fill="none"
-            stroke="#38bdf8"
-            strokeWidth="1"
-            strokeDasharray="4 3"
-          />
-          <text
-            x={x(city.west)}
-            y={Math.max(9, y(city.north) - 3)}
-            fill="#38bdf8"
-            fontSize="9"
-            fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace"
-          >
-            {activity.cityLabel}
-          </text>
-        </g>
-      )}
-
-      {plotted.map((detection, index) => {
-        const band = confidenceBand(detection.confidence);
-        return (
-          <circle
-            key={`${detection.latitude},${detection.longitude},${detection.acquired_at ?? index}`}
-            cx={x(detection.longitude)}
-            cy={y(detection.latitude)}
-            r={radiusFor(detection.frp)}
-            fill={BAND_FILL[band]}
-            fillOpacity={band === 'unreported' ? 0 : 0.55}
-            stroke={band === 'unreported' ? '#8b97a8' : BAND_FILL[band]}
-            strokeWidth={band === 'unreported' ? 1 : 0.75}
-            strokeDasharray={band === 'unreported' ? '2 2' : undefined}
-            data-band={band}
-          >
-            <title>
-              {`${detection.frp === null ? 'FRP not reported' : `${detection.frp} MW`} · confidence ${BAND_WORD[band]}${detection.satellite ? ` · ${detection.satellite}` : ''}${detection.acquired_at ? ` · ${detection.acquired_at}` : ''}`}
-            </title>
-          </circle>
-        );
-      })}
-    </svg>
   );
 }
 
@@ -518,39 +414,6 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
       <p className="text-micro leading-5 text-muted">
         VIIRS pixels are ~375 m and built for wildfire, so a structure fire never registers here.
         An empty city inside a busy region is the instrument working, not a fault.
-      </p>
-
-      <div className="mt-2">
-        <Scatter activity={activity} />
-      </div>
-
-      {/* Size and colour are the two encodings, so both are named in words. */}
-      <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-micro text-muted">
-        <span>size = FRP</span>
-        <span className="flex items-center gap-1">
-          <span aria-hidden="true" className="text-alarm">
-            ●
-          </span>
-          high
-        </span>
-        <span className="flex items-center gap-1">
-          <span aria-hidden="true" className="text-disputed">
-            ●
-          </span>
-          nominal
-        </span>
-        <span className="flex items-center gap-1">
-          <span aria-hidden="true" className="text-unknown">
-            ●
-          </span>
-          low
-        </span>
-        <span className="flex items-center gap-1">
-          <span aria-hidden="true" className="text-unknown">
-            ○
-          </span>
-          not reported
-        </span>
       </p>
 
       <div className="mt-3" data-testid="fire-weather">

@@ -129,9 +129,41 @@ class BuildingProfile(BaseModel):
 
     @property
     def open_conflicts(self) -> tuple[Conflict, ...]:
+        """Every finding still unresolved. The record, not the reading."""
         from firstdue.domain.conflicts import ConflictStatus
 
         return tuple(c for c in self.conflicts if c.status is ConflictStatus.OPEN)
+
+    @property
+    def current_conflicts(self) -> tuple[Conflict, ...]:
+        """The open findings that describe the disagreement as it stands now.
+
+        A rule re-fires on every pass, and a conflict's id is derived from the
+        facts it cited -- so an amended permit or a fresh flight mints a *new*
+        finding while the earlier one, about a pairing nothing compares any
+        more, stays OPEN. Three findings then describe one disagreement, and a
+        console listing all three tells an officer this building has three
+        problems. It has one, seen three times.
+
+        Nothing is closed or deleted here. Only a human observation may RESOLVE
+        a conflict and none of these were resolved, so every finding stays in
+        :attr:`conflicts` where an investigator can still read it. This is which
+        one is *live*, per rule and per attribute: the most recently detected,
+        with the id breaking a tie so two passes landing on the same instant
+        cannot reorder the answer between reads.
+
+        Severity first, then id -- the order a crew would work them.
+        """
+        newest: dict[tuple[str, str], Conflict] = {}
+        for conflict in self.open_conflicts:
+            key = (conflict.rule_id, str(conflict.canonical_key))
+            seen = newest.get(key)
+            if seen is None or (conflict.detected_at, conflict.conflict_id) > (
+                seen.detected_at,
+                seen.conflict_id,
+            ):
+                newest[key] = conflict
+        return tuple(sorted(newest.values(), key=lambda c: (-c.severity, c.conflict_id)))
 
     @property
     def next_sequence(self) -> int:
@@ -252,7 +284,7 @@ class BuildingProfile(BaseModel):
             snapshot_id=resolved_id,
             read_at=read_at,
             facts=self.facts,
-            conflicts=self.open_conflicts,
+            conflicts=self.current_conflicts,
             geometry=self.geometry,
             hydrant_ids=self.hydrant_ids,
             exposure_address_ids=self.exposure_address_ids,

@@ -46,7 +46,7 @@ from firstdue.domain.work import SurveyRecord
 from firstdue.errors import NotFoundError, ValidationError
 from firstdue.observability.metrics import METRICS
 from firstdue.ports.fireactivity import FireActivity, FireActivityClient
-from firstdue.ports.imagery import BuildingImagery, ImageryClient
+from firstdue.ports.imagery import BuildingImagery, ImageryClient, ImageryView
 from firstdue.services.surveys import SurveyService
 
 router = APIRouter(tags=["console"])
@@ -248,6 +248,21 @@ def _fact_views(profile: BuildingProfile) -> list[FactView]:
 
 
 def _conflict_views(profile: BuildingProfile) -> list[ConflictView]:
+    """The live disagreements, plus every one a human has settled.
+
+    Not `profile.conflicts`. A rule re-fires each pass and a conflict's id is
+    derived from the facts it cited, so an amended permit mints a new finding
+    while the earlier one -- about a pairing nothing compares any more -- stays
+    OPEN. Rendering the raw set put the same sentence on screen three times and
+    offered a captain three referrals for one problem.
+
+    Resolved findings are kept. They are the record of what a human decided,
+    which is the thing an investigation comes back for.
+    """
+    from firstdue.domain.conflicts import ConflictStatus as _Status
+
+    settled = [c for c in profile.conflicts if c.status is not _Status.OPEN]
+    shown = [*profile.current_conflicts, *settled]
     return [
         ConflictView(
             conflict_id=c.conflict_id,
@@ -260,7 +275,7 @@ def _conflict_views(profile: BuildingProfile) -> list[ConflictView]:
             detected_at=c.detected_at,
             resolved_by=c.resolution.resolved_by if c.resolution else None,
         )
-        for c in sorted(profile.conflicts, key=lambda c: (-c.severity, c.conflict_id))
+        for c in sorted(shown, key=lambda c: (-c.severity, c.conflict_id))
     ]
 
 
@@ -296,7 +311,11 @@ async def district_stats(
     profiles = await container.profiles.list_by_district(district_id)
     queue = await container.queue.list_for_district(district_id)
 
-    open_conflicts = [c for p in profiles for c in p.conflicts if c.status is ConflictStatus.OPEN]
+    # The live disagreements, not every finding ever raised about them. A
+    # superseded finding stays OPEN in the record -- only a human observation
+    # may resolve one -- so counting raw status told a chief this district had
+    # four problems where it has two.
+    open_conflicts = [c for p in profiles for c in p.current_conflicts]
     sources: list[SourceHealthView] = []
     for adapter in container.source_adapters:
         health = await adapter.health()
@@ -586,8 +605,15 @@ async def building_imagery(
     address_id: str,
     container: Annotated[Container, Depends(get_container)],
     caller: Annotated[Caller, Depends(require_geometry_read)],
+    view: Annotated[ImageryView, Query()] = "street",
 ) -> BuildingImagery:
     """What the building actually looks like, beside what it was measured to be.
+
+    ``view=street`` is the eye-level photograph; ``view=aerial`` looks straight
+    down at the roof -- its shape, what is standing on it, and how close the
+    exposures are. An aerial never falls back to a kerb-level frame: a
+    commander told they are looking at a roof and shown a street is worse
+    served than one told there is no aerial.
 
     The massing model on ``/geometry`` is derived from permits, lidar, and the
     assessor's roll. This is the photograph: the door, the windows, the bars, a
@@ -609,7 +635,7 @@ async def building_imagery(
     URL: a signed Street View URL is ``GOOGLE_MAPS_API_KEY`` in a browser's
     network tab.
     """
-    return await _imagery_client(container).fetch(address_id=address_id)
+    return await _imagery_client(container).fetch(address_id=address_id, view=view)
 
 
 @router.get(

@@ -110,7 +110,13 @@ from firstdue.ports.writes import ExternalWriteTarget
 from firstdue.reliability.retry import RetryPolicy
 from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient, build_screen
 from firstdue.services.memory_bank import MemoryBank
-from firstdue.settings import EventBackend, Settings, StorageBackend, WorkspaceWrites
+from firstdue.settings import (
+    EventBackend,
+    ImageryProvider,
+    Settings,
+    StorageBackend,
+    WorkspaceWrites,
+)
 from firstdue.sources.catalog import CentralFetcherFactory, LiveCredentials, build_sources
 
 #: The five systems FIRST DUE writes into.
@@ -643,7 +649,14 @@ def _build_imagery(settings: Settings, *, city: CityAdapter, clock: Clock) -> Im
     deployment would be the exact failure this project refuses everywhere else:
     a commander cannot be shown a picture of a building nobody photographed.
     """
-    if settings.use_fake_agents:
+    # `IMAGERY_PROVIDER` decides, and it defaults to following fake mode. A team
+    # holding a Maps key can set it to `google` and get real Street View and a
+    # real satellite tile without taking Vertex, Firestore and every source live
+    # in the same move -- which is what flipping `USE_FAKE_AGENTS` does.
+    wants_google = settings.imagery_provider is ImageryProvider.GOOGLE or (
+        not settings.use_fake_agents
+    )
+    if not wants_google:
         from firstdue.adapters.fake.imagery import FakeImageryClient
 
         return FakeImageryClient(city=city)

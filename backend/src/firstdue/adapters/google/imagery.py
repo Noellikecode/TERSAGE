@@ -48,6 +48,7 @@ from firstdue.ports.imagery import (
     PROVIDER_SATELLITE,
     PROVIDER_STREET_VIEW,
     BuildingImagery,
+    ImageryView,
     unavailable,
 )
 from firstdue.sources.framework import RateLimiter
@@ -120,7 +121,10 @@ class UnconfiguredImageryClient:
 
     provider_label: Final[str] = ""
 
-    async def fetch(self, *, address_id: str) -> BuildingImagery:
+    async def fetch(
+        self, *, address_id: str, view: ImageryView = "street"
+    ) -> BuildingImagery:
+        # Every view is equally unconfigured without a key.
         return BuildingImagery.refused(address_id, unavailable("unconfigured"))
 
 
@@ -171,9 +175,12 @@ class GoogleImageryClient:
         self.cache_hits = 0
         self.upstream_calls = 0
 
-    async def fetch(self, *, address_id: str) -> BuildingImagery:
+    async def fetch(
+        self, *, address_id: str, view: ImageryView = "street"
+    ) -> BuildingImagery:
         now = self._clock.now()
-        cached = self._cache.get(address_id)
+        cache_key = address_id if view == "street" else f"{address_id}#{view}"
+        cached = self._cache.get(cache_key)
         if cached is not None and now < cached.expires_at:
             self.cache_hits += 1
             return cached.imagery
@@ -183,7 +190,7 @@ class GoogleImageryClient:
             # Cached: the city adapter will not learn this address mid-shift,
             # and a repeated miss should not repeatedly cost anything.
             refusal = BuildingImagery.refused(address_id, unavailable("address_unresolved"))
-            return self._remember(address_id, refusal, now)
+            return self._remember(cache_key, refusal, now)
 
         if self._limiter.take(now) > 0.0:
             # The debt is reported, never slept through -- the same choice
@@ -196,7 +203,7 @@ class GoogleImageryClient:
             try:
                 async with asyncio.timeout(self._deadline_s):
                     imagery = await self._fetch_live(
-                        address_id, address.latitude, address.longitude
+                        address_id, address.latitude, address.longitude, view=view
                     )
             except TimeoutError:
                 logger.warning("imagery_deadline_exceeded", extra={"address_id": address_id})
@@ -206,7 +213,7 @@ class GoogleImageryClient:
                 code = "deadline" if exc.timed_out else "provider_unreachable"
                 return BuildingImagery.refused(address_id, unavailable(code))
 
-        return self._remember(address_id, imagery, now)
+        return self._remember(cache_key, imagery, now)
 
     # ------------------------------------------------------------ internals
 
@@ -223,13 +230,22 @@ class GoogleImageryClient:
         return imagery
 
     async def _fetch_live(
-        self, address_id: str, latitude: float, longitude: float
+        self,
+        address_id: str,
+        latitude: float,
+        longitude: float,
+        *,
+        view: ImageryView = "street",
     ) -> BuildingImagery:
         import httpx
 
         location = f"{latitude:.6f},{longitude:.6f}"
         async with httpx.AsyncClient(timeout=self._deadline_s, transport=self._transport) as client:
-            metadata = await self._panorama_metadata(client, location)
+            # An aerial is asked for straight down and nothing else. Falling
+            # back to Street View here would hand a commander a kerb while the
+            # panel above it said "aerial", which is the one thing this must
+            # not do: the free metadata probe is skipped with it.
+            metadata = None if view == "aerial" else await self._panorama_metadata(client, location)
             if metadata is not None:
                 found = await self._image(
                     client,

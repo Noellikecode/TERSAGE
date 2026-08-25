@@ -31,7 +31,7 @@ from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from firstdue.domain.conflicts import Conflict, ConflictStatus
+from firstdue.domain.conflicts import Conflict
 from firstdue.domain.enums import (
     ApprovalThreshold,
     Department,
@@ -421,7 +421,10 @@ class ActionFlow:
         starts_at: datetime,
     ) -> str | None:
         key = self._ids.idempotency_key("crew-mail", entry.entry_id)
-        open_conflicts = [c for c in profile.conflicts if c.status is ConflictStatus.OPEN]
+        # What the crew is told to look at. A superseded finding cites a pairing
+        # nothing compares any more; three copies of one disagreement in a crew
+        # mail reads as three things to check.
+        open_conflicts = list(profile.current_conflicts)
         lines = [
             f"Company survey scheduled for {starts_at.date().isoformat()} at "
             f"{entry.address_id}.",
@@ -501,7 +504,7 @@ class ActionFlow:
         :meth:`approve_referral` runs -- which is why the mail client is not
         touched anywhere in this method.
         """
-        open_conflicts = [c for c in profile.conflicts if c.status is ConflictStatus.OPEN]
+        open_conflicts = list(profile.current_conflicts)
         if not open_conflicts:
             return None, None
         conflict = max(open_conflicts, key=lambda c: (c.severity, c.conflict_id))

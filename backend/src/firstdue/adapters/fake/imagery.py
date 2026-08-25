@@ -31,6 +31,7 @@ from firstdue.ports.city import CityAdapter
 from firstdue.ports.imagery import (
     PROVIDER_SYNTHETIC,
     BuildingImagery,
+    ImageryView,
     unavailable,
 )
 
@@ -71,15 +72,24 @@ class FakeImageryClient:
         self._available = available
         self._city = city
 
-    async def fetch(self, *, address_id: str) -> BuildingImagery:
+    async def fetch(
+        self, *, address_id: str, view: ImageryView = "street"
+    ) -> BuildingImagery:
         address = self._city.get_address(address_id)
         if address is None:
             return BuildingImagery.refused(address_id, unavailable("address_unresolved"))
         if not self._available:
             return BuildingImagery.refused(address_id, unavailable("simulated_absence"))
 
-        digest = hashlib.sha256(address_id.encode("utf-8")).digest()
-        svg = _render(digest, display=address.display)
+        # The two views are drawn differently on purpose. A placeholder that
+        # looked the same from the kerb and from above would let somebody
+        # believe the aerial panel was showing them a roof.
+        digest = hashlib.sha256(f"{view}:{address_id}".encode("utf-8")).digest()
+        svg = (
+            _render_aerial(digest, display=address.display)
+            if view == "aerial"
+            else _render(digest, display=address.display)
+        )
         encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
         return BuildingImagery(
             address_id=address_id,
@@ -143,4 +153,53 @@ def _render(digest: bytes, *, display: str) -> str:
         f'<text x="320" y="{_HEIGHT - 18}" font-family="monospace" font-size="16" '
         f'fill="#cbd5e1" text-anchor="middle">{_escape(display)}</text>'
         "</svg>"
+    )
+
+
+def _render_aerial(digest: bytes, *, display: str) -> str:
+    """The overhead placeholder.
+
+    Looking down rather than at a facade: a roof outline, a ridge, and a couple
+    of plant boxes. It carries the same SYNTHETIC face as the elevation, for the
+    same reason -- an aerial is the view a commander trusts most about a roof
+    they are about to put people on, so a drawing standing in for one has to be
+    unmistakable.
+
+    Shapes come from the digest, never from the measured geometry. This drawing
+    must not look like it agrees or disagrees with the massing model, because it
+    is not evidence about the building at all.
+    """
+    roof = _WALLS[digest[0] % len(_WALLS)]
+    inset = 60 + digest[1] % 40
+    ridge = _HEIGHT // 2 + (digest[2] % 40) - 20
+    units = 2 + digest[3] % 3
+
+    plant = "".join(
+        f'<rect x="{inset + 40 + i * 70}" y="{ridge - 46}" width="44" height="30" '
+        f'rx="3" fill="#2f3743" stroke="#8b97a8" stroke-width="1.5"/>'
+        for i in range(units)
+    )
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{_WIDTH}" height="{_HEIGHT}" '
+        f'viewBox="0 0 {_WIDTH} {_HEIGHT}" role="img" '
+        f'aria-label="Synthetic overhead placeholder for {_escape(display)}">'
+        f'<rect width="{_WIDTH}" height="{_HEIGHT}" fill="#161b22"/>'
+        # The parcel, then the roof sitting inside it.
+        f'<rect x="{inset - 28}" y="{inset - 28}" width="{_WIDTH - 2 * inset + 56}" '
+        f'height="{_HEIGHT - 2 * inset + 56}" fill="none" stroke="#2f3743" '
+        f'stroke-width="2" stroke-dasharray="6 5"/>'
+        f'<rect x="{inset}" y="{inset}" width="{_WIDTH - 2 * inset}" '
+        f'height="{_HEIGHT - 2 * inset}" fill="{roof}" stroke="#8b97a8" stroke-width="2"/>'
+        # A ridge line, so it reads as a roof rather than a filled box.
+        f'<line x1="{inset}" y1="{ridge}" x2="{_WIDTH - inset}" y2="{ridge}" '
+        f'stroke="#8b97a8" stroke-width="1.5" stroke-dasharray="8 6"/>'
+        f"{plant}"
+        f'<text x="{_WIDTH / 2}" y="{_HEIGHT / 2 + 10}" text-anchor="middle" '
+        f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="46" '
+        f'fill="#8b97a8" fill-opacity="0.5" letter-spacing="10">SYNTHETIC</text>'
+        f'<text x="16" y="{_HEIGHT - 18}" '
+        f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" '
+        f'fill="#8b97a8">{_escape(_SYNTHETIC_CAPTION)}</text>'
+        f"</svg>"
     )

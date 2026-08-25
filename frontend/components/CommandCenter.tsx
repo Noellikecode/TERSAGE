@@ -41,7 +41,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { GeometryCanvas, type ViewAngle } from '@/components/GeometryCanvas';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
-import { BuildingImagery } from '@/components/incident/BuildingImagery';
+import { BuildingImagery, type ImageryView } from '@/components/incident/BuildingImagery';
 import { IntakePanel } from '@/components/incident/IntakePanel';
 import { IncidentBanner } from '@/components/incident/IncidentBanner';
 import { ResourcePanel } from '@/components/incident/ResourcePanel';
@@ -51,6 +51,7 @@ import { ConflictPanel, type ResolutionSubmission } from '@/components/profile/C
 import { Timeline } from '@/components/profile/Timeline';
 import { AgentRail } from '@/components/standby/AgentRail';
 import { RankedBands } from '@/components/standby/RankedBands';
+import { RecordsDisagree } from '@/components/standby/RecordsDisagree';
 import { DispatchPanel, SAMPLE_CALLS } from '@/components/standby/DispatchPanel';
 import { DistrictStrip } from '@/components/standby/DistrictStrip';
 import {
@@ -291,6 +292,8 @@ export function CommandCenter({
 
   const [stats, setStats] = useState<DistrictStatsView | null>(initialStats);
   const [queue, setQueue] = useState<QueueView | null>(initialQueue);
+  /** Which way the incident building is being looked at. Street on arrival. */
+  const [imageryView, setImageryView] = useState<ImageryView>('street');
   const [agents] = useState<AgentDescriptorView[]>(initialAgents);
   const [subscriptions, setSubscriptions] = useState<SubscriptionView[]>(initialSubscriptions);
   const [events, setEvents] = useState<AuditEventView[]>(initialEvents);
@@ -901,9 +904,17 @@ export function CommandCenter({
     columnAgents,
     emptyNote,
     srHeading,
+    subheading,
   }: {
     id: string;
     heading: string;
+    /**
+     * What this loop does, in words nobody has to read the repository to
+     * understand. "Slow loop" is the architecture and it keeps its name -- the
+     * two-loop split is the thesis -- but an inspector reading it cold learns
+     * nothing from it, and this screen has to work for both.
+     */
+    subheading?: string;
     note?: string;
     loop?: 'SLOW' | 'INCIDENT';
     className: string;
@@ -938,6 +949,9 @@ export function CommandCenter({
           {heading || srHeading}
         </h2>
         {note && <span className="text-label uppercase text-muted">{note}</span>}
+        {subheading && (
+          <p className="w-full text-micro normal-case text-muted">{subheading}</p>
+        )}
       </div>
       <div className="px-4 pb-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {columnAgents && columnAgents.length === 0 && emptyNote ? (
@@ -992,12 +1006,42 @@ export function CommandCenter({
   /** The real structure, beside the computed one. Incident only: outside one
       there is no address to photograph, and a panel explaining that in a
       paragraph was a paragraph explaining an empty box. */
+  /**
+   * The building, from the kerb and from above.
+   *
+   * Two views of one provider rather than two panels: the aerial is what a
+   * commander wants on the way in -- roof shape, what is standing on it, how
+   * close the exposure next door is -- and the street view is what they check
+   * a storey count and a barred window against on arrival. Both open only
+   * during an incident, because both cost a metered request per address and
+   * standby opens buildings by the dozen.
+   */
   const imageryPanel = (
     <section aria-labelledby="imagery-heading" className="min-w-0 bg-ground p-4">
-      <h2 id="imagery-heading" className="mb-2 text-micro uppercase tracking-widest text-muted">
-        Building imagery
-      </h2>
-      <BuildingImagery addressId={incident?.address_id ?? null} />
+      <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="imagery-heading" className="text-micro uppercase tracking-widest text-muted">
+          Building imagery
+        </h2>
+        <div className="flex gap-1" role="group" aria-label="Imagery viewpoint">
+          {(['street', 'aerial'] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={imageryView === option}
+              onClick={() => setImageryView(option)}
+              data-testid={`imagery-view-${option}`}
+              className={`border px-2 py-0.5 text-micro uppercase tracking-wide focus-visible:outline focus-visible:outline-2 focus-visible:outline-live ${
+                imageryView === option
+                  ? 'border-live text-live'
+                  : 'border-line text-muted hover:text-ink'
+              }`}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      </div>
+      <BuildingImagery addressId={incident?.address_id ?? null} view={imageryView} />
     </section>
   );
 
@@ -1201,6 +1245,7 @@ export function CommandCenter({
             {fleetRegion({
               id: 'standby-fleet-heading',
               heading: 'Slow loop',
+              subheading: 'Watches records between fires.',
               note: `${slowRunning} agents`,
               loop: 'SLOW',
               columnAgents: slowFleet,
@@ -1209,6 +1254,13 @@ export function CommandCenter({
 
             <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:overflow-y-auto">
               <FireActivityMap activity={fireActivity} error={fireActivityError} />
+
+              <RecordsDisagree
+                entries={queue?.entries ?? []}
+                openConflicts={stats?.open_conflicts ?? null}
+                selectedAddressId={selected}
+                onSelect={openProfile}
+              />
 
               {structuresStrip}
 

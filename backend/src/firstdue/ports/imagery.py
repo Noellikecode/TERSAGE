@@ -27,7 +27,7 @@ URL: a browser handed a signed Street View URL is a browser handed the key.
 
 from __future__ import annotations
 
-from typing import Final, Protocol, runtime_checkable
+from typing import Final, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -168,6 +168,19 @@ class BuildingImagery(BaseModel):
         return cls(address_id=address_id, available=False, unavailable_reason=refusal.reason)
 
 
+#: Which way the building is being looked at.
+#:
+#: ``street`` is the eye-level photograph an officer checks a storey count and a
+#: barred window against. ``aerial`` is straight down: the roof, its shape, what
+#: is standing on it, and how close the exposures are -- the view a commander
+#: wants on the way in and cannot get from the kerb.
+#:
+#: Two views rather than a second port, because it is one provider, one key, one
+#: rate limiter and one cache. A separate client would have its own bucket and
+#: bill the department twice for the same building.
+ImageryView = Literal["street", "aerial"]
+
+
 @runtime_checkable
 class ImageryClient(Protocol):
     """Produces a photograph of one building, or says why it cannot."""
@@ -182,12 +195,20 @@ class ImageryClient(Protocol):
         """
         ...
 
-    async def fetch(self, *, address_id: str) -> BuildingImagery:
-        """Return imagery for one address.
+    async def fetch(
+        self, *, address_id: str, view: ImageryView = "street"
+    ) -> BuildingImagery:
+        """Return imagery for one address, from one direction.
 
         Never raises for a missing address, an unconfigured key, a dead
         provider, or a blown deadline: each of those is a ``BuildingImagery``
         with ``available=False``. A raise here would turn a missing photograph
         into a broken console.
+
+        ``view`` defaults to ``street`` so every existing caller is unchanged.
+        An implementation that cannot honour a view must say so through
+        ``available=False`` rather than quietly returning the other one -- a
+        commander told they are looking down at a roof, and shown a kerb, is
+        worse served than one told there is no aerial.
         """
         ...

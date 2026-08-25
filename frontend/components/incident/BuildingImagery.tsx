@@ -57,7 +57,21 @@ type State =
   | { kind: 'failed'; message: string }
   | { kind: 'answered'; imagery: BuildingImageryView };
 
-export function BuildingImagery({ addressId }: { addressId: string | null }) {
+/** Which way the building is being looked at. Mirrors the backend's own two. */
+export type ImageryView = 'street' | 'aerial';
+
+const IDLE_NOTE: Record<ImageryView, string> = {
+  street: 'No incident open. A photograph of the incident address appears here at dispatch.',
+  aerial: 'No incident open. An overhead view of the incident address appears here at dispatch.',
+};
+
+export function BuildingImagery({
+  addressId,
+  view = 'street',
+}: {
+  addressId: string | null;
+  view?: ImageryView;
+}) {
   const [state, setState] = useState<State>({ kind: 'idle' });
 
   useEffect(() => {
@@ -74,7 +88,7 @@ export function BuildingImagery({ addressId }: { addressId: string | null }) {
       // Through the console's own gateway: the backend credential stays on the
       // server, and so does the imagery provider key behind it.
       const result = await browserGet<BuildingImageryView>(
-        `/api/v1/buildings/${addressId}/imagery`,
+        `/api/v1/buildings/${addressId}/imagery?view=${view}`,
         { signal: controller.signal },
       );
       if (cancelled) return;
@@ -89,12 +103,12 @@ export function BuildingImagery({ addressId }: { addressId: string | null }) {
       cancelled = true;
       controller.abort();
     };
-  }, [addressId]);
+  }, [addressId, view]);
 
   if (state.kind === 'idle') {
     return (
       <p className="border border-dashed border-line p-4 text-micro leading-5 text-muted">
-        No incident open. A photograph of the incident address appears here at dispatch.
+        {IDLE_NOTE[view]}
       </p>
     );
   }
@@ -102,7 +116,7 @@ export function BuildingImagery({ addressId }: { addressId: string | null }) {
   if (state.kind === 'loading') {
     return (
       <p className="border border-dashed border-line p-4 text-micro text-muted" role="status">
-        Requesting imagery for {addressId}.
+        Requesting {view === 'aerial' ? 'an overhead view' : 'imagery'} for {addressId}.
       </p>
     );
   }
@@ -144,7 +158,11 @@ export function BuildingImagery({ addressId }: { addressId: string | null }) {
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         src={imagery.data_url}
-        alt={`Street-level photograph of ${imagery.address_id}`}
+        alt={
+          view === 'aerial'
+            ? `Overhead photograph of ${imagery.address_id}`
+            : `Street-level photograph of ${imagery.address_id}`
+        }
         className="h-[360px] w-full border border-line bg-surface object-cover"
       />
       <figcaption className="mt-2 space-y-1 text-micro text-muted">
@@ -157,8 +175,9 @@ export function BuildingImagery({ addressId }: { addressId: string | null }) {
         )}
         {imagery.captured_hint && <span className="block">Captured {imagery.captured_hint}</span>}
         <span className="block">
-          A photograph is what the street looked like when it was taken, not what the
-          structure is now. The massing model beside it carries the record.
+          {view === 'aerial'
+            ? 'An aerial is what the roof looked like when the tile was flown, not what it is now. Nothing here is a measurement; the massing model beside it carries the record.'
+            : 'A photograph is what the street looked like when it was taken, not what the structure is now. The massing model beside it carries the record.'}
         </span>
       </figcaption>
     </figure>

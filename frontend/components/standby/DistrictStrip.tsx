@@ -193,7 +193,9 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
           tone={sourceTone}
         />
         <span>{stats.sources.length} sources</span>
-        {fixtures.length > 0 && <span className="text-disputed">{fixtures.length} fixture</span>}
+        {fixtures.length > 0 && (
+          <span className="text-disputed">{fixtures.length} simulated</span>
+        )}
         {unavailable.length > 0 && (
           <span className="text-alarm">
             {unavailable.length} UNAVAILABLE: {unavailable.map((s) => s.source_id).join(', ')}

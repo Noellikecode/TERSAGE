@@ -415,20 +415,53 @@ def test_every_ranked_conflict_cites_the_rule_and_the_facts_it_rests_on() -> Non
 
 
 def test_conflict_importance_is_deterministic_and_ties_break_on_the_derived_id() -> None:
-    """Two workers ranking one district produce the same order, not just scores."""
+    """Two workers ranking one district produce the same order, not just scores.
+
+    The twins sit at *different addresses*. One rule and one attribute produce
+    exactly one live finding per structure -- a second finding about the same
+    pairing is a superseded one, and `current_conflicts` is what drops it -- so
+    a tie a captain can actually see is a tie across two buildings.
+    """
     reading = _reading()
-    twins = tuple(
-        _conflict(key=Keys.YEAR_BUILT, severity=3, conflict_id=cid)
+    twins = {
+        cid: _conflict(key=Keys.YEAR_BUILT, severity=3, conflict_id=cid)
         for cid in ("conflict_zzz", "conflict_aaa")
-    )
-    scores = {c.conflict_id: score_conflict(c, reading)[0] for c in twins}
+    }
+    scores = {cid: score_conflict(c, reading)[0] for cid, c in twins.items()}
     assert scores["conflict_zzz"] == scores["conflict_aaa"]
 
-    profile = _profile().model_copy(update={"conflicts": twins})
-    district = read_district(DISTRICT, [profile], now=NOW)
+    profiles = [
+        _profile(address_id=f"{ADDRESS}-{cid}").model_copy(
+            update={"conflicts": (conflict.model_copy(update={"address_id": f"{ADDRESS}-{cid}"}),)}
+        )
+        for cid, conflict in twins.items()
+    ]
+    district = read_district(DISTRICT, profiles, now=NOW)
     ordered = [row.conflict_id for row in rank_conflicts(district)]
     assert ordered == ["conflict_aaa", "conflict_zzz"]
     assert ordered == [row.conflict_id for row in rank_conflicts(district)]
+
+
+def test_one_disagreement_is_ranked_once_however_many_times_it_was_redetected() -> None:
+    """A rule re-firing does not give a captain three rows for one problem.
+
+    Real data: three OPEN findings at one address, same rule, same attribute,
+    same sentence -- each citing a different pair of the facts retained for that
+    key, because a conflict's id is derived from the facts it cited and an
+    amended permit mints a new one. Only a human may resolve a conflict, so the
+    superseded findings stay OPEN in the record. The queue shows the live one.
+    """
+    redetections = tuple(
+        _conflict(key=Keys.YEAR_BUILT, severity=3, days_open=age, conflict_id=cid)
+        for age, cid in ((2, "conflict_oldest"), (1, "conflict_middle"), (0, "conflict_newest"))
+    )
+    profile = _profile().model_copy(update={"conflicts": redetections})
+
+    assert len(profile.open_conflicts) == 3, "the record keeps every finding"
+    assert [c.conflict_id for c in profile.current_conflicts] == ["conflict_newest"]
+
+    district = read_district(DISTRICT, [profile], now=NOW)
+    assert [row.conflict_id for row in rank_conflicts(district)] == ["conflict_newest"]
 
 
 @pytest.mark.invariant

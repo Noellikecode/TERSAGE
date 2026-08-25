@@ -155,16 +155,19 @@ describe('an empty city inside a busy region', () => {
     expect(screen.getByText(/instrument working, not a fault/)).toBeInTheDocument();
   });
 
-  it('outlines the city and puts nothing inside it', () => {
+  it('states the empty city in words, with no map to read it off', () => {
+    // The scatter is gone: dots over a black rectangle with no coastline and
+    // no coordinates could not tell anybody where anything was, and it took
+    // the top of the page to say "nothing is happening here". The sentence
+    // carries the whole argument and always did.
     render(<FireActivityMap activity={activity()} />);
-    const svg = screen.getByTestId('fire-activity-scatter');
-    const outline = screen.getByTestId('fire-activity-city-outline');
-    expect(within(outline).getByText('San Francisco')).toBeInTheDocument();
-    // Exactly one circle per reported detection, both of them well outside the
-    // city box. Nothing stands in for the city itself.
-    const circles = Array.from(svg.querySelectorAll('circle'));
-    expect(circles).toHaveLength(2);
-    expect(outline.querySelector('circle')).toBeNull();
+    expect(screen.queryByTestId('fire-activity-scatter')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fire-activity-city-outline')).not.toBeInTheDocument();
+
+    const counts = screen.getByTestId('fire-activity-counts');
+    expect(counts).toHaveTextContent(/0 active detections in San Francisco/);
+    expect(counts).toHaveTextContent(/266.*across/);
+    expect(screen.getByText(/the instrument working, not a fault/)).toBeInTheDocument();
   });
 
   it('says "not reported" where a count is absent instead of drawing a zero', () => {
@@ -175,65 +178,6 @@ describe('an empty city inside a busy region', () => {
   });
 });
 
-describe('the scatter', () => {
-  it('projects lon and lat linearly into the viewBox', () => {
-    render(<FireActivityMap activity={activity()} />);
-    const svg = screen.getByTestId('fire-activity-scatter');
-    const [width] = (svg.getAttribute('viewBox') ?? '').split(' ').slice(2).map(Number);
-    expect(width).toBe(320);
-
-    const circle = svg.querySelector('circle[data-band="high"]') as SVGCircleElement;
-    // (-121.44 + 124.4) / (124.4 - 119.9) * 320
-    const expected = ((-121.44 - -124.4) / (-119.9 - -124.4)) * 320;
-    expect(Number(circle.getAttribute('cx'))).toBeCloseTo(expected, 3);
-  });
-
-  it('sizes by FRP and colours by confidence, and names both in words', () => {
-    render(<FireActivityMap activity={activity()} />);
-    const svg = screen.getByTestId('fire-activity-scatter');
-    const high = svg.querySelector('circle[data-band="high"]') as SVGCircleElement;
-    const low = svg.querySelector('circle[data-band="low"]') as SVGCircleElement;
-    expect(Number(high.getAttribute('r'))).toBeGreaterThan(Number(low.getAttribute('r')));
-    expect(high.getAttribute('fill')).not.toBe(low.getAttribute('fill'));
-    // Colour is never the only carrier: the legend spells the bands out.
-    expect(screen.getByText('size = FRP')).toBeInTheDocument();
-    for (const word of ['high', 'nominal', 'low', 'not reported']) {
-      expect(screen.getAllByText(word).length).toBeGreaterThan(0);
-    }
-  });
-
-  it('draws an unreported confidence hollow rather than guessing a band', () => {
-    const read = activity({
-      detections: [
-        {
-          latitude: 39.0,
-          longitude: -122.0,
-          confidence: null,
-          frp: 10,
-          acquired_at: null,
-          satellite: null,
-        },
-      ],
-    });
-    render(<FireActivityMap activity={read} />);
-    const circle = screen
-      .getByTestId('fire-activity-scatter')
-      .querySelector('circle[data-band="unreported"]') as SVGCircleElement;
-    expect(circle.getAttribute('fill')).toBe('none');
-    expect(circle.getAttribute('stroke-dasharray')).toBe('2 2');
-  });
-
-  it('is an image with a name, so the map is not a silent box', () => {
-    render(<FireActivityMap activity={activity()} />);
-    expect(screen.getByRole('img')).toHaveAccessibleName(/satellite thermal detections/i);
-  });
-
-  it('says so rather than drawing when there is no box to project onto', () => {
-    render(<FireActivityMap activity={activity({ bbox: null })} />);
-    expect(screen.queryByTestId('fire-activity-scatter')).not.toBeInTheDocument();
-    expect(screen.getByText(/No bounding box reported/)).toBeInTheDocument();
-  });
-});
 
 describe('the fire weather', () => {
   it('shows temperature, humidity and wind, each with its observation window', () => {
@@ -331,5 +275,45 @@ describe('refusals and failures', () => {
       expect(region.getAttribute('aria-labelledby')).toBe('fire-activity-heading');
       unmount();
     }
+  });
+});
+
+describe('the bounding box this backend actually sends', () => {
+  it('projects onto `region`, not only the FIRMS-shaped aliases', () => {
+    // The map spent its life printing "no bounding box reported" while holding
+    // one: it read `bbox`/`region_bbox`/`query_bbox` and the API sends `region`.
+    const activity = normalizeFireActivity({
+      district_id: 'sffd-district-03',
+      available: true,
+      provider: 'synthetic',
+      region: { west: -124.5, south: 36.5, east: -119.5, north: 40.5 },
+      city: { west: -122.55, south: 37.7, east: -122.35, north: 37.84 },
+      regional_count: 26,
+      in_city_count: 0,
+      detections: [],
+    });
+
+    expect(activity!.bbox).toEqual({ west: -124.5, south: 36.5, east: -119.5, north: 40.5 });
+    expect(activity!.cityBBox).toEqual({
+      west: -122.55,
+      south: 37.7,
+      east: -122.35,
+      north: 37.84,
+    });
+  });
+
+  it('still prefers an explicit bbox when one is sent', () => {
+    const activity = normalizeFireActivity({
+      bbox: [-1, -2, 3, 4],
+      region: { west: -124.5, south: 36.5, east: -119.5, north: 40.5 },
+    });
+    expect(activity!.bbox).toEqual({ west: -1, south: -2, east: 3, north: 4 });
+  });
+
+  it('does not read the region box as the region’s name', () => {
+    const activity = normalizeFireActivity({
+      region: { west: -124.5, south: 36.5, east: -119.5, north: 40.5 },
+    });
+    expect(activity!.regionLabel).toBe('the region');
   });
 });

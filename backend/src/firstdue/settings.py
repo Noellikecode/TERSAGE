@@ -148,6 +148,31 @@ class StorageBackend(StrEnum):
     FIRESTORE = "firestore"
 
 
+class ImageryProvider(StrEnum):
+    """Where the building photograph comes from.
+
+    Its own setting for the same reason :class:`WorkspaceWrites` is: the flag it
+    would otherwise ride on decides six unrelated things at once. Maps Platform
+    authenticates with a plain API key rather than Application Default
+    Credentials, so a machine can hold a perfectly good Maps key and no Vertex
+    access, or the reverse, and `USE_FAKE_AGENTS` can express neither.
+
+    It also unblocks the demo. The credential-free console is the default and
+    must stay hermetic -- `make demo` on a machine with no key touches no
+    network and renders the same placeholder every time. But a team that *has* a
+    key should be able to show real Street View and a real satellite tile
+    without turning Vertex, Firestore and every source live at the same moment,
+    which is what flipping fake mode does.
+
+    ``google`` without a key does not fall back to the placeholder. It reports
+    the refusal, because a drawing standing in for a photograph of a building a
+    crew is about to enter is the failure this project refuses everywhere else.
+    """
+
+    FAKE = "fake"
+    GOOGLE = "google"
+
+
 class WorkspaceWrites(StrEnum):
     """Whether the survey calendar and crew mail reach Google Workspace.
 
@@ -235,6 +260,10 @@ class Settings(BaseSettings):
     #: because those two need delegated user authority that Application Default
     #: Credentials do not carry; see :class:`WorkspaceWrites`.
     workspace_writes: WorkspaceWrites = WorkspaceWrites.FAKE
+    #: Where building photographs come from. Independent of fake mode because
+    #: Maps Platform uses an API key, not Application Default Credentials, and
+    #: because a real photograph is worth showing in an otherwise fake demo.
+    imagery_provider: ImageryProvider = ImageryProvider.FAKE
 
     # ------------------------------------------------- municipality ---------
     #: Default municipality. City behaviour is isolated behind CityAdapter.
