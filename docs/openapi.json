@@ -3835,7 +3835,7 @@
     },
     "/api/v1/buildings/{address_id}/imagery": {
       "get": {
-        "description": "What the building actually looks like, beside what it was measured to be.\n\nThe massing model on ``/geometry`` is derived from permits, lidar, and the\nassessor's roll. This is the photograph: the door, the windows, the bars, a\nstorey count an officer can check with their own eyes against the model\nstanding next to it. Same scope as the geometry it renders beside, because\nit is the other half of the same pane.\n\n**Always 200.** No coverage, no key, a dead provider, or a blown deadline\nall come back with ``available=false`` and a sentence in\n``unavailable_reason``. A 404 would render as a broken console, and a\nconsole that draws nothing would teach an officer that the building has no\nphotograph -- which is a claim, and a false one.\n\n**The console must render ``attribution``** under the frame whenever it is\nnon-empty. Google's Maps Platform Terms require visible attribution on\nStreet View and Static Maps imagery, and the department is the licensee.\n\nThe response carries the image inline as a data URL and never a provider\nURL: a signed Street View URL is ``GOOGLE_MAPS_API_KEY`` in a browser's\nnetwork tab.",
+        "description": "What the building actually looks like, beside what it was measured to be.\n\n``view=street`` is the eye-level photograph; ``view=aerial`` looks straight\ndown at the roof -- its shape, what is standing on it, and how close the\nexposures are. An aerial never falls back to a kerb-level frame: a\ncommander told they are looking at a roof and shown a street is worse\nserved than one told there is no aerial.\n\nThe massing model on ``/geometry`` is derived from permits, lidar, and the\nassessor's roll. This is the photograph: the door, the windows, the bars, a\nstorey count an officer can check with their own eyes against the model\nstanding next to it. Same scope as the geometry it renders beside, because\nit is the other half of the same pane.\n\n**Always 200.** No coverage, no key, a dead provider, or a blown deadline\nall come back with ``available=false`` and a sentence in\n``unavailable_reason``. A 404 would render as a broken console, and a\nconsole that draws nothing would teach an officer that the building has no\nphotograph -- which is a claim, and a false one.\n\n**The console must render ``attribution``** under the frame whenever it is\nnon-empty. Google's Maps Platform Terms require visible attribution on\nStreet View and Static Maps imagery, and the department is the licensee.\n\nThe response carries the image inline as a data URL and never a provider\nURL: a signed Street View URL is ``GOOGLE_MAPS_API_KEY`` in a browser's\nnetwork tab.",
         "operationId": "building_imagery_api_v1_buildings__address_id__imagery_get",
         "parameters": [
           {
@@ -3844,6 +3844,20 @@
             "required": true,
             "schema": {
               "title": "Address Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "street",
+              "enum": [
+                "street",
+                "aerial"
+              ],
+              "title": "View",
               "type": "string"
             }
           }
