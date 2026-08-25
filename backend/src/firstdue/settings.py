@@ -66,6 +66,23 @@ def parse_service_accounts(raw: str | None) -> tuple[str, ...]:
     return tuple(accounts)
 
 
+def parse_live_sources(raw: str | None) -> tuple[str, ...]:
+    """Parse ``LIVE_SOURCES`` into the source ids to run live in fake mode.
+
+    Order is preserved and duplicates are dropped; neither matters to the
+    caller, which does a membership test. The ids are *not* validated here --
+    :func:`firstdue.sources.catalog.build_sources` owns the catalog and refuses
+    an id it does not publish, so the check happens where the truth is rather
+    than against a copy that could drift.
+    """
+    ids: list[str] = []
+    for entry in (raw or "").split(","):
+        source_id = entry.strip()
+        if source_id and source_id not in ids:
+            ids.append(source_id)
+    return tuple(ids)
+
+
 def parse_console_role_bindings(raw: str) -> dict[str, str]:
     """Parse ``CONSOLE_ROLE_BINDINGS`` into ``{email: role name}``.
 
@@ -264,6 +281,18 @@ class Settings(BaseSettings):
     #: Maps Platform uses an API key, not Application Default Credentials, and
     #: because a real photograph is worth showing in an otherwise fake demo.
     imagery_provider: ImageryProvider = ImageryProvider.FAKE
+    #: Comma-separated source ids to poll for real while the rest stay fixtures.
+    #:
+    #: The same problem `IMAGERY_PROVIDER` solves, one layer down. Geometry is
+    #: measured from three public feeds -- the parcel footprint, Google Solar's
+    #: roof segments, and USGS 3DEP elevation -- and two of the three need no
+    #: credential at all. Tying them to `USE_FAKE_AGENTS` means the only way to
+    #: measure a real building is to take Vertex and every municipal record live
+    #: in the same move.
+    #:
+    #: Empty by default, so `make demo` stays hermetic and reproducible. Read
+    #: through :attr:`live_source_ids`.
+    live_sources: str = ""
 
     # ------------------------------------------------- municipality ---------
     #: Default municipality. City behaviour is isolated behind CityAdapter.
@@ -641,6 +670,16 @@ class Settings(BaseSettings):
         accepts anyone is an open door into the fleet's event stream.
         """
         return parse_service_accounts(self.internal_push_service_account)
+
+    @property
+    def live_source_ids(self) -> tuple[str, ...]:
+        """Which sources are promoted to their live feed in fake mode.
+
+        The catalog validates the ids, not this: it owns the list of what this
+        build publishes, and checking against a copy here would be a second
+        answer free to drift from the first.
+        """
+        return parse_live_sources(self.live_sources)
 
     @property
     def console_roles(self) -> dict[str, str]:

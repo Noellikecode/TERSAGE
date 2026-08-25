@@ -812,6 +812,11 @@ def build_container(settings: Settings) -> Container:
         fixtures_dir=settings.fixtures_dir,
         clock=clock,
         live=not settings.use_fake_agents,
+        # Named sources may run live while the rest stay on fixtures. Geometry
+        # is the reason: two of its three feeds need no credential, and the
+        # massing model is worthless -- worse, it is a "measured height" nobody
+        # measured -- while they are synthetic.
+        live_source_ids=settings.live_source_ids,
         central=_build_central_fetchers(settings, stores=stores),
         # The city adapter is the only component that knows where an address
         # is, so the point-query sources resolve their coordinates through it.

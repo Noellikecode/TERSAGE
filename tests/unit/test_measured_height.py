@@ -126,3 +126,60 @@ def test_the_surface_model_wins_when_both_shapes_are_present() -> None:
     result = measured_height(lidar, solar)
     assert result is not None
     assert result.height_m == 9.5
+
+
+# --------------------------------------------------- live-source geometry ---
+
+
+def test_a_point_source_is_asked_about_one_address_not_a_district() -> None:
+    """Solar and 3DEP answer per address; a district sweep never reaches them.
+
+    This is why the massing model was a constant. The watcher fetched all three
+    geometry sources with no address, which a fixture answers in bulk and a live
+    point source refuses outright with ``address_required`` -- so the agent
+    produced measured geometry in fake mode and none at all against Google
+    Solar and USGS, while the console still captioned the result "measured
+    height".
+    """
+    import inspect
+
+    from firstdue.agents import geometry_watcher
+
+    source = inspect.getsource(geometry_watcher.GeometryWatcher.poll)
+    # The parcel sweep is district-wide; the point sources are per address.
+    assert "await parcels.fetch()" in source
+    assert "fetch(address_id=address_id)" in source
+
+
+def test_targets_come_from_the_departments_own_profiles() -> None:
+    """Not from whatever a source happened to attribute.
+
+    The live parcel feed returns rows keyed by block-and-lot with no address id,
+    so a target list built from the sweep is empty against real data and full
+    against a fixture.
+    """
+    import inspect
+
+    from firstdue.agents import geometry_watcher
+
+    source = inspect.getsource(geometry_watcher.GeometryWatcher.poll)
+    assert "list_by_district(district_id)" in source
+
+
+def test_a_measured_roof_area_sizes_the_footprint() -> None:
+    """Right size, no claim about shape."""
+    from firstdue.agents.geometry_watcher import DEFAULT_FOOTPRINT, _footprint_of_area
+
+    ring = _footprint_of_area(398.13, DEFAULT_FOOTPRINT)
+    width = max(p[0] for p in ring) - min(p[0] for p in ring)
+    depth = max(p[1] for p in ring) - min(p[1] for p in ring)
+    assert round(width * depth) == 398
+    # And it is no longer the constant every structure in the district shared.
+    assert ring != DEFAULT_FOOTPRINT
+
+
+def test_an_absent_or_unusable_area_falls_back_rather_than_guessing() -> None:
+    from firstdue.agents.geometry_watcher import DEFAULT_FOOTPRINT, _footprint_of_area
+
+    for bad in (None, "", "not-a-number", 0, -5):
+        assert _footprint_of_area(bad, DEFAULT_FOOTPRINT) == DEFAULT_FOOTPRINT

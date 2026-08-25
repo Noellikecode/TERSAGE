@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 
 from firstdue.central.corpus import collection_for_source
 from firstdue.domain.enums import Classification, SourceType
+from firstdue.errors import ConfigurationError
 from firstdue.ports.city import CityAdapter
 from firstdue.ports.clock import Clock
 from firstdue.ports.sources import SourceAdapter, SourceRecord
@@ -803,11 +804,33 @@ def build_sources(
     fixtures_dir: Path,
     clock: Clock,
     live: bool = False,
+    live_source_ids: Sequence[str] = (),
     city: CityAdapter | None = None,
     credentials: LiveCredentials | None = None,
     central: CentralFetcherFactory | None = None,
 ) -> tuple[SourceAdapter, ...]:
-    """Every configured source for San Francisco, in catalog order."""
+    """Every configured source for San Francisco, in catalog order.
+
+    ``live_source_ids`` promotes named sources to their live feed while the rest
+    stay on fixtures. It exists for geometry: the parcel footprint, Google
+    Solar's roof segments and USGS 3DEP elevation are what *measure* a building,
+    two of the three need no credential, and tying them to ``live`` means the
+    only way to measure one real building is to take Vertex and every municipal
+    record live in the same move.
+
+    An id the catalog does not publish is a startup failure, not a silent no-op.
+    The quiet version of that mistake is a team believing they are reading a
+    real roof and shipping a demo built on a fixture.
+    """
+    published = {config.source_id for config in CATALOG}
+    unknown = sorted(set(live_source_ids) - published)
+    if unknown:
+        raise ConfigurationError(
+            "LIVE_SOURCES names sources this build does not publish",
+            details={"unknown": unknown, "published": sorted(published)},
+        )
+
+    promoted = set(live_source_ids)
     resolver = _city_resolver(city) if city is not None else None
     return tuple(
         ManagedSource(
@@ -815,7 +838,7 @@ def build_sources(
             build_fetcher(
                 config.source_id,
                 fixtures_dir=fixtures_dir,
-                live=live,
+                live=live or config.source_id in promoted,
                 resolver=resolver,
                 credentials=credentials,
                 central=central,

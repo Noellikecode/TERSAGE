@@ -24,6 +24,7 @@ renderer shows it as disputed.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -71,6 +72,29 @@ DEFAULT_FOOTPRINT: Final[tuple[Point2D, ...]] = (
     (11.5, 22.0),
     (0.0, 22.0),
 )
+
+#: The default's proportions, kept when only an area is known.
+_DEFAULT_ASPECT: Final[float] = 22.0 / 11.5
+
+
+def _footprint_of_area(area_m2: object, fallback: tuple[Point2D, ...]) -> tuple[Point2D, ...]:
+    """A rectangle of a measured ground area, in the default's proportions.
+
+    Used only where no parcel ring is available. It carries the building's
+    *size* and makes no claim about its shape: a roof measured at 398 m2 renders
+    as 398 m2 rather than as the constant every structure used to share.
+
+    An unusable or absent area returns the fallback rather than a guess.
+    """
+    try:
+        area = float(str(area_m2))
+    except (TypeError, ValueError):
+        return fallback
+    if not area > 0:
+        return fallback
+    width = math.sqrt(area / _DEFAULT_ASPECT)
+    depth = area / width
+    return ((0.0, 0.0), (width, 0.0), (width, depth), (0.0, depth))
 
 
 @dataclass(frozen=True, slots=True)
@@ -217,25 +241,68 @@ class GeometryWatcher:
         unavailable: list[str] = []
         records: dict[str, dict[str, SourceRecord]] = {}
 
-        for source_id in (PARCELS, SOLAR, LIDAR):
-            source = by_source.get(source_id)
-            if source is None:
-                continue
+        # The parcel sweep first, and only the parcel sweep. It is the source
+        # that answers about a whole district at once, so it is what decides
+        # which addresses there are geometry to derive for.
+        parcels = by_source.get(PARCELS)
+        if parcels is not None:
             try:
-                snapshot = await source.fetch()
+                snapshot = await parcels.fetch()
             except SourceUnavailableError as exc:
                 logger.warning(
                     "geometry_source_unavailable",
-                    extra={"source_id": source_id, "error_code": str(exc.code)},
+                    extra={"source_id": PARCELS, "error_code": str(exc.code)},
                 )
-                unavailable.append(source_id)
-                continue
-            for record in snapshot.records:
-                if record.address_id is None:
-                    continue
-                records.setdefault(record.address_id, {})[source_id] = record
+                unavailable.append(PARCELS)
+            else:
+                for record in snapshot.records:
+                    if record.address_id is None:
+                        continue
+                    records.setdefault(record.address_id, {})[PARCELS] = record
 
-        targets = sorted(set(address_ids) & set(records) if address_ids else records)
+        # The department's own profiles are the list of structures, not whatever
+        # a source happened to attribute. The live parcel feed returns rows
+        # keyed by block-and-lot with no address id at all, so a sweep-derived
+        # target list is empty against real data and full against a fixture --
+        # which is the second half of why this agent measured nothing live.
+        if address_ids:
+            targets = sorted(address_ids)
+        else:
+            targets = sorted(
+                p.address_id for p in await self._profiles.list_by_district(district_id)
+            )
+
+        # Solar and 3DEP answer about **one address**, and asking them about a
+        # district raises `address_required` before a request is even made.
+        # Sweeping all three together worked only because a fixture returns
+        # every record whatever it is asked, so this agent produced measured
+        # geometry in fake mode and none at all against the live feeds -- a
+        # default footprint and a "measured height" nobody measured.
+        for address_id in targets:
+            for source_id in (SOLAR, LIDAR):
+                source = by_source.get(source_id)
+                if source is None:
+                    continue
+                try:
+                    snapshot = await source.fetch(address_id=address_id)
+                except SourceUnavailableError as exc:
+                    # Per address, because one building outside coverage must
+                    # not mark the source down for the rest of the district.
+                    logger.warning(
+                        "geometry_source_unavailable",
+                        extra={
+                            "source_id": source_id,
+                            "address_id": address_id,
+                            "error_code": str(exc.code),
+                        },
+                    )
+                    if source_id not in unavailable:
+                        unavailable.append(source_id)
+                    continue
+                for record in snapshot.records:
+                    # A point source answers about the address it was asked
+                    # about; the mapper has no address to attribute it to.
+                    records.setdefault(address_id, {})[source_id] = record
         updated: list[str] = []
         invalidated: list[str] = []
         conflicts: list[str] = []
@@ -401,6 +468,15 @@ class GeometryWatcher:
             raw = parcel.fields.get("footprint")
             if isinstance(raw, list) and len(raw) >= 3:
                 footprint = tuple((float(p[0]), float(p[1])) for p in raw)
+        elif solar is not None:
+            # No parcel ring for this address, but Solar measured the roof's
+            # ground area. A rectangle of that area is not the building's
+            # *shape* and is not offered as one -- it is the right size, which
+            # is what the collapse zone and the massing render read. The
+            # alternative is `DEFAULT_FOOTPRINT`, a constant 11.5 x 22 m that
+            # every structure in the district shared and that no source ever
+            # measured.
+            footprint = _footprint_of_area(solar.fields.get("roof_area_m2"), footprint)
 
         segments: list[RoofSegment] = []
         obstructions: list[Obstruction] = []
