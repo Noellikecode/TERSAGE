@@ -210,11 +210,22 @@ def test_the_seeded_flight_predates_the_permit_that_disputes_it() -> None:
     agent that measures a building never ran in the demo at all. The model on
     screen was the seed's own literal under a caption reading "measured height".
     """
+    from datetime import datetime
+
     from firstdue.agents.geometry_watcher import geometry_is_stale
-    from firstdue.demo.seed import load_seed, profiles_from_seed
+    from firstdue.city.san_francisco import SanFranciscoAdapter
+    from firstdue.demo.seed import build_seed, profiles_from_seed
     from firstdue.settings import get_settings
 
+    # Built here, not loaded from `.demo-state`: a unit test that reads a file
+    # somebody has to run `firstdue seed` to produce passes on the machine that
+    # just ran it and fails everywhere else.
     settings = get_settings()
-    profiles = profiles_from_seed(load_seed(settings.demo_state_dir))
-    stale = [p.address_id for p in profiles if geometry_is_stale(p)]
+    city = SanFranciscoAdapter(settings.fixtures_dir)
+    document = build_seed(
+        addresses=list(city.list_addresses()),
+        epoch=datetime.fromisoformat(settings.demo_epoch),
+        seed=settings.demo_seed,
+    )
+    stale = [p.address_id for p in profiles_from_seed(document) if geometry_is_stale(p)]
     assert stale, "no seeded profile is stale, so the watcher will skip every one"
