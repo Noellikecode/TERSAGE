@@ -288,7 +288,20 @@ and three.js for the massing model. Terraform, Docker, Cloud Run.
 | Vertex AI Agent Engine Memory Bank | Semantic recall over open question threads |
 | Firestore, Pub/Sub, Cloud Run, Secret Manager, Cloud Storage | State, events, execution, credentials, artifacts |
 | Google Solar API | Roof geometry, pitch, plane height, array detection |
-| Street View Static, Maps Static | Building imagery beside the massing model |
+| Street View Static, Maps Static | Building imagery beside the massing model, street and aerial |
+
+Two settings decide where real data enters, independently of `USE_FAKE_AGENTS`,
+because Maps Platform authenticates with an API key while Vertex uses
+Application Default Credentials and one flag can express neither:
+
+* `IMAGERY_PROVIDER=fake|google` — the building photograph. `google` without a
+  key reports the refusal; it never falls back to the watermarked placeholder.
+* `LIVE_SOURCES=` — comma-separated source ids polled live while the rest stay
+  fixtures. `sf-parcels,google-solar,usgs-3dep` measures real geometry without
+  taking Vertex, Firestore and every municipal record live in the same move. An
+  id the catalog does not publish is a startup failure, not a silent no-op.
+
+Both default to off, so `make demo` stays hermetic and reproducible.
 | NASA FIRMS | Regional satellite fire activity |
 | NASA POWER | Fire-weather context |
 | Resend | Delivering an approved referral |
@@ -304,19 +317,92 @@ than an empty panel.
 
 One screen, two arrangements.
 
-In standby it reads as a platform at work: the district's vital signs across the
-top, the fleet spread across the width with a regional fire-activity map in the
-middle, and each agent carrying its own visual and a terminal of what it did.
-Slow-loop passes run on their own, so the fleet ticks over.
+In standby it leads with **what was found**, not with what found it. The
+district's vital signs across the top, then `Records disagree` — one card per
+structure whose paperwork and measurement do not match, in the sentence the
+rule wrote: *the permit records 2 storeys; lidar DSM measures 3*. Below that the
+survey queue, and down the left the fleet.
+
+**The fleet is rows and one pane.** Nine agents as one line each — status, id,
+one live number — and a single detail pane carrying whichever is selected: role,
+publisher, pinned version, budget, its glyph, its reasoning terminal. Hover
+previews, click pins so it holds while somebody talks over it, arrow keys reach
+every row. Drawing all nine at once put five screens of scroll on the page
+before anything had happened, and made "which agent is working" the hardest
+thing on it to find.
+
+**The survey queue is banded by score, not numbered.** A district poll produces
+about six distinct scores across a hundred structures and ties most of them at
+the bottom on identical reasons. Numbering those 6 through 100 told a captain
+that 47 outranked 48; nothing separates them. Bands carry the score, the count,
+the rules every member shares, and fold when they are long.
 
 On dispatch the page reorganises. Incident agents to the left, the massing model
-and a photograph of the building in the middle, the slow loop to the right —
-still there, still in full cards, because it did not stop.
+and the building's photograph to the right — street level or straight down,
+switchable. The slow loop leaves the screen and says so in a line of its own: it
+did not stop because a fire started, and an officer should not have to guess.
+
+**No regional map.** It drew detections on a black rectangle with no coastline,
+no grid and no coordinates, stretched to fill the column, and always showed an
+empty city — VIIRS pixels are ~375 m and cannot see a structure fire. The counts
+and the sentence carry that argument; the canvas never did.
+
+## Fixed on 2026-08-25
+
+Four defects found by auditing the running build, all verified against live
+Google endpoints rather than reasoned about.
+
+**`geometry-watcher` never measured anything outside fake mode.** Two bugs, and
+between them the massing model was a constant while the caption said "measured
+height" and derived a collapse zone — a distance a crew stands outside of —
+from it.
+
+1. *Point sources were asked as a district sweep.* The agent fetched parcels,
+   Solar and 3DEP with no address. A fixture answers that in bulk; a point
+   source refuses with `address_required` before a request is made, which is
+   why the log showed `SOURCE_UNAVAILABLE` with no HTTP error behind it.
+2. *Targets came from whatever a source attributed.* The live DataSF parcel
+   feed returns rows keyed by block-and-lot with no address id, so the target
+   list was empty against real data and full against a fixture. It now
+   enumerates the department's own profiles.
+
+   For `sf-0450-hayes`, seeded against measured: 2 roof segments → **11**;
+   9.51 m → **16.30 m**; footprint 11.5 × 22 m constant → **14.4 × 27.6 m,
+   the 398 m² Solar measured**; collapse zone 14.25 m → **24.45 m**. The
+   permit says 2 storeys and the measurement now says 5.
+
+   Where no parcel ring is attributable, the footprint is a rectangle of the
+   measured roof area: the right *size*, no claim about shape, and better than
+   a constant no source ever measured.
+
+**One disagreement was rendered three times.** A conflict's id is derived from
+the facts it cites, so an amended permit mints a new finding while the earlier
+one — about a pairing nothing compares any more — stays `OPEN`. Only a human may
+`RESOLVE` one, so nothing is closed or deleted: `BuildingProfile.current_conflicts`
+returns the newest open finding per rule and attribute, and the record keeps
+every finding for an investigator. Four call sites computed "open conflicts"
+independently and now read one property. District count went 4 → 2.
+
+**The fire-activity map never rendered.** It printed *"No bounding box
+reported"* while holding one: the component read `bbox`/`region_bbox`/
+`query_bbox` and the backend sends `region` and `city`. Fixed, then the map was
+removed anyway — see [The console](#the-console).
+
+**`preincident-plan-store` still names the wrong owner.** Unchanged from the
+2026-08-24 audit and still open — see below.
+
+---
 
 ## Known gaps
 
-Four, found by auditing the running build on 2026-08-24. All four survive the
-current commit; none is a doc error.
+Found by auditing the running build on 2026-08-24. All survive the current
+commit; none is a doc error.
+
+**The demo seed pre-bakes a `GeometrySpec`,** and `geometry_is_stale` is false
+for a profile that already has one — so `geometry-watcher` skips every address
+and the model on screen is seed output, not agent output. The two fixes above
+are reachable only once the seed stops fabricating geometry, which changes what
+the console shows before the first pass completes.
 
 **Nothing runs concurrently.** `asyncio.gather`, `TaskGroup`, `create_task` and
 `as_completed` return zero hits across `backend/src`, graphs included. Both
@@ -361,7 +447,7 @@ id that handler runs under.
 
 ## Verification
 
-1,516 backend tests and 286 console tests. Strict mypy across 187 source files.
+1,516 backend tests and 318 console tests. Strict mypy across 187 source files.
 Ten architecture decision records. A contract suite that holds the in-memory
 and Firestore backends to one set of behaviours, an infrastructure suite that
 holds Terraform to the agent descriptors, and an observability suite that
