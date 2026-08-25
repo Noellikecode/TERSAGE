@@ -232,3 +232,21 @@ variable "console_role_bindings" {
   type        = string
   default     = ""
 }
+
+variable "live_sources" {
+  description = <<-EOT
+    Source ids polled from their real feed. Everything else stays on fixtures.
+
+    Geometry is why this exists. A building is *measured* by three public feeds
+    -- the parcel footprint, Google Solar's roof segments and USGS 3DEP
+    elevation -- and two of the three need no credential at all. Tying them to
+    `USE_FAKE_AGENTS` means the only way to measure one real building is to take
+    Vertex and every municipal record live in the same move.
+
+    An id the catalog does not publish is a startup failure, not a silent no-op:
+    the quiet version of that mistake is a deployment believing it is reading a
+    real roof while serving a fixture.
+  EOT
+  type        = list(string)
+  default     = ["sf-parcels", "google-solar", "usgs-3dep"]
+}

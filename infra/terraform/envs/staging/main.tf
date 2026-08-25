@@ -147,6 +147,23 @@ locals {
     # something this file should track.
     GROUNDING_SEARCH_ENABLED = tostring(var.grounding_search_enabled)
     MEMORY_BANK_ENABLED      = tostring(var.memory_bank_enabled)
+    # Where the building photograph comes from, and which sources poll their
+    # real feed. Both are deliberately independent of USE_FAKE_AGENTS: Maps
+    # Platform authenticates with an API key while Vertex uses the service
+    # account's own credential, so one flag can express neither, and a machine
+    # can hold a perfectly good Maps key and no Vertex access.
+    #
+    # `google` without a key reports the refusal rather than falling back to the
+    # watermarked placeholder -- a drawing standing in for a photograph of a
+    # building a crew is about to enter is the one substitution this project
+    # will not make -- so this follows the same `live_source_keys` gate the
+    # Resend pair does.
+    IMAGERY_PROVIDER = contains(var.live_source_keys, "google-maps-api-key") ? "google" : "fake"
+    # Comma-separated source ids polled live. Geometry is the reason: the parcel
+    # footprint, Solar's roof segments and USGS 3DEP elevation are what *measure*
+    # a building, and without them the massing model is a constant rectangle
+    # under a caption that says "measured height".
+    LIVE_SOURCES = join(",", var.live_sources)
     # Emitted only when the key it pairs with is actually mounted. `Settings`
     # refuses to start with one and not the other -- a sender with no key is a
     # deployment that believes it is emailing the building department and is
