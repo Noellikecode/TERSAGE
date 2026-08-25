@@ -3562,7 +3562,8 @@
           "record.written",
           "incident.closed",
           "profile.materialized",
-          "agent.published"
+          "agent.published",
+          "agent.wake"
         ],
         "title": "Topic",
         "type": "string"
