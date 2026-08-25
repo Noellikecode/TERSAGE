@@ -19,13 +19,14 @@ quietly return an empty list that reads as "no hazardous materials present".
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any, Final, Literal
 from zoneinfo import ZoneInfo
 
+from firstdue.central.corpus import collection_for_source
 from firstdue.domain.enums import Classification, SourceType
 from firstdue.ports.city import CityAdapter
 from firstdue.ports.clock import Clock
@@ -708,6 +709,12 @@ class LiveCredentials:
         return f"firstdue/1.0 ({self.contact_email})"
 
 
+#: Builds a fetcher for one central collection. Injected rather than imported
+#: so this module keeps no dependency on Firestore: fake mode must not reach a
+#: Google client, and the catalog is imported in both modes.
+CentralFetcherFactory = Callable[[str], PageFetcher]
+
+
 def build_fetcher(
     source_id: str,
     *,
@@ -715,6 +722,7 @@ def build_fetcher(
     live: bool,
     resolver: PointResolver | None = None,
     credentials: LiveCredentials | None = None,
+    central: CentralFetcherFactory | None = None,
 ) -> PageFetcher:
     """Choose the fetcher for one source.
 
@@ -722,6 +730,18 @@ def build_fetcher(
     where one does not. It never falls back to the fixture: a live-mode process
     serving synthetic records would be lying about where its data came from.
     """
+    # The central database wins over both, when one is wired in. It is the
+    # department's own store -- see `firstdue.central` -- and a source it backs
+    # is answered from Firestore rather than from a fixture file or a public
+    # feed. Public federal and geospatial sources have no central collection
+    # and fall through to the live branch below, so a deployment reads real EPA,
+    # real Solar and real elevation while the municipal records are the
+    # generated corpus.
+    if central is not None:
+        collection = collection_for_source(source_id)
+        if collection is not None:
+            return central(collection)
+
     if not live:
         return FixtureFetcher(fixtures_dir / "san-francisco" / "sources" / FIXTURE_FILES[source_id])
 
@@ -785,6 +805,7 @@ def build_sources(
     live: bool = False,
     city: CityAdapter | None = None,
     credentials: LiveCredentials | None = None,
+    central: CentralFetcherFactory | None = None,
 ) -> tuple[SourceAdapter, ...]:
     """Every configured source for San Francisco, in catalog order."""
     resolver = _city_resolver(city) if city is not None else None
@@ -797,6 +818,7 @@ def build_sources(
                 live=live,
                 resolver=resolver,
                 credentials=credentials,
+                central=central,
             ),
             clock=clock,
         )

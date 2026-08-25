@@ -245,6 +245,7 @@ dependencies = [
 
 [package.optional-dependencies]
 google = [
+    { name = "google-api-core" },
     { name = "google-api-python-client" },
     { name = "google-auth" },
     { name = "google-cloud-aiplatform" },
@@ -279,6 +280,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<0.116" },
+    { name = "google-api-core", marker = "extra == 'google'", specifier = ">=2.34,<2.35" },
     { name = "google-api-python-client", marker = "extra == 'google'", specifier = ">=2.140,<3" },
     { name = "google-auth", marker = "extra == 'google'", specifier = ">=2.35,<3" },
     { name = "google-cloud-aiplatform", marker = "extra == 'google'", specifier = ">=1.71,<2" },

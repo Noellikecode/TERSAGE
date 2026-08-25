@@ -151,6 +151,21 @@ from the model rather than passing it through.
 
 ## Memory
 
+The memory bank is two stores. The **record** — everything a thread has ruled
+out, what it rests on, how many passes examined it, and every transition it made
+— is Firestore, because that is a state machine with invariants. The **prose** of
+each question is mirrored into Vertex AI Agent Engine Memory Bank, which gives
+recall a second question it can answer: not only *what is this district
+carrying*, but *has anyone asked something like this*, by meaning.
+
+The split is a measurement, not a preference: a `Memory.fact` in that service is
+capped at 2048 characters, which a question's bounded prose fits comfortably and
+a long-running thread's accumulated eliminations do not. The index is never the
+record — every match is read back from Firestore and re-gated on the caller's
+scopes before it is returned, so an index that is stale, degraded or absent
+costs findability and never correctness. `PHI` and Tier II prose never reach it
+at all, because writing a memory embeds it.
+
 The memory bank holds what a pass could not finish. An open question records
 what an agent is trying to establish, what it is waiting for, what it has
 already ruled out, its confidence, and when to give up.
@@ -264,6 +279,7 @@ and three.js for the massing model. Terraform, Docker, Cloud Run.
 | Google Search grounding | Reference resolution, local fire reports |
 | Model Armor | Inline screen on ingested documents |
 | Vertex Vector Search | Semantic recall over screened narratives |
+| Vertex AI Agent Engine Memory Bank | Semantic recall over open question threads |
 | Firestore, Pub/Sub, Cloud Run, Secret Manager, Cloud Storage | State, events, execution, credentials, artifacts |
 | Google Solar API | Roof geometry, pitch, plane height, array detection |
 | Street View Static, Maps Static | Building imagery beside the massing model |
@@ -293,8 +309,8 @@ still there, still in full cards, because it did not stop.
 
 ## Verification
 
-1,425 backend tests and 278 console tests. Strict mypy across 184 source files.
-Nine architecture decision records. A contract suite that holds the in-memory
+1,516 backend tests and 286 console tests. Strict mypy across 187 source files.
+Ten architecture decision records. A contract suite that holds the in-memory
 and Firestore backends to one set of behaviours, an infrastructure suite that
 holds Terraform to the agent descriptors, and an observability suite that
 asserts telemetry carries no document content.

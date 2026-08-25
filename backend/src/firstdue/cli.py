@@ -18,13 +18,14 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
 from firstdue import __version__
 from firstdue.city.san_francisco import SanFranciscoAdapter
 from firstdue.demo.seed import build_seed, load_seed, profiles_from_seed, write_seed
 from firstdue.errors import FirstDueError
 from firstdue.registry.descriptors import FLEET, FLEET_VERSION
-from firstdue.settings import Settings, get_settings
+from firstdue.settings import Settings, StorageBackend, get_settings
 
 
 def _epoch(settings: Settings) -> datetime:
@@ -120,6 +121,60 @@ def cmd_status(settings: Settings) -> int:
     return 0
 
 
+def cmd_load_central(settings: Settings, *, window_days: int, dry_run: bool) -> int:
+    """Generate the municipality's records and write them to Firestore.
+
+    Replaces whatever was there. The corpus is deterministic, so a reload with
+    the same seed and epoch rewrites the same documents rather than doubling the
+    district.
+    """
+    import asyncio
+
+    from firstdue.central import build_corpus
+    from firstdue.central.corpus import corpus_epoch
+
+    city = SanFranciscoAdapter(settings.fixtures_dir)
+    corpus = build_corpus(
+        addresses=list(city.list_addresses()),
+        districts=list(city.list_districts()),
+        epoch=corpus_epoch(_epoch(settings)),
+        seed=settings.demo_seed,
+        window_days=window_days,
+    )
+
+    print(f"central database - {corpus.record_count} records over {window_days} days")
+    for name, count in corpus.summary().items():
+        print(f"  {name:<22} {count}")
+
+    if dry_run:
+        print("\ndry run: nothing written")
+        return 0
+
+    if settings.storage_backend is not StorageBackend.FIRESTORE:
+        print(
+            "\nSTORAGE_BACKEND=firestore is required to load the central database",
+            file=sys.stderr,
+        )
+        return 2
+
+    from firstdue.adapters.firestore.central import load_corpus
+    from firstdue.container import build_firestore_stores
+
+    stores = build_firestore_stores(settings)
+    if stores.firestore is None:  # pragma: no cover - build guarantees it
+        print("no Firestore client", file=sys.stderr)
+        return 2
+    from firstdue.adapters.firestore.client import FirestoreConfig
+
+    client, raw_config = stores.firestore
+    config = cast(FirestoreConfig, raw_config)
+    written = asyncio.run(load_corpus(client, config, corpus))
+    print(f"\nwrote {sum(written.values())} documents to Firestore")
+    if config.namespace:
+        print(f"namespace {config.namespace!r}")
+    return 0
+
+
 def cmd_slow_loop(settings: Settings, *, approve: bool, district: str | None) -> int:
     """Run one complete slow-loop pass and print what it did."""
     import asyncio
@@ -203,6 +258,16 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("verify-seed", help="check the seed is byte-identical on rebuild")
     sub.add_parser("status", help="print resolved configuration")
 
+    central = sub.add_parser(
+        "load-central", help="generate the municipal corpus and write it to Firestore"
+    )
+    central.add_argument(
+        "--window-days", type=int, default=7, help="how much recent activity to generate"
+    )
+    central.add_argument(
+        "--dry-run", action="store_true", help="print what would be written and stop"
+    )
+
     slow_loop = sub.add_parser("slow-loop", help="run one slow-loop pass over a district")
     slow_loop.add_argument("--district", default=None, help="district id (default: configured)")
     slow_loop.add_argument(
@@ -235,6 +300,10 @@ def main(argv: list[str] | None = None) -> int:
                 return cmd_schema(settings, args.out)
             case "status":
                 return cmd_status(settings)
+            case "load-central":
+                return cmd_load_central(
+                    settings, window_days=args.window_days, dry_run=args.dry_run
+                )
             case "slow-loop":
                 return cmd_slow_loop(settings, approve=not args.no_approve, district=args.district)
             case _:  # pragma: no cover - argparse enforces the set

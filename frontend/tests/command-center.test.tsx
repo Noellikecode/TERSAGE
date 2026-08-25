@@ -206,26 +206,55 @@ afterEach(() => {
 describe('standby', () => {
   it('shows the district metric strip with real counts', () => {
     renderConsole();
-    expect(screen.getByText('Structures')).toBeInTheDocument();
-    expect(screen.getByText('43')).toBeInTheDocument();
-    expect(screen.getByText('1 at severity 4+')).toBeInTheDocument();
+    const bar = screen.getByTestId('district-bar');
+    // Four numbers, no captions. The bar carried six metrics and a caption
+    // under each, all at eleven pixels -- twelve pieces of text for six
+    // numbers, and the most important figure on the page set at the size of
+    // its own footnote. `Facts` and `Dispatched` left: a count of records is a
+    // vanity number, and companies-out belongs to the incident view.
+    expect(within(bar).getByText('Structures')).toBeInTheDocument();
+    expect(within(bar).getByText('Open conflicts')).toBeInTheDocument();
+    expect(within(bar).getByText('Queued')).toBeInTheDocument();
+    expect(within(bar).getByText('Never surveyed')).toBeInTheDocument();
+    expect(within(bar).queryByText('Facts')).not.toBeInTheDocument();
   });
 
   it('draws a meter only where the backend reports both halves of the ratio', () => {
     renderConsole();
     const bar = screen.getByTestId('district-bar');
-    // Four of the six counts have an honest denominator on the same payload;
-    // facts and companies-out do not, and get a dashed track rather than a
-    // fill against a scale nobody measured.
+    // Every remaining count has an honest denominator on this payload, so all
+    // four fill. The dashed track is still the answer for a ratio nobody
+    // measured -- see the empty-district case below, which is the one that
+    // exercises it now.
     expect(within(bar).getAllByTestId('meter')).toHaveLength(4);
-    expect(within(bar).getAllByTestId('meter-unscaled')).toHaveLength(2);
+    expect(within(bar).queryAllByTestId('meter-unscaled')).toHaveLength(0);
     expect(within(bar).getByTestId('source-ring')).toBeInTheDocument();
+  });
+
+  it('refuses to draw a proportion against a denominator of zero', () => {
+    // A district with nothing on file has no proportion to draw, and drawing
+    // one anyway would be inventing a scale. The tile keeps the rhythm of the
+    // bar with a dashed track instead.
+    renderConsole({
+      initialStats: {
+        ...STATS,
+        profiles: 0,
+        surveyed: 0,
+        queued_for_survey: 0,
+        profiles_never_surveyed: 0,
+        open_conflicts: 0,
+        high_severity_conflicts: 0,
+      },
+    });
+    const bar = screen.getByTestId('district-bar');
+    expect(within(bar).queryAllByTestId('meter')).toHaveLength(0);
+    expect(within(bar).getAllByTestId('meter-unscaled')).toHaveLength(4);
   });
 
   it('reports source availability honestly, including unconfigured ones', () => {
     renderConsole();
     expect(screen.getByText(/1 UNAVAILABLE: tier-ii-confidential/)).toBeInTheDocument();
-    expect(screen.getByText(/1 fixture-backed/)).toBeInTheDocument();
+    expect(screen.getByText(/1 fixture/)).toBeInTheDocument();
   });
 
   it('shows the fleet with publisher and pinned version', () => {
@@ -272,7 +301,7 @@ describe('the layout', () => {
     // Two fleet columns flanking, both the slow loop, and the region between
     // them. The shape does not change at dispatch, so an officer does not
     // re-learn the screen at the moment a fire starts.
-    const columns = screen.getAllByRole('region', { name: /fleet/i });
+    const columns = screen.getAllByRole('region', { name: /loop/i });
     expect(columns).toHaveLength(2);
 
     const [left, right] = columns as [HTMLElement, HTMLElement];
@@ -293,17 +322,17 @@ describe('the layout', () => {
     // fleet went rather than falling through to "empty catalog", which would be
     // true of the catalog and false of the column.
     renderConsole();
-    const [left, right] = screen.getAllByRole('region', { name: /fleet/i }) as [
+    const [left, right] = screen.getAllByRole('region', { name: /loop/i }) as [
       HTMLElement,
       HTMLElement,
     ];
-    expect(left).toHaveAccessibleName('Fleet — slow loop');
-    expect(right).toHaveAccessibleName('Fleet — slow loop, continued');
+    expect(left).toHaveAccessibleName('Slow loop');
+    expect(right).toHaveAccessibleName('Slow loop, continued');
 
     expect(within(left).getAllByText(/records-watcher/).length).toBeGreaterThan(0);
     expect(within(right).queryByText(/records-watcher/)).not.toBeInTheDocument();
     expect(
-      within(right).getByText(/slow-loop agent, and it is in the column on the left/),
+      within(right).getByText(/slow-loop agents are shown on the left/),
     ).toBeInTheDocument();
     expect(within(right).queryByText(/empty catalog/)).not.toBeInTheDocument();
 
@@ -319,7 +348,7 @@ describe('the layout', () => {
       ref: `slow-${id}@1.0.0`,
     }));
     renderConsole({ initialAgents: [...slow, AGENTS[1]!] });
-    const [left, right] = screen.getAllByRole('region', { name: /fleet/i }) as [
+    const [left, right] = screen.getAllByRole('region', { name: /loop/i }) as [
       HTMLElement,
       HTMLElement,
     ];
@@ -349,7 +378,7 @@ describe('the layout', () => {
     expect(within(model).getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument();
     // The fleet columns did not go anywhere to make room for it: the structure
     // opens inside the middle column, under the ranked strip.
-    expect(screen.getAllByRole('region', { name: /fleet/i })).toHaveLength(2);
+    expect(screen.getAllByRole('region', { name: /loop/i })).toHaveLength(2);
     expect(
       screen
         .getByRole('region', { name: 'Ranked for survey' })
@@ -641,7 +670,7 @@ describe('the dispatch transition', () => {
 
   it('reorganises into three columns: incident fleet, structure, incident fleet', async () => {
     await dispatch();
-    const columns = screen.getAllByRole('region', { name: /fleet/i });
+    const columns = screen.getAllByRole('region', { name: /loop/i });
     expect(columns).toHaveLength(2);
 
     const [incidentFleet, continuedFleet] = columns as [HTMLElement, HTMLElement];
@@ -673,7 +702,7 @@ describe('the dispatch transition', () => {
     // The console names the loop per column and the panel answers which agents
     // match. Nothing here filters the agent list -- two places deciding that is
     // how the two answers drift apart -- so the headings are the contract.
-    const [incidentFleet, continuedFleet] = screen.getAllByRole('region', { name: /fleet/i }) as [
+    const [incidentFleet, continuedFleet] = screen.getAllByRole('region', { name: /loop/i }) as [
       HTMLElement,
       HTMLElement,
     ];

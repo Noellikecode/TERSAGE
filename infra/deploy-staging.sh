@@ -69,10 +69,38 @@ CONSOLE_IMAGE="${REGISTRY}/console@$(digest_of console)"
 echo "==> backend  ${BACKEND_IMAGE}"
 echo "==> console  ${CONSOLE_IMAGE}"
 
+# The digests are written into terraform.tfvars rather than passed as `-var`.
+#
+# They used to be passed on the command line, and that cannot work now that
+# tfvars pins them too: OpenTofu re-reads tfvars when it applies a *saved* plan
+# and refuses the apply when a variable differs from the value recorded in the
+# plan -- so a plan built from `-var` digests and a tfvars holding the previous
+# ones is rejected every time, which is exactly what happened on the first real
+# deployment. Two places owning one variable, and the second one silent until
+# the apply.
+#
+# Writing them here keeps the property the pinning exists for: after a
+# deployment, terraform.tfvars names the exact images that are running, so a
+# rollback is `git diff`-able against the last one rather than reconstructed
+# from a build log.
+echo "==> pinning digests in terraform.tfvars"
+python3 - "${ENV_DIR}/terraform.tfvars" "${BACKEND_IMAGE}" "${CONSOLE_IMAGE}" <<'PIN'
+import re
+import sys
+
+path, backend, console = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(path, encoding="utf-8").read()
+for name, value in (("backend_image", backend), ("console_image", console)):
+    pattern = rf'^(\s*{name}\s*=\s*).*$'
+    replacement = rf'\g<1>"{value}"'
+    text, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE)
+    if count != 1:
+        sys.exit(f"error: {name} is not set in {path}; add it and re-run")
+open(path, "w", encoding="utf-8").write(text)
+PIN
+
 echo "==> planning"
-"${TOFU}" -chdir="${ENV_DIR}" plan -input=false -out=tfplan \
-  -var="backend_image=${BACKEND_IMAGE}" \
-  -var="console_image=${CONSOLE_IMAGE}"
+"${TOFU}" -chdir="${ENV_DIR}" plan -input=false -out=tfplan
 
 # A plan that is applied without being read is a plan that deletes a Firestore
 # database at some point. AUTO_APPROVE exists for CI, where the plan is an

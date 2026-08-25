@@ -122,8 +122,8 @@ describe('landmarks and structure', () => {
       'District readiness',
       'Regional fire activity',
       'Ranked for survey',
-      'Fleet — slow loop',
-      'Fleet — slow loop, continued',
+      'Slow loop',
+      'Slow loop, continued',
     ]) {
       const region = screen.getByRole('region', { name });
       const labelledBy = region.getAttribute('aria-labelledby');

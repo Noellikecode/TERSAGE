@@ -10,6 +10,7 @@ from firstdue.city.san_francisco import SanFranciscoAdapter
 from firstdue.demo.seed import (
     COLD_START_ADDRESS_ID,
     DISPUTED_ADDRESS_ID,
+    RECORDS_ONLY,
     build_seed,
     profiles_from_seed,
 )
@@ -41,9 +42,15 @@ def test_a_different_seed_produces_different_state(settings, epoch) -> None:
     assert a["content_hash"] != b["content_hash"]
 
 
-def test_seeded_profiles_revalidate_every_invariant(seed_document) -> None:
+def test_seeded_profiles_revalidate_every_invariant(seed_document, settings) -> None:
     profiles = profiles_from_seed(seed_document)
-    assert len(profiles) == 8
+    # Every reference address gets a profile except the cold-start one, which is
+    # deliberately left with nothing on record. Asserted as that relationship
+    # rather than as a count: the address fixture is generated from the city's
+    # real parcel feed and grows, and a literal here would fail on size while
+    # saying nothing about the property it is guarding.
+    city = SanFranciscoAdapter(settings.fixtures_dir)
+    assert len(profiles) == len(list(city.list_addresses())) - len(RECORDS_ONLY)
     for profile in profiles:
         assert [e.sequence for e in profile.timeline] == list(range(len(profile.timeline)))
 

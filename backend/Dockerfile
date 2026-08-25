@@ -26,7 +26,21 @@ RUN groupadd --system --gid 10001 firstdue \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+# Installed **with the `google` extra**, which is not optional for this image
+# even though it is optional for the package.
+#
+# The extra exists so that fake mode, `make demo`, and the whole test suite run
+# with no Google clients installed at all -- that is a real property and worth
+# keeping. But this image is what Cloud Run runs, and Cloud Run runs it with
+# USE_FAKE_AGENTS=false and STORAGE_BACKEND=firestore. Without the extra the
+# container starts, resolves its settings, reaches for Firestore and exits(1) on
+# `No module named 'google'` -- which is what every one of the eleven services
+# did on the first real deployment. The default below stays `true` so a bare
+# `docker run` is still the credential-free demo; what changed is that choosing
+# live mode now has the packages it needs.
+RUN WHEEL="$(ls /wheels/*.whl)" \
+ && pip install --no-cache-dir "${WHEEL}[google]" \
+ && rm -rf /wheels
 
 COPY --chown=firstdue:firstdue fixtures ./fixtures
 

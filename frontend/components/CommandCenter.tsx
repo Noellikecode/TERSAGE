@@ -900,6 +900,7 @@ export function CommandCenter({
     className,
     columnAgents,
     emptyNote,
+    srHeading,
   }: {
     id: string;
     heading: string;
@@ -916,17 +917,31 @@ export function CommandCenter({
      * false of this column when the other one is holding every agent there is.
      */
     emptyNote?: string;
+    /**
+     * The heading a screen reader gets when `heading` is blank.
+     *
+     * The second column of a loop is a continuation, not a second thing, so
+     * repeating "Fleet — slow loop, continued" over it made the *layout* the
+     * subject of the largest label on that half of the page. Sighted readers
+     * get one heading per loop; the region still has to be named for anyone
+     * navigating by landmark, so the name moves to `sr-only` rather than
+     * disappearing.
+     */
+    srHeading?: string;
   }) => (
     <section aria-labelledby={id} className={className}>
       <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2 px-4 pb-2 pt-3">
-        <h2 id={id} className="text-micro uppercase tracking-widest text-muted">
-          {heading}
+        <h2
+          id={id}
+          className={heading ? 'text-label uppercase text-muted' : 'sr-only'}
+        >
+          {heading || srHeading}
         </h2>
-        {note && <span className="text-micro uppercase tracking-wide text-muted">{note}</span>}
+        {note && <span className="text-label uppercase text-muted">{note}</span>}
       </div>
       <div className="px-4 pb-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {columnAgents && columnAgents.length === 0 && emptyNote ? (
-          <p className="border border-dashed border-line p-4 text-micro leading-5 text-muted">
+          <p className="border border-dashed border-line p-4 text-body text-muted">
             {emptyNote}
           </p>
         ) : (
@@ -1204,7 +1219,7 @@ export function CommandCenter({
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden">
             {fleetRegion({
               id: 'standby-fleet-heading',
-              heading: 'Fleet — slow loop',
+              heading: 'Slow loop',
               note: `${slowLeft.length} of ${slowTotal}`,
               loop: 'SLOW',
               columnAgents: slowLeft,
@@ -1235,20 +1250,21 @@ export function CommandCenter({
 
             {fleetRegion({
               id: 'standby-fleet-continued-heading',
-              heading: 'Fleet — slow loop, continued',
+              heading: '',
+              srHeading: 'Slow loop, continued',
               note: `${slowRight.length} of ${slowTotal}`,
               loop: 'SLOW',
               columnAgents: slowRight,
+              // Only ever seen when this column is empty, which is not the
+              // normal state -- so it is an empty state rather than standing
+              // text, and it earns its place: falling through to the panel's
+              // own "the registry reported an empty catalog" would be true of
+              // the catalog and false of this column.
+              ...(slowTotal > 0
+                ? { emptyNote: `All ${slowTotal} slow-loop agents are shown on the left.` }
+                : {}),
               // With no slow agents at all the panel's own "empty catalog" line
               // is the true one, so this note stands down and lets it through.
-              ...(slowTotal > 0
-                ? {
-                    emptyNote:
-                      slowTotal === 1
-                        ? 'The catalog publishes one slow-loop agent, and it is in the column on the left.'
-                        : `All ${slowTotal} slow-loop agents are in the column on the left.`,
-                  }
-                : {}),
               className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
             })}
           </div>
@@ -1264,7 +1280,7 @@ export function CommandCenter({
           <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)_320px] lg:overflow-hidden">
             {fleetRegion({
               id: 'incident-fleet-heading',
-              heading: 'Fleet — incident loop',
+              heading: 'Incident loop',
               note: `${incidentLeft.length} of ${incidentTotal} · acting now`,
               loop: 'INCIDENT',
               columnAgents: incidentLeft,
@@ -1337,12 +1353,13 @@ export function CommandCenter({
 
             {fleetRegion({
               id: 'incident-fleet-continued-heading',
-              heading: 'Fleet — incident loop, continued',
+              heading: '',
+              srHeading: 'Incident loop, continued',
               note: `${incidentRight.length} of ${incidentTotal} · acting now`,
               loop: 'INCIDENT',
               columnAgents: incidentRight,
               className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
-              emptyNote: 'Every incident agent is in the column on the left.',
+              emptyNote: 'All incident agents are shown on the left.',
             })}
           </div>
         )}

@@ -51,6 +51,24 @@ COLLECTION_NAMES: Final[tuple[str, ...]] = (
     # for a municipal record that may be months late.
     "open_questions",
     "memory_checkpoints",
+    # ---- the central database ----
+    #
+    # The municipality's own records, which the slow loop polls exactly as it
+    # polls a city feed -- see `firstdue.central`. They sit in this database
+    # beside the memory bank above deliberately: a question a watcher opened
+    # because a permit cited a filing that had not published yet is department
+    # knowledge in the same sense the permit is, and keeping both here is what
+    # makes the loop cumulative instead of repetitive.
+    "central_permits",
+    "central_assessor",
+    "central_inspections",
+    "central_violations",
+    "central_hazmat",
+    # Read by the incident loop and the console, never extracted into
+    # structural facts: what happened at this address before, and who is
+    # riding today.
+    "central_incidents",
+    "central_personnel",
 )
 
 

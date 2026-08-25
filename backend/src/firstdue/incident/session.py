@@ -29,6 +29,7 @@ from firstdue.container import Container
 from firstdue.domain.briefs import BriefEmission
 from firstdue.domain.conflicts import ConflictResolution, ConflictStatus
 from firstdue.domain.enums import Classification, PolicyAction, SourceType
+from firstdue.domain.events import EventEnvelope, Topic
 from firstdue.domain.facts import StructuralFact, natural_fact_id
 from firstdue.domain.identity import IncidentGrant
 from firstdue.domain.keys import Keys
@@ -47,6 +48,7 @@ from firstdue.incident.intake import (
     signals_from,
 )
 from firstdue.incident.interceptor import AGENT_ID, IncidentInterceptor, InterceptResult
+from firstdue.incident.interceptor import AGENT_ID as INTERCEPTOR_AGENT_ID
 from firstdue.incident.reconciler import NarrativeChunk, Reconciler
 from firstdue.incident.recorder import IncidentRecorder
 from firstdue.incident.resources import ResourceAgent, ResourceOutcome
@@ -54,6 +56,7 @@ from firstdue.incident.timer import truss_time_window
 from firstdue.observability.logging import get_logger
 from firstdue.observability.metrics import METRICS
 from firstdue.ports.runtime import AgentInput, AgentOutcome, Grant
+from firstdue.registry.descriptors import FLEET_VERSION
 from firstdue.services.grants import GrantService
 
 logger = get_logger(__name__)
@@ -1037,6 +1040,27 @@ class _FleetWaker:
         self._session = session
 
     async def wake(self, handoff: Handoff, *, incident_id: str, correlation_id: str) -> str | None:
+        """Start one routed agent, and announce the wake so the other topology sees it.
+
+        Both, not either. In a single process the run below *is* the wake, and
+        publishing as well costs one envelope. Across eleven Cloud Run services
+        the agent lives somewhere else entirely: ``FleetRunner`` refuses one this
+        worker does not serve, and the announcement is the only thing that
+        reaches it.
+
+        The announcement is what closes the gap this method used to leave. An
+        agent that subscribed to ``incident.opened`` was started by Pub/Sub
+        whatever the plan decided -- so a handoff the plan *withheld* because
+        the incident grant lacked the scope ran anyway in the deployed topology,
+        while the plan sat in the log recording a refusal that never happened.
+        Routed agents now listen on ``agent.wake`` instead, which only this
+        emits, and only for a handoff the plan produced.
+
+        The envelope carries ids and nothing else, like every other one: which
+        agent, which incident. What that agent should *look at* is the focus,
+        already written to the incident log, and what it may do is its grant.
+        """
+        await self._announce(handoff, incident_id=incident_id, correlation_id=correlation_id)
         grant = await self._session.grant_for(incident_id)
         run = await self._session.fleet.run(
             handoff.agent_id,
@@ -1046,6 +1070,43 @@ class _FleetWaker:
             grant=grant,
         )
         return run.record.run_id
+
+    async def _announce(self, handoff: Handoff, *, incident_id: str, correlation_id: str) -> None:
+        """Publish the wake. Never raises: a bus outage must not lose the run.
+
+        The in-process run below is the authoritative one when this worker
+        serves the agent. If the announcement fails and the agent lives
+        elsewhere, the wake is lost -- which is what the dead-letter topic and
+        the plan in the incident log are for, and it is strictly better than an
+        exception here taking down an incident that is otherwise proceeding.
+        """
+        # The bus is always present on the container -- in-memory or Pub/Sub,
+        # never absent -- so there is nothing to guard, only to fail softly.
+        container = self._session._container
+        try:
+            await container.bus.publish(
+                EventEnvelope(
+                    event_id=container.ids.new_id("evt"),
+                    topic=Topic.AGENT_WAKE,
+                    occurred_at=container.clock.now(),
+                    producer=INTERCEPTOR_AGENT_ID,
+                    producer_version=FLEET_VERSION,
+                    correlation_id=correlation_id,
+                    ids={"incident_id": incident_id, "agent_id": handoff.agent_id},
+                    idempotency_key=container.ids.idempotency_key(
+                        "agent.wake", f"{incident_id}:{handoff.agent_id}"
+                    ),
+                )
+            )
+        except Exception as exc:
+            logger.warning(
+                "agent_wake_announce_failed",
+                extra={
+                    "incident_id": incident_id,
+                    "agent_id": handoff.agent_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
 
 
 class SessionRegistry:

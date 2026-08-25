@@ -61,6 +61,25 @@ class Topic(StrEnum):
     INCIDENT_CLOSED = "incident.closed"
     PROFILE_MATERIALIZED = "profile.materialized"
     AGENT_PUBLISHED = "agent.published"
+    #: One routed agent, woken because the incident head's plan named it.
+    #:
+    #: Every other topic here is an *announcement* -- something happened, and
+    #: whoever subscribes reacts. This one is a routing decision crossing a
+    #: process boundary, and it exists because those are not the same thing.
+    #:
+    #: `plan_handoffs` decides who runs on an incident by matching a rule's
+    #: required capability and scopes against what each agent's descriptor
+    #: declares, and withholds a wake the incident grant cannot cover. In a
+    #: single process that decision was enforced, because the interceptor
+    #: called the runner directly. Across eleven Cloud Run services it was not:
+    #: an agent subscribed to `incident.opened` was started by Pub/Sub whatever
+    #: the plan said, so a handoff the plan *withheld for a missing scope* ran
+    #: anyway. The safeguard was computed, recorded, and bypassed by the
+    #: transport -- the same shape as an approval gate nothing reaches.
+    #:
+    #: So a routed agent listens here instead, and the plan is the only thing
+    #: that starts it in either topology.
+    AGENT_WAKE = "agent.wake"
 
 
 class RetryState(BaseModel):

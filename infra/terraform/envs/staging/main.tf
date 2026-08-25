@@ -131,7 +131,10 @@ locals {
     OTEL_SERVICE_NAME      = "firstdue"
     VECTOR_SEARCH_ENABLED  = tostring(var.vector_search_enabled)
     VECTOR_SEARCH_ENDPOINT = module.vectors.endpoint_id
-    LOG_JSON               = "true"
+    MEMORY_BANK_ENGINE_ID  = module.memory_bank.engine_id
+    # Regional, unlike VERTEX_LOCATION above, which is `global` for the models.
+    MEMORY_BANK_LOCATION = var.memory_bank_location
+    LOG_JSON             = "true"
 
     # Backend feature switches, one plain name/value line each and deliberately
     # so: the setting names are still settling on the backend side, and a rename
@@ -144,7 +147,18 @@ locals {
     # something this file should track.
     GROUNDING_SEARCH_ENABLED = tostring(var.grounding_search_enabled)
     MEMORY_BANK_ENABLED      = tostring(var.memory_bank_enabled)
-    RESEND_FROM_ADDRESS      = var.resend_from_address
+    # Emitted only when the key it pairs with is actually mounted. `Settings`
+    # refuses to start with one and not the other -- a sender with no key is a
+    # deployment that believes it is emailing the building department and is
+    # not -- and `resend_from_address` has a non-empty default while
+    # `resend-api-key` is opt-in through `live_source_keys`. So the default
+    # combination was exactly the illegal one, and every container exited on
+    # startup with that ConfigurationError. Found on the first real deployment.
+    #
+    # Empty is the "neither" side of that rule, not a third state: the settings
+    # check is on truthiness, and the referral is still drafted, staged,
+    # approved and filed when it is unset -- just not mailed.
+    RESEND_FROM_ADDRESS = contains(var.live_source_keys, "resend-api-key") ? var.resend_from_address : ""
     # Two identities, comma-separated, because two different callers reach the
     # internal endpoints: Pub/Sub pushes events, Cloud Scheduler ticks the slow
     # loop. They are deliberately separate service accounts -- the bus and the
@@ -392,6 +406,15 @@ module "vectors" {
   region      = var.region
   environment = local.environment
   enabled     = var.vector_search_enabled
+
+  depends_on = [module.services]
+}
+
+module "memory_bank" {
+  source      = "../../modules/memory-bank"
+  project_id  = var.project_id
+  environment = local.environment
+  engine_id   = var.memory_bank_engine_id
 
   depends_on = [module.services]
 }

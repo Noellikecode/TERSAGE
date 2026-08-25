@@ -653,6 +653,22 @@ class VertexModelClient:
         if response_schema is not None:
             config["response_mime_type"] = "application/json"
             config["response_schema"] = response_schema
+            # Thinking off for structured extraction, and only for it.
+            #
+            # Gemini 3.x reasons before answering by default, and for a call
+            # whose whole job is to find a value already written in the document
+            # and cite where it is, that reasoning buys nothing and costs about
+            # three times the latency: measured on this project's own prompts,
+            # 2,554 ms average with thinking against 885 ms without. Under the
+            # slow loop's concurrency that baseline ran past the 8-second
+            # extraction deadline, and a timed-out extraction is a narrative
+            # silently dropped -- the columns still land, so a district ingests
+            # and simply knows less than it read.
+            #
+            # Scoped to the schema branch on purpose. Composition and the
+            # reasoning graphs' planner are the calls where thinking is the
+            # point; transcription is not one of them.
+            config["thinking_config"] = {"thinking_budget": 0}
 
         response = await self._genai().aio.models.generate_content(
             model=model or self._model_name, contents=prompt, config=config

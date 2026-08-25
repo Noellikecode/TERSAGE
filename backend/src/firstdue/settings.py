@@ -412,6 +412,33 @@ class Settings(BaseSettings):
     #: bank reads settings, and there is no path that silently degrades
     #: durability -- either the fleet has a memory or it does not.
     memory_bank_enabled: bool = True
+    #: The Vertex AI Agent Engine instance whose Memory Bank holds the prose
+    #: half of a thread. Unset means the in-memory index serves recall, which is
+    #: what fake mode runs and what the credential-free demo needs; the record
+    #: is in Firestore either way, so an unset engine costs findability rather
+    #: than memory. Unlike Vector Search this needs no provisioned serving node
+    #: -- it bills per operation -- so it is not gated behind a cost switch.
+    memory_bank_engine_id: str | None = None
+    #: The region that engine lives in, and deliberately **not**
+    #: ``vertex_location``. That one is ``global`` because the Gemini models
+    #: answer only there; an Agent Engine instance is a regional resource and
+    #: has no global endpoint, so reusing the model location would build a
+    #: parent path pointing at nothing. Two settings because they are two
+    #: different facts that happen to both be Vertex.
+    memory_bank_location: str = "us-central1"
+    #: Serve the municipal sources from the central database in Firestore.
+    #:
+    #: The department's own records -- permits, the assessor's roll, fire
+    #: inspections, violations, Tier II filings -- answered from
+    #: ``firstdue.central`` rather than from a fixture file or a public feed.
+    #: Public federal and geospatial sources are unaffected and stay live, so a
+    #: deployment reads real EPA, real Solar and real elevation over a generated
+    #: municipal corpus.
+    #:
+    #: Requires ``STORAGE_BACKEND=firestore``: there is no in-memory central
+    #: database, because a corpus that vanished on restart would not be a
+    #: database. Refused at startup rather than degraded silently.
+    central_database_enabled: bool = False
 
     # ------------------------------------------------------- referral email --
     #: Resend delivers the inter-agency referral once a captain has approved it.

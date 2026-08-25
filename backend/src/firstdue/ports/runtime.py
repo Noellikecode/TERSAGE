@@ -47,6 +47,23 @@ class AgentInput(BaseModel):
     ids: dict[str, EventIdValue] = Field(default_factory=dict)
     #: Small scalar parameters (district id, page cursor). Not record content.
     parameters: dict[str, str] = Field(default_factory=dict)
+    #: When this run will be cut off, so the agent can stop before it is.
+    #:
+    #: The runtime has always enforced a deadline; what it did not do was tell
+    #: the agent about one. An agent that cannot see the clock cannot leave room
+    #: for its own commit, and the failure is expensive rather than graceful:
+    #: `records-watcher` spent its whole budget extracting a district and was
+    #: killed with every fact it had derived still uncommitted -- the sources
+    #: polled, the model quota spent, the profile untouched.
+    #:
+    #: Inferring it from the descriptor's own `latency_target_ms` is not the
+    #: same thing, because that is the number the runtime kills at: "stop before
+    #: my budget" and "stop before I am killed" resolve to the same instant and
+    #: leave no headroom. Only the caller knows when the axe actually falls.
+    #:
+    #: Optional because a direct call in a test has no runtime and needs none;
+    #: an agent treats absence as "no bound I can see", not as "no bound".
+    deadline: datetime | None = None
 
 
 class AgentResult(BaseModel):

@@ -1,12 +1,25 @@
 /**
- * The district bar: the whole district's vital signs, read at a glance.
+ * The district bar: four numbers, read across a room.
  *
  * It sits full width directly under the header, above the fleet and above the
  * incident, because it is the one thing on screen that is true whatever mode
- * the console is in. It used to be a block of tiles in the middle column that
- * a commander had to read as a paragraph of numbers.
+ * the console is in.
  *
- * Every number counts something recorded. No derived scores, no invented
+ * **It used to carry six metrics, each with a caption.** `Structures / 8
+ * surveyed`, `Facts / provenanced`, `Never surveyed / nobody has been inside`
+ * -- twelve pieces of text to deliver six numbers, all of them at eleven
+ * pixels, so the most important figure on the page was set at exactly the size
+ * of its own footnote. Nothing could be scanned; the bar had to be read.
+ *
+ * What is here now is what an officer walking past the screen has to be able to
+ * take in without stopping: how many structures, how many disagreements are
+ * open, how many are queued for somebody to go and look, how many nobody has
+ * ever been inside. `Facts` left because a count of records is a vanity number
+ * to everyone except the person who built it, and `Dispatched` left because it
+ * belongs to the incident view -- it is dead space in standby and it is already
+ * unmissable when a company is out.
+ *
+ * Every number still counts something recorded. No derived scores, no invented
  * denominators: a meter is drawn only where the backend reports both halves of
  * the ratio, and a tile with no honest denominator gets a dashed track rather
  * than a fill against a made-up scale. A zero is an honest zero, never a
@@ -25,8 +38,16 @@ const TONE_TEXT: Record<Tone, string> = {
   alarm: 'text-alarm',
 };
 
+const TONE_BAR: Record<Tone, string> = {
+  ink: 'bg-ink',
+  disputed: 'bg-disputed',
+  muted: 'bg-muted',
+  live: 'bg-live',
+  alarm: 'bg-alarm',
+};
+
 /**
- * A two-pixel meter under the number.
+ * The meter under the number.
  *
  * `fraction === null` means the backend reports a count with nothing to divide
  * it by. That draws a dashed, unfilled track: the tile keeps the rhythm of the
@@ -37,18 +58,15 @@ function Meter({ fraction, tone }: { fraction: number | null; tone: Tone }) {
     return (
       <div
         aria-hidden="true"
-        className="mt-1.5 h-0.5 w-full border-t border-dashed border-line"
+        className="mt-3 h-1 w-full border-t border-dashed border-line"
         data-testid="meter-unscaled"
       />
     );
   }
   const pct = Math.max(0, Math.min(1, fraction)) * 100;
   return (
-    <div aria-hidden="true" className="mt-1.5 h-0.5 w-full bg-line" data-testid="meter">
-      <div
-        className={`h-full ${tone === 'disputed' ? 'bg-disputed' : tone === 'live' ? 'bg-live' : tone === 'alarm' ? 'bg-alarm' : 'bg-ink'}`}
-        style={{ width: `${pct}%` }}
-      />
+    <div aria-hidden="true" className="mt-3 h-1 w-full bg-line" data-testid="meter">
+      <div className={`h-full ${TONE_BAR[tone]}`} style={{ width: `${pct}%` }} />
     </div>
   );
 }
@@ -59,7 +77,13 @@ function Ring({ fraction, tone }: { fraction: number; tone: Tone }) {
   const circumference = 2 * Math.PI * r;
   const filled = Math.max(0, Math.min(1, fraction)) * circumference;
   const stroke =
-    tone === 'alarm' ? '#f87171' : tone === 'disputed' ? '#fbbf24' : tone === 'live' ? '#38bdf8' : '#e8edf4';
+    tone === 'alarm'
+      ? '#f87171'
+      : tone === 'disputed'
+        ? '#fbbf24'
+        : tone === 'live'
+          ? '#38bdf8'
+          : '#e8edf4';
   return (
     <svg aria-hidden="true" width="18" height="18" viewBox="0 0 18 18" data-testid="source-ring">
       <circle cx="9" cy="9" r={r} fill="none" stroke="#2a323d" strokeWidth="2" />
@@ -80,31 +104,26 @@ function Ring({ fraction, tone }: { fraction: number; tone: Tone }) {
 function Metric({
   label,
   value,
-  caption,
   fraction,
   tone = 'ink',
   live = false,
 }: {
   label: string;
   value: number;
-  caption: string;
   fraction: number | null;
   tone?: Tone;
   live?: boolean;
 }) {
   return (
-    <div className="min-w-0 border border-line bg-surface px-3 py-1.5">
-      <dt className="flex items-center gap-1.5 text-micro uppercase tracking-widest text-muted">
+    <div className="min-w-0 border border-line bg-surface px-4 py-3">
+      <dt className="flex items-center gap-2 text-label uppercase text-muted">
         {label}
         {/* A dot, not a sentence: something is out right now. */}
-        {live && <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-live pulse-live" />}
+        {live && <span aria-hidden="true" className="h-2 w-2 rounded-full bg-live pulse-live" />}
       </dt>
-      <dd className="mt-0.5">
-        <span className={`font-mono text-2xl leading-none ${TONE_TEXT[tone]}`}>{value}</span>
+      <dd className="mt-2">
+        <span className={`font-mono text-hero ${TONE_TEXT[tone]}`}>{value}</span>
         <Meter fraction={fraction} tone={tone} />
-        <span className="mt-1 block truncate text-micro text-muted" title={caption}>
-          {caption}
-        </span>
       </dd>
     </div>
   );
@@ -122,8 +141,8 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
         <h2 id="district-heading" className="sr-only">
           District readiness
         </h2>
-        <p className="border border-dashed border-line px-3 py-2 text-micro text-muted">
-          District statistics UNAVAILABLE — the backend reported none. Nothing is inferred here.
+        <p className="border border-dashed border-line px-4 py-3 text-body text-muted">
+          District statistics UNAVAILABLE — the backend reported none.
         </p>
       </section>
     );
@@ -138,65 +157,46 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
       <h2 id="district-heading" className="sr-only">
         District readiness
       </h2>
-      <dl className="grid grid-cols-2 gap-1 sm:grid-cols-3 lg:grid-cols-6">
+      <dl className="grid grid-cols-2 gap-2 lg:grid-cols-4">
         <Metric
           label="Structures"
           value={stats.profiles}
-          caption={`${stats.surveyed} surveyed`}
           fraction={share(stats.surveyed, stats.profiles)}
-        />
-        <Metric
-          label="Facts"
-          value={stats.facts}
-          caption="provenanced"
-          // A count of records with nothing to divide it by.
-          fraction={null}
         />
         <Metric
           label="Open conflicts"
           value={stats.open_conflicts}
-          caption={`${stats.high_severity_conflicts} at severity 4+`}
           fraction={share(stats.high_severity_conflicts, stats.open_conflicts)}
           tone={stats.open_conflicts > 0 ? 'disputed' : 'muted'}
         />
         <Metric
           label="Queued"
           value={stats.queued_for_survey}
-          caption={`of ${stats.profiles} on file`}
           fraction={share(stats.queued_for_survey, stats.profiles)}
-        />
-        <Metric
-          label="Dispatched"
-          value={stats.dispatched}
-          caption="companies out"
-          fraction={null}
-          tone={stats.dispatched > 0 ? 'live' : 'muted'}
+          tone={stats.queued_for_survey > 0 ? 'ink' : 'muted'}
           live={stats.dispatched > 0}
         />
         <Metric
           label="Never surveyed"
           value={stats.profiles_never_surveyed}
-          caption="nobody has been inside"
           fraction={share(stats.profiles_never_surveyed, stats.profiles)}
           tone={stats.profiles_never_surveyed > 0 ? 'disputed' : 'muted'}
         />
       </dl>
 
-      {/* Source health. Trimmed to the counts and the names, because which
-          source is unreachable is the part an officer has to be able to act
-          on -- an absent record from a dead source is not an absent record. */}
-      <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-micro text-muted">
+      {/* Source health. Counts and names only: which source is unreachable is
+          the part an officer has to be able to act on -- an absent record from
+          a dead source is not an absent record. */}
+      <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-muted">
         <Ring
           fraction={share(stats.sources.length - unavailable.length, stats.sources.length) ?? 0}
           tone={sourceTone}
         />
         <span>{stats.sources.length} sources</span>
-        {fixtures.length > 0 && (
-          <span className="text-disputed">· {fixtures.length} fixture-backed</span>
-        )}
+        {fixtures.length > 0 && <span className="text-disputed">{fixtures.length} fixture</span>}
         {unavailable.length > 0 && (
           <span className="text-alarm">
-            · {unavailable.length} UNAVAILABLE: {unavailable.map((s) => s.source_id).join(', ')}
+            {unavailable.length} UNAVAILABLE: {unavailable.map((s) => s.source_id).join(', ')}
           </span>
         )}
       </p>

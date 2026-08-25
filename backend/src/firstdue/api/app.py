@@ -23,9 +23,9 @@ from firstdue.container import Container, build_container
 from firstdue.demo.loader import load_demo_state
 from firstdue.lifecycle import Lifecycle
 from firstdue.observability.logging import configure_logging, get_logger
-from firstdue.registry.seed import seed_registry
+from firstdue.registry.seed import RegistrySeedResult, seed_registry, verify_registry
 from firstdue.security.limits import RequestLimitsMiddleware, TokenBucketLimiter
-from firstdue.settings import AppEnv, Settings, get_settings
+from firstdue.settings import AppEnv, Settings, StorageBackend, get_settings
 
 logger = get_logger(__name__)
 
@@ -44,10 +44,36 @@ def _lifespan_factory(settings: Settings) -> object:
         container: Container = app.state.container
         lifecycle: Lifecycle = app.state.lifecycle
 
+        # Model Armor's first call pays ~1.1 s of channel setup, and charging
+        # that to the first ingested document pushed screens past their 2-second
+        # budget under the slow loop's concurrency -- which fail-closes and
+        # withholds the document, so a district ingested nothing while the logs
+        # said the screen was unavailable. Paid here instead, with nothing
+        # waiting on it. Never raises; a cold screen still screens.
+        warm = getattr(container.screen, "warm", None)
+        if warm is not None:
+            await warm()
+
         loaded = await load_demo_state(container)
-        # The catalog is published before traffic is accepted: an agent that
+        # The catalog is settled before traffic is accepted: an agent that
         # cannot be resolved to a pinned version must not be able to run.
-        seeded_registry = await seed_registry(container.registry, now=container.clock.now())
+        #
+        # Who *publishes* it is a different question from who depends on it.
+        # Publishing is a write, and a per-agent worker holds only the roles its
+        # declared scopes earn it -- for two of the nine that is read-only
+        # Firestore, by design. So a worker verifies its own entry and the
+        # services that own the catalog publish it. See `verify_registry`.
+        # A worker defers to someone else's publication only when there *is*
+        # someone else. An in-memory registry is process-local, so a worker
+        # holding one would wait forever for a publication that can never
+        # arrive -- which is why fake mode and the test suite are untouched by
+        # any of this and still seed exactly as before.
+        catalog_is_shared = settings.storage_backend is not StorageBackend.MEMORY
+        if settings.firstdue_agent and catalog_is_shared:
+            await verify_registry(container.registry, agent_id=settings.firstdue_agent)
+            seeded_registry = RegistrySeedResult()
+        else:
+            seeded_registry = await seed_registry(container.registry, now=container.clock.now())
 
         # One pass, before readiness, when the operator asked for it. The
         # console's own framing is that months of survey work are already

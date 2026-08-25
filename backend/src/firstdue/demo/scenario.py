@@ -147,6 +147,8 @@ async def _run_records(payload: AgentInput, _grant: object) -> AgentOutcome:
         district_id=current.district,
         sources=current.sources,
         correlation_id=payload.correlation_id,
+        # The runtime's deadline, not one the agent guessed. See `AgentInput`.
+        deadline=payload.deadline,
     )
     return outcome(facts=current.watch.written_fact_ids)
 

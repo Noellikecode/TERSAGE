@@ -29,6 +29,27 @@ a Tier II filing is not returned to an agent that does not hold
 adapters -- rather than in each repository, because a boundary implemented twice
 is a boundary enforced once.
 
+**The bank is two stores, and the split is deliberate.** The *record* -- what a
+thread has ruled out, what it rests on, how many passes have examined it, and
+every transition it has made -- lives in the repositories behind
+:mod:`firstdue.ports.memory`, which is where the state machine and its
+invariants are. The *prose* is additionally mirrored into a semantic index
+behind :mod:`firstdue.ports.threads`, whose live implementation is Vertex AI
+Agent Engine Memory Bank. That gives :meth:`MemoryBank.recall_similar` a query
+``list_open`` cannot answer -- *has anyone asked something like this* -- without
+moving the state machine into a store that does not have one.
+
+The split was measured, not assumed: a ``Memory`` in that service is a
+2048-character fact, which a question's bounded prose fits comfortably and a
+long-running thread's accumulated eliminations do not. See
+:mod:`firstdue.adapters.vertex.threads`.
+
+The index is never the record. It is written after the repository write has
+already succeeded, its failures are counted rather than raised, and every match
+it returns is read back from the repository and re-gated on scopes before any
+caller sees it -- so an index that is stale, degraded, or absent costs
+findability and never correctness.
+
 Nothing here reads the wall clock. ``now`` arrives from a
 :class:`~firstdue.ports.clock.Clock`, so a replayed pass re-derives the same ids
 and the same timestamps.
@@ -38,7 +59,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from firstdue.domain.enums import Classification, Scope
 from firstdue.domain.memory import (
@@ -47,12 +68,30 @@ from firstdue.domain.memory import (
     derive_checkpoint_id,
     derive_question_id,
 )
+from firstdue.domain.threads import build_thread_memory, indexable
 from firstdue.errors import AppendOnlyViolationError, NotFoundError
 from firstdue.observability.logging import get_logger
 from firstdue.ports.clock import Clock
 from firstdue.ports.memory import CheckpointRepository, OpenQuestionRepository
+from firstdue.ports.threads import ThreadIndex, ThreadMatch
 
 logger = get_logger(__name__)
+
+#: How many index hits to ask for per result wanted.
+#:
+#: Every match is read back from the repository and dropped if the thread has
+#: closed, expired, or is invisible to the caller, so a raw ``top_k`` is an
+#: upper bound on results rather than a count of them. The managed index cannot
+#: un-index a closed thread -- deleting a memory reserves its id forever and its
+#: scope is immutable, both verified live, see
+#: :meth:`firstdue.adapters.vertex.threads.VertexThreadIndex._delete` -- so
+#: closed threads accumulate in it and dilute a fixed window over time.
+#:
+#: Over-fetching is what keeps that dilution from quietly starving recall. It is
+#: a small constant rather than a retry loop because the discards are cheap
+#: repository reads and the alternative -- asking again with a bigger window --
+#: would turn one predictable query into an unbounded number.
+RECALL_OVERFETCH: Final[int] = 4
 
 
 class MemoryBank:
@@ -64,10 +103,19 @@ class MemoryBank:
         questions: OpenQuestionRepository,
         checkpoints: CheckpointRepository,
         clock: Clock,
+        threads: ThreadIndex | None = None,
     ) -> None:
         self._questions = questions
         self._checkpoints = checkpoints
         self._clock = clock
+        self._threads = threads
+        #: Threads the index refused or failed to take. Counted rather than
+        #: raised: the repositories are the record, so a question that did not
+        #: reach the index is stored and structurally recallable, and merely not
+        #: findable by meaning. A count that nobody can see would make that
+        #: indistinguishable from an index with nothing in it.
+        self.index_skipped = 0
+        self.index_failed = 0
 
     # ----------------------------------------------------------------- open
 
@@ -108,7 +156,9 @@ class MemoryBank:
 
         existing = await self._questions.get(question_id)
         if existing is not None:
-            return await self._questions.save(existing.examined(now))
+            reopened = await self._questions.save(existing.examined(now))
+            await self._remember(reopened)
+            return reopened
 
         candidate = OpenQuestion(
             question_id=question_id,
@@ -132,8 +182,11 @@ class MemoryBank:
             stored = await self._questions.get(question_id)
             if stored is None:  # pragma: no cover - the create said it existed
                 raise
-            return await self._questions.save(stored.examined(now))
+            reopened = await self._questions.save(stored.examined(now))
+            await self._remember(reopened)
+            return reopened
 
+        await self._remember(opened)
         logger.info(
             "memory_question_opened",
             extra={
@@ -236,6 +289,7 @@ class MemoryBank:
             resolution=resolution, resolved_by=resolved_by, now=now or self._clock.now()
         )
         saved = await self._questions.save(closed)
+        await self._forget(saved.question_id)
         logger.info(
             "memory_question_resolved",
             extra={
@@ -265,6 +319,7 @@ class MemoryBank:
             reason=reason, abandoned_by=abandoned_by, now=now or self._clock.now()
         )
         saved = await self._questions.save(closed)
+        await self._forget(saved.question_id)
         logger.info(
             "memory_question_abandoned",
             extra={"question_id": question_id, "abandoned_by": abandoned_by},
@@ -288,15 +343,15 @@ class MemoryBank:
         for question in stored:
             if not question.is_expired(now):
                 continue
-            swept.append(
-                await self._questions.save(
-                    question.abandoned(
-                        reason=reason or "the window closed before anything settled it",
-                        abandoned_by=abandoned_by,
-                        now=now,
-                    )
+            saved = await self._questions.save(
+                question.abandoned(
+                    reason=reason or "the window closed before anything settled it",
+                    abandoned_by=abandoned_by,
+                    now=now,
                 )
             )
+            await self._forget(saved.question_id)
+            swept.append(saved)
         return tuple(swept)
 
     # ---------------------------------------------------------- checkpoints
@@ -342,7 +397,126 @@ class MemoryBank:
             return None
         return checkpoint
 
+    # ------------------------------------------------- recall by meaning ---
+
+    async def recall_similar(
+        self,
+        text: str,
+        *,
+        district_id: str,
+        scopes: Collection[Scope],
+        limit: int = 5,
+    ) -> tuple[OpenQuestion, ...]:
+        """Open threads in this district whose prose is nearest ``text``.
+
+        The other half of :meth:`recall`. That one answers *what is this
+        district carrying*, narrowed by keys the caller already holds; this one
+        answers *has anyone asked something like this*, which is the question a
+        watcher has when it is about to open a thread on a filing another agent
+        may already be waiting for.
+
+        **The index decides relevance; the record decides everything else.** A
+        match is a ``question_id`` and nothing more, and every one of them is
+        read back from the repository before it is returned. So the scope gate
+        is the same gate :meth:`recall` applies, to the same stored question,
+        one function above both adapters -- the index is never asked whether a
+        caller may see a thread and its answer would not be trusted if it were.
+        A match whose record has since resolved, or which the caller may not
+        see, is dropped here and costs a lookup.
+
+        ``scopes`` is required and has no default, for the reason
+        :meth:`recall` gives.
+
+        Returns an empty tuple when no index is configured. That is the same
+        shape as "nothing similar on file", and the two are deliberately not
+        distinguished *to the caller*: a watcher's behaviour on either is to go
+        ahead and open its thread. The distinction is not lost -- it is counted
+        on :attr:`index_failed` and logged -- it is simply not a fork in the
+        agent's logic.
+        """
+        if self._threads is None:
+            return ()
+        try:
+            matches: tuple[ThreadMatch, ...] = await self._threads.recall_similar(
+                text, district_id=district_id, limit=limit * RECALL_OVERFETCH
+            )
+        except Exception:
+            self.index_failed += 1
+            logger.warning(
+                "memory_thread_recall_failed",
+                extra={"district_id": district_id},
+                exc_info=True,
+            )
+            return ()
+
+        now = self._clock.now()
+        found: list[OpenQuestion] = []
+        for match in matches:
+            if len(found) == limit:
+                break
+            question = await self._questions.get(match.question_id)
+            if question is None or not question.is_open:
+                continue
+            if not question.is_visible_to(scopes) or question.is_expired(now):
+                continue
+            found.append(question)
+        return tuple(found)
+
     # ------------------------------------------------------------ internals
+
+    async def _remember(self, question: OpenQuestion) -> None:
+        """Mirror a thread's prose into the recall index, if there is one.
+
+        Never raises. The repositories are the record and the write to them has
+        already succeeded by the time this runs, so a failure here costs
+        findability rather than the thread -- and turning it into an exception
+        would let a managed service's outage stop the slow loop from opening
+        questions, which is the one thing the memory bank exists to keep doing.
+
+        A classification the index may not hold is skipped as routine rather
+        than attempted and caught: see :func:`~firstdue.domain.threads.indexable`.
+        """
+        if self._threads is None:
+            return
+        if not indexable(question):
+            self.index_skipped += 1
+            logger.info(
+                "memory_thread_not_indexed",
+                extra={
+                    "question_id": question.question_id,
+                    "classification": str(question.classification),
+                    "reason": "classification may not reach a managed recall index",
+                },
+            )
+            return
+        try:
+            await self._threads.remember(build_thread_memory(question))
+        except Exception:
+            self.index_failed += 1
+            logger.warning(
+                "memory_thread_index_failed",
+                extra={"question_id": question.question_id},
+                exc_info=True,
+            )
+
+    async def _forget(self, question_id: str) -> None:
+        """Drop a closed thread's pointer. Never raises, for the reason above.
+
+        The *record* is kept forever -- abandonment is an outcome, not a
+        deletion -- and this removes only the pointer, so a settled thread stops
+        surfacing as something still worth going to look at.
+        """
+        if self._threads is None:
+            return
+        try:
+            await self._threads.forget(question_id)
+        except Exception:
+            self.index_failed += 1
+            logger.warning(
+                "memory_thread_forget_failed",
+                extra={"question_id": question_id},
+                exc_info=True,
+            )
 
     async def _require(self, question_id: str) -> OpenQuestion:
         question = await self._questions.get(question_id)

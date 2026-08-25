@@ -42,7 +42,7 @@ it always has.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -80,11 +80,49 @@ from firstdue.ports.grounding import GroundingService
 from firstdue.ports.repositories import FactRepository, ProfileRepository
 from firstdue.ports.sources import SourceAdapter, SourceRecord, SourceSnapshot
 from firstdue.ports.vectors import VectorIndex
+from firstdue.registry.descriptors import descriptor_for
+from firstdue.reliability.budget import budget_seconds
 from firstdue.services.materialization import ProfileMaterializer
 from firstdue.services.memory_bank import MemoryBank
 from firstdue.sources.catalog import ASSESSOR, INSPECTIONS, PERMITS, VIOLATIONS
 
 logger = get_logger(__name__)
+
+#: How much of the budget to leave unspent for the write.
+#:
+#: Not just the record in hand. `_extract_and_apply` accumulates facts and
+#: commits them *after* the loop -- profiles, conflict detection, the narrative
+#: index -- so a margin sized to one extraction stopped the loop with seconds to
+#: spare and was then killed mid-commit, writing nothing. The margin has to
+#: cover the whole tail, not the last document.
+#:
+#: Generous on purpose: extracting fewer records and keeping them beats
+#: extracting more and losing them all, which is the trade the slow loop makes
+#: everywhere else.
+_STOP_MARGIN_MS: Final[int] = 25_000
+
+#: How much of a pass retrieval may spend, leaving the rest to extract and write.
+#:
+#: Weighted towards extraction because that is where the model calls are: a
+#: fetch is tens of milliseconds and an extraction is the better part of a
+#: second, so a pass that split evenly would still read far more than it could
+#: ever write down.
+_RETRIEVAL_SHARE: Final[float] = 0.35
+
+#: How many records one pass will extract before deferring the rest.
+#:
+#: A count, not just a clock. The deadline is still a backstop, but it is a poor
+#: primary bound here: model latency varies, the commit at the end of the pass
+#: is proportional to what was extracted, and a pass that stopped on time could
+#: still be killed while writing. A count is predictable -- at roughly nine
+#: hundred milliseconds an extraction this is well inside a 120-second budget
+#: with the commit paid for.
+#:
+#: The remainder is not lost. It is counted in `records_deferred` and read again
+#: next pass: the slow loop is the part of this system that is allowed to take
+#: months, and a district that ingests in slices is the design rather than a
+#: degradation of it.
+_MAX_RECORDS_PER_PASS: Final[int] = 40
 
 AGENT_ID: Final[str] = "records-watcher"
 
@@ -129,6 +167,13 @@ class WatchResult(BaseModel):
     written_fact_ids: tuple[str, ...] = ()
     #: Sources that could not be reached on this pass. Rendered as UNAVAILABLE.
     unavailable_sources: tuple[str, ...] = ()
+    #: Records this pass read but ran out of budget before extracting.
+    #:
+    #: A district is bigger than one pass. Reporting the remainder is what keeps
+    #: "we finished" and "we ran out of time" from producing the same empty
+    #: number -- the same distinction the source states draw, applied to the
+    #: agent's own work.
+    records_deferred: int = Field(default=0, ge=0)
     #: Injection patterns the screen removed from ingested documents.
     screen_findings: tuple[str, ...] = ()
     #: Documents withheld from the model because the screen could not run. Not
@@ -152,6 +197,22 @@ class WatchResult(BaseModel):
     references_outstanding: int = Field(default=0, ge=0)
     #: Threads left open in the memory bank, one per outstanding reference.
     open_question_ids: tuple[str, ...] = ()
+
+
+def _retrieval_deadline(deadline: datetime | None, *, started: datetime) -> datetime | None:
+    """The slice of the pass retrieval may spend.
+
+    :data:`_RETRIEVAL_SHARE` of what is left, so extraction inherits the rest.
+    A pass with no deadline at all keeps none: an unbounded caller is a test or
+    a one-off, and inventing a bound for it would be inventing a policy nobody
+    asked for.
+    """
+    if deadline is None:
+        return None
+    remaining = (deadline - started).total_seconds()
+    if remaining <= 0:
+        return deadline
+    return started + timedelta(seconds=remaining * _RETRIEVAL_SHARE)
 
 
 class RecordsWatcher:
@@ -219,6 +280,20 @@ class RecordsWatcher:
         is what lets a graph park and checkpoint before the runtime kills the
         run, rather than dying mid-chase with nothing written down.
         """
+        # The agent's own budget, when the caller did not name one.
+        #
+        # `AgentInput` carries no deadline: the runtime enforces one by killing
+        # the run from outside, which the agent cannot see coming. So a pass
+        # over a district larger than its budget spent the whole allowance and
+        # was killed with everything it had read still unwritten -- the sources
+        # polled, the quota spent, the profile untouched.
+        #
+        # Derived from `latency_target_ms` on this agent's own descriptor, which
+        # is the same number `graph_budget` obeys and the same promise the
+        # catalog makes about it. An agent that could not see its own budget
+        # could not stop inside it.
+        deadline = deadline or self._own_deadline()
+
         if not self.reasons:
             retrieved, unavailable = await self._read_every_feed(sources, since=since)
             return await self._extract_and_apply(
@@ -226,6 +301,7 @@ class RecordsWatcher:
                 retrieved=retrieved,
                 unavailable=unavailable,
                 correlation_id=correlation_id,
+                deadline=deadline,
             )
         return await self._poll_by_graph(
             district_id=district_id,
@@ -277,10 +353,24 @@ class RecordsWatcher:
         one, and every fact this pass writes carries the span, the snapshot id,
         and the provenance it would have carried under the fixed pass.
         """
+        # Retrieval gets a share of the pass, not all of it.
+        #
+        # The graph and the extraction that follows it drew on the same budget,
+        # so a district large enough to keep the planner busy spent the whole
+        # 120 seconds *fetching* and was killed before a single fact was
+        # written. Reading a district and learning nothing from it is the worst
+        # of both: the sources were polled, the quota was spent, and the profile
+        # is untouched.
+        #
+        # Splitting it makes the two costs visible and bounds each. Retrieval
+        # stops with what it has; `_extract_and_apply` then works through as
+        # much of it as the remainder allows and reports what it deferred.
+        started = self._clock.now()
+        retrieval_deadline = _retrieval_deadline(deadline, started=started)
         budget = graph_budget(
             AGENT_ID,
-            deadline=deadline,
-            started=self._clock.now(),
+            deadline=retrieval_deadline,
+            started=started,
             max_steps=self._max_graph_steps,
         )
         retrieval = RecordsRetrieval(sources=sources, budget=budget, planner=self._planner)
@@ -315,6 +405,10 @@ class RecordsWatcher:
             retrieved=retrieved,
             unavailable=state.unavailable,
             correlation_id=correlation_id,
+            # The graph's own budget bounds *retrieval*; this bounds what is
+            # done with what it retrieved. Without it the pass spent its whole
+            # allowance extracting and was killed before writing any of it.
+            deadline=deadline,
         )
         # Parked after materialization on purpose: a conflict does not exist
         # until the facts that disagree have both been written.
@@ -444,12 +538,24 @@ class RecordsWatcher:
         retrieved: Sequence[tuple[str, SourceSnapshot]],
         unavailable: Sequence[str],
         correlation_id: str,
+        deadline: datetime | None = None,
     ) -> WatchResult:
         """Turn retrieved snapshots into facts. The only place this agent writes.
 
         Shared by both passes. Whatever decided *which* filings to read, what
         happens to one afterwards is one function: the same screen, the same
         triage, the same extractor, the same spans, the same derived ids.
+
+        **Bounded by the deadline, and it stops rather than dies.** A district
+        is bigger than one pass: 386 structures against a 120-second budget is
+        under half a second each, and one extraction costs about nine hundred
+        milliseconds. Unbounded, the pass ran to the runtime's kill and wrote
+        *nothing* -- every document it had already read and screened thrown away
+        because the loop never reached the write. The slow loop's whole premise
+        is that it accumulates over months, so a pass that gets through part of
+        a district and commits that part is the design working, not degrading.
+
+        What it did not reach is counted and reported, never silently dropped.
         """
         pending: dict[str, list[StructuralFact]] = {}
         findings: set[str] = set()
@@ -457,12 +563,24 @@ class RecordsWatcher:
         triaged = 0
         indexed = 0
 
+        deferred = 0
+        extracted = 0
+        out_of_time = False
+
         for source_id, snapshot in retrieved:
             source_type = SOURCE_TYPES[source_id]
             for record in snapshot.records:
+                # Checked before the work, not after: stopping with a record
+                # half-extracted would leave a fact without the pass that wrote
+                # it. Everything already appended below stands.
+                if out_of_time or self._past(deadline):
+                    out_of_time = True
+                    deferred += 1
+                    continue
                 address_id = await self._resolve_address(record, district_id)
                 if address_id is None:
                     continue
+                extracted += 1
                 outcome = await self._extractor.extract(
                     record,
                     address_id=address_id,
@@ -560,7 +678,30 @@ class RecordsWatcher:
             documents_screen_unavailable=screens_unavailable,
             documents_triaged_out=triaged,
             narratives_indexed=indexed,
+            records_deferred=deferred,
         )
+
+    def _own_deadline(self) -> datetime:
+        """When this pass must stop, from the catalogue rather than the caller."""
+        started = self._clock.now()
+        return started + timedelta(seconds=budget_seconds(descriptor_for(AGENT_ID), None, started))
+
+    def _past(self, deadline: datetime | None) -> bool:
+        """Whether the pass has spent its budget.
+
+        A margin is deliberately left: an extraction costs the better part of a
+        second, so stopping *at* the deadline would start one that cannot
+        finish, and the runtime would kill the run with that record's work
+        thrown away. Better to stop one record early and commit what is written.
+        """
+        if deadline is None:
+            return False
+        # The injected clock, never the wall clock. Comparing `datetime.now()`
+        # against a deadline derived from a `SteppingClock` put every pass
+        # instantly past its budget, deferred every record, and produced an
+        # empty district -- which is what a system that reads two clocks
+        # deserves. Nothing else in this file reads time directly either.
+        return self._clock.now() >= deadline - timedelta(milliseconds=_STOP_MARGIN_MS)
 
     # ------------------------------------------------------------ internals
 

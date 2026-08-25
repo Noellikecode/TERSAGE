@@ -158,8 +158,11 @@ the building and the record now answers what the filings could not.
 
 ### Shared services
 
-**Memory Bank** — durable open questions and graph checkpoints. Recall is gated
-on the caller's scopes.
+**Memory Bank** — durable open questions and graph checkpoints, in two stores.
+The record is Firestore; the prose of each question is mirrored into Vertex AI
+Agent Engine Memory Bank so recall can also answer *has anyone asked something
+like this*. Recall is gated on the caller's scopes, against the record — never
+against the index.
 **Grounding service** — resolves a fuzzy external reference to a canonical id,
 or declines. Google Search grounding, with citations.
 
@@ -171,7 +174,7 @@ or declines. Google Search grounding, with citations.
 |---|---|
 | **Agent Registry** | `registry/descriptors.py` publishes every agent with its version, scopes, write targets, capabilities and latency budget. Departments subscribe to what they are authorized to run, pinned to a version. Cross-department: fire publishes the structural agents, building publishes the permit agent, county emergency management publishes the hazmat agent. |
 | **Agent Runtime** | Grants, scopes and deadlines enforced around every run; every run reaches a terminal state. Eleven Cloud Run services: the slow loop and nine per-agent workers scale to zero between passes; the incident service keeps one instance warm, because a cold start on dispatch is the one latency this system exists to avoid. A LangGraph graph that exhausts its budget checkpoints and resumes on a later pass. |
-| **Memory Bank** | Firestore-backed open questions that outlive a pass, a restart and a scale-to-zero. Municipal records arrive weeks late; a question opened in March is closed in August by the incident that answered it. Recall is scope-gated: a thread raised by a confidential filing is invisible to an agent without the scope. |
+| **Memory Bank** | Adopted for the half it fits, and only that half. Vertex AI Agent Engine Memory Bank holds each open question's prose and serves semantic recall over it; the record — eliminations, evidence, examination counts, transitions, checkpoints — stays in Firestore, because a `Memory.fact` caps at 2048 characters and a long-running thread's eliminations do not fit. Questions outlive a pass, a restart and a scale-to-zero: one opened in March is closed in August by the incident that answered it. Recall is scope-gated against the stored record, so a match the index offers for a confidential thread still never reaches an agent without the scope. Five behaviours of the managed service turned out otherwise than its SDK implied; `scripts/verify_memory_bank.py` is what found them and is what keeps them found. |
 | **Agent Identity** | Each agent runs as its own service account with only the roles its declared scopes imply. No agent can impersonate another. The IAM policy is generated from the descriptors, and a conformance test fails if the two drift. |
 | **Agent Gateway** | Every read and write decides at a default-deny policy engine — ten rules in order, including PHI derivation and jurisdiction. Every decision is recorded with the rule that produced it. |
 | **Model Armor** | Two screens with different failure modes in front of every ingested document. A screen that cannot run withholds the document from the model rather than passing it through. |
@@ -238,7 +241,8 @@ infra/terraform/  13 modules, staging and prod
 **Stack.** Gemini 3.5 Flash and Gemma on Vertex AI, through the Google Gen AI
 SDK. LangGraph and LangChain on `langchain-google-vertexai` for the reasoning
 graphs. Cloud Run, Firestore, Pub/Sub, Cloud Storage, Secret Manager, Vertex
-Vector Search, Model Armor. Python 3.12, FastAPI, Pydantic v2. Next.js 14,
+Vector Search, Agent Engine Memory Bank, Model Armor. Python 3.12, FastAPI,
+Pydantic v2. Next.js 14,
 TypeScript, three.js.
 
 **External data.** SF open data (permits, assessor, inspections, violations,
@@ -266,7 +270,7 @@ and the slow loop moves off screen while still running and saying so.
 
 ## Verification
 
-1,425 backend tests and 286 console tests. Strict mypy across 184 source files.
+1,516 backend tests and 286 console tests. Strict mypy across 187 source files.
 A contract suite that holds the in-memory and Firestore backends to one set of
 behaviours, an infrastructure suite that holds Terraform to the agent
 descriptors, and an observability suite that asserts telemetry carries no

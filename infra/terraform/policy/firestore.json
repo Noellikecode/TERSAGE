@@ -55,6 +55,104 @@
         }
       ]
     },
+    "central_assessor": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "record_ref"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING"
+          ]
+        }
+      ]
+    },
+    "central_hazmat": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "record_ref"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING"
+          ]
+        }
+      ]
+    },
+    "central_incidents": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "opened_at"
+          ],
+          "order": [
+            "ASCENDING",
+            "DESCENDING"
+          ]
+        }
+      ]
+    },
+    "central_inspections": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "record_ref"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING"
+          ]
+        }
+      ]
+    },
+    "central_permits": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "record_ref"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING"
+          ]
+        }
+      ]
+    },
+    "central_personnel": {
+      "indexes": [
+        {
+          "fields": [
+            "district_id",
+            "unit"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING"
+          ]
+        }
+      ]
+    },
+    "central_violations": {
+      "indexes": [
+        {
+          "fields": [
+            "address_id",
+            "record_ref"
+          ],
+          "order": [
+            "ASCENDING",
+            "ASCENDING"
+          ]
+        }
+      ]
+    },
     "compensations": {
       "indexes": [
         {

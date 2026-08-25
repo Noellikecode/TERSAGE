@@ -58,6 +58,18 @@ SCREEN_DEADLINE_MS: Final[int] = 2_000
 #: the endpoint, rather than as a bare asyncio timeout that names nothing.
 _WAIT_MARGIN_MS: Final[int] = 500
 
+#: How long the one-off warm-up may take. Generous, because it runs at startup
+#: with nothing waiting on it, and because failing it costs nothing -- see
+#: :meth:`ModelArmorClient.warm`.
+_WARM_TIMEOUT_MS: Final[int] = 15_000
+
+#: How many screens may be in flight at once.
+#:
+#: Under the default `asyncio.to_thread` executor width, and low enough that a
+#: call which gets a slot gets a worker immediately. Higher would just move the
+#: queue into the executor, where the deadline can see it again.
+_MAX_IN_FLIGHT: Final[int] = 8
+
 
 class ArmorVerdict(BaseModel):
     """What the screen decided about one document."""
@@ -238,6 +250,8 @@ class ModelArmorClient:
         # which is the cost caching it exists to remove.
         self._client_lock = threading.Lock()
         self._deadline_ms = deadline_ms
+        self._gate_semaphore: asyncio.Semaphore | None = None
+        self._gate_loop: asyncio.AbstractEventLoop | None = None
         self._api_endpoint = template_api_endpoint(template)
 
     def _service(self) -> Any:
@@ -322,6 +336,54 @@ class ModelArmorClient:
             unavailable_reason=SCREEN_UNAVAILABLE,
         )
 
+    def _gate(self) -> asyncio.Semaphore:
+        """In-flight screens, bounded, and bound to the running loop.
+
+        Rebuilt when the loop changes rather than cached once: this client is
+        deliberately loop-agnostic -- the class docstring explains why it uses
+        the synchronous SDK -- and a semaphore created on the CLI's loop and
+        reused on the server's would raise on first use.
+
+        Sized to sit under the default thread-pool width, so a permitted call
+        finds a worker rather than queueing behind one.
+        """
+        loop = asyncio.get_running_loop()
+        if self._gate_loop is not loop or self._gate_semaphore is None:
+            self._gate_semaphore = asyncio.Semaphore(_MAX_IN_FLIGHT)
+            self._gate_loop = loop
+        return self._gate_semaphore
+
+    async def warm(self) -> bool:
+        """Establish the gRPC channel before any document depends on it.
+
+        Measured against the live service: a cold ``sanitize`` costs ~1.1 s, of
+        which almost all is channel setup and TLS, while a warm one costs
+        ~170 ms. Charged to the first document, that cold start eats more than
+        half a 2-second budget -- and under the slow loop's concurrency it was
+        pushing calls past the deadline, which fail-closes and withholds the
+        document from the model. A district ingested nothing and every log line
+        said the screen was unavailable, when the screen was fine and merely
+        cold.
+
+        So the cost is paid once, at startup, off any document's clock. This is
+        deliberately generous with time and deliberately cannot fail: a warm-up
+        that raised would turn a slow network at boot into a dead process, and
+        the screen is still perfectly capable of doing its job cold.
+
+        Returns whether the channel came up, for the log line. Never raises.
+        """
+        try:
+            module = self._service()
+            await asyncio.wait_for(
+                asyncio.to_thread(self._sanitize, module, "warm"),
+                timeout=_WARM_TIMEOUT_MS / 1000,
+            )
+        except Exception as exc:
+            logger.info("model_armor_warm_skipped", extra={"error_type": type(exc).__name__})
+            return False
+        logger.info("model_armor_warm", extra={"endpoint": self._api_endpoint})
+        return True
+
     async def inspect(self, document_text: str | None) -> ArmorVerdict:
         """Screen one document through both screens, without holding the loop.
 
@@ -339,6 +401,19 @@ class ModelArmorClient:
         client is thread-safe and loop-agnostic, and it is the same shape the
         Vertex adapters already use.
         """
+        # The gate wraps *both* screens, not just the remote one.
+        #
+        # The local detector is pure CPU and deliberately runs on the loop, which
+        # is right per document and wrong in aggregate: a district's worth of
+        # documents screened at once saturates the loop with regex work, so the
+        # `wait_for` timers below fire late and cancel Model Armor calls that
+        # would have returned. Measured -- 200 concurrent documents lost 22 to a
+        # service answering in 170 ms. Bounding admission to the whole screen
+        # keeps the loop responsive enough for its own timers to mean anything.
+        async with self._gate():
+            return await self._screen(document_text)
+
+    async def _screen(self, document_text: str | None) -> ArmorVerdict:
         local = await self._local.inspect(document_text)
         if not local.safe_text:
             return local
@@ -348,6 +423,18 @@ class ModelArmorClient:
         # which a circuit breaker retries forever, when the truth is that
         # nobody installed it and no amount of retrying will help.
         module = self._service()
+        # The deadline bounds the *call*, not the wait for a thread to make it
+        # in. `asyncio.to_thread` shares one bounded executor, so screening a
+        # district's worth of documents at once left most of them queued -- and
+        # the timer, started before the queue, counted that wait as the screen
+        # taking too long. Documents that had not begun to be screened were
+        # recorded as screen timeouts and withheld, which fail-closes: an ingest
+        # of several hundred permits wrote nothing and every log line blamed an
+        # outage at a service that was answering in 170 ms.
+        #
+        # So admission is gated first and timed second. Queueing is now bounded
+        # by how many screens may be in flight, and a slow loop with more
+        # documents than slots waits instead of failing.
         try:
             response = await asyncio.wait_for(
                 asyncio.to_thread(self._sanitize, module, local.safe_text),

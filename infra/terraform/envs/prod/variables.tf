@@ -58,6 +58,39 @@ variable "vector_search_enabled" {
   default     = false
 }
 
+variable "memory_bank_engine_id" {
+  description = <<-EOT
+    Numeric id of the Vertex AI Agent Engine instance whose Memory Bank holds
+    the prose half of every open question, so recall can answer "has anyone
+    asked something like this" rather than only "what is this district
+    carrying".
+
+    Created out of band, because the provider has no resource for one -- see
+    `modules/memory-bank/main.tf`. Empty is a supported state: the application
+    falls back to the in-memory thread index, which is what fake mode runs, and
+    recall becomes per-instance rather than durable. The *record* is in
+    Firestore either way, so an empty id costs findability and never memory.
+
+    Unlike `vector_search_enabled` this is not a cost switch. Memory Bank bills
+    per operation with no provisioned serving node, so it sits under the budget
+    cap comfortably.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "memory_bank_location" {
+  description = <<-EOT
+    Region of the Agent Engine instance. Deliberately separate from
+    `vertex_location`, which is `global` because that is the only place the
+    Gemini models answer -- an Agent Engine instance is regional and has no
+    global endpoint, so sharing the setting would point the parent path at
+    nothing.
+  EOT
+  type        = string
+  default     = "us-central1"
+}
+
 variable "gemini_model" {
   description = <<-EOT
     Verified 2026-08-21 against a real project, and the two halves are a trap

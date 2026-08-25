@@ -61,6 +61,7 @@ from firstdue.adapters.memory.repositories import (
     InMemorySurveyRepository,
     InMemoryWriteActionRepository,
 )
+from firstdue.adapters.memory.threads import InMemoryThreadIndex
 from firstdue.adapters.memory.vectors import InMemoryVectorIndex
 from firstdue.adapters.pubsub.bus import PubSubEventBus
 from firstdue.city.san_francisco import SanFranciscoAdapter
@@ -102,6 +103,7 @@ from firstdue.ports.repositories import (
 )
 from firstdue.ports.runtime import AgentRuntime
 from firstdue.ports.sources import SourceAdapter, SourceRegistry
+from firstdue.ports.threads import ThreadIndex
 from firstdue.ports.vectors import VectorIndex
 from firstdue.ports.vision import VisionClient
 from firstdue.ports.writes import ExternalWriteTarget
@@ -109,7 +111,7 @@ from firstdue.reliability.retry import RetryPolicy
 from firstdue.security.armor import LocalInjectionDetector, ModelArmorClient, build_screen
 from firstdue.services.memory_bank import MemoryBank
 from firstdue.settings import EventBackend, Settings, StorageBackend, WorkspaceWrites
-from firstdue.sources.catalog import LiveCredentials, build_sources
+from firstdue.sources.catalog import CentralFetcherFactory, LiveCredentials, build_sources
 
 #: The five systems FIRST DUE writes into.
 WRITE_TARGET_IDS: tuple[tuple[str, Department, str], ...] = (
@@ -292,6 +294,14 @@ class Stores:
     #: store that does not.
     open_questions: OpenQuestionRepository
     checkpoints: CheckpointRepository
+    #: The Firestore client and its config, when this is a Firestore process.
+    #:
+    #: Exposed because the central database is *not* a repository -- it is read
+    #: through the source seam, by a fetcher the catalog builds -- and opening a
+    #: second client for it would mean two connection pools and two places to
+    #: get the namespace wrong. ``None`` on a memory-backed process, which is
+    #: what makes "no central database in fake mode" a type rather than a rule.
+    firestore: tuple[object, object] | None = None
 
 
 def build_memory_stores() -> Stores:
@@ -362,6 +372,7 @@ def build_firestore_stores(settings: Settings) -> Stores:
     )
     client = build_client(config)
     return Stores(
+        firestore=(client, config),
         profiles=FirestoreProfileRepository(client, config),
         snapshots=FirestoreSnapshotRepository(client, config),
         facts=FirestoreFactRepository(client, config),
@@ -508,6 +519,32 @@ def _build_vision(settings: Settings) -> VisionClient:
     )
 
 
+def _build_central_fetchers(settings: Settings, *, stores: Stores) -> CentralFetcherFactory | None:
+    """A factory for central-database fetchers, or ``None``.
+
+    Returns a callable rather than a set of adapters because the catalog decides
+    *which* sources a central collection backs; this only knows how to open one.
+
+    ``None`` is the ordinary answer. With the central database off, the municipal
+    sources resolve to a fixture or a live feed exactly as before, which is what
+    keeps `make demo` credential-free.
+    """
+    if not settings.central_database_enabled:
+        return None
+    if settings.storage_backend is not StorageBackend.FIRESTORE:
+        raise ConfigurationError(
+            "CENTRAL_DATABASE_ENABLED requires STORAGE_BACKEND=firestore; a "
+            "corpus that vanished on restart would not be a database",
+            details={"storage_backend": str(settings.storage_backend)},
+        )
+    from firstdue.adapters.firestore.central import CentralDatabaseFetcher
+
+    if stores.firestore is None:  # pragma: no cover - guarded by the check above
+        raise ConfigurationError("the central database needs a Firestore client")
+    client, config = stores.firestore
+    return lambda collection: CentralDatabaseFetcher(client, config, collection)  # type: ignore[arg-type]
+
+
 def _build_vectors(settings: Settings) -> VectorIndex:
     """Semantic recall over screened narratives.
 
@@ -636,6 +673,39 @@ def _build_memory(settings: Settings, *, stores: Stores, clock: Clock) -> Memory
         questions=stores.open_questions,
         checkpoints=stores.checkpoints,
         clock=clock,
+        threads=_build_threads(settings),
+    )
+
+
+def _build_threads(settings: Settings) -> ThreadIndex:
+    """Semantic recall over open question threads.
+
+    Selected the way the vector index is, and for the same reason: the
+    in-memory implementation is a real second implementation of the protocol
+    rather than a stub, so a process without a Memory Bank engine still recalls
+    by meaning -- per-instance and non-durable, but not silently empty.
+
+    The managed index needs live mode because writing a memory embeds it, which
+    is a Vertex call. Asking for one in fake mode is a configuration error
+    rather than a quiet downgrade: a credential-free process that appeared to
+    have a managed memory bank would misreport what it is.
+    """
+    if not settings.memory_bank_engine_id:
+        return InMemoryThreadIndex()
+    if settings.use_fake_agents:
+        raise ConfigurationError(
+            "MEMORY_BANK_ENGINE_ID requires live mode; the in-memory thread "
+            "index is what fake mode uses and it needs no configuration",
+            details={"setting": "MEMORY_BANK_ENGINE_ID"},
+        )
+    from firstdue.adapters.vertex.threads import VertexThreadIndex
+
+    return VertexThreadIndex(
+        project_id=settings.gcp_project_id or "",
+        # Not ``vertex_location``: that is ``global`` for the models, and an
+        # Agent Engine instance is regional. See the setting.
+        location=settings.memory_bank_location,
+        engine_id=settings.memory_bank_engine_id,
     )
 
 
@@ -729,6 +799,7 @@ def build_container(settings: Settings) -> Container:
         fixtures_dir=settings.fixtures_dir,
         clock=clock,
         live=not settings.use_fake_agents,
+        central=_build_central_fetchers(settings, stores=stores),
         # The city adapter is the only component that knows where an address
         # is, so the point-query sources resolve their coordinates through it.
         city=city,

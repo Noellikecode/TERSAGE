@@ -31,6 +31,20 @@ google = [
   "google-cloud-firestore>=2.19,<3",
   "google-cloud-pubsub>=2.23,<3",
   "google-auth>=2.35,<3",
+  # Pinned below 2.35.0, which is a regression and not a preference.
+  #
+  # 2.35.0 mangles the Firestore routing header: every RPC comes back
+  # `INVALID_ARGUMENT: Invalid database id %28default%29` -- the parentheses of
+  # the default database id, percent-encoded and then not decoded. It is not
+  # Firestore's doing; the same firestore release works either side of it, and
+  # pinning api-core alone fixes it.
+  #
+  # It cost a deployment to find, because nothing local reproduced it: the
+  # laptop had resolved 2.34.0 months earlier and the image resolved the newest
+  # release at build time, so the two differed only inside the container. The
+  # whole fleet started, imported cleanly, and died in the lifespan hook.
+  # Verified by bisecting inside the deployed image itself.
+  "google-api-core>=2.34,<2.35",
   # Every package below is named by a ConfigurationError that tells the operator
   # to "install the 'google' extra". Following that instruction has to actually
   # fix the error, so the extra ships all of them.
@@ -146,6 +160,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "ANN201", "ANN001", "ANN003", "ANN202"]  # asserts, loose test signatures
 "backend/src/firstdue/cli.py" = ["T20"]             # the CLI is allowed to print
+"scripts/**" = ["T20", "SIM105"]                     # operator scripts report to a terminal
 
 [tool.ruff.lint.isort]
 known-first-party = ["firstdue"]

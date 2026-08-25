@@ -60,9 +60,24 @@ CONSUMES: Final[dict[str, frozenset[Topic]]] = {
         }
     ),
     "sensor-fusion": frozenset({Topic.THERMAL_FRAME_RECEIVED}),
-    "agency-notifier": frozenset({Topic.INCIDENT_OPENED, Topic.APPROVAL_STAGED}),
+    # Woken by the incident head's plan, not by the incident opening.
+    #
+    # This subscribed to `incident.opened` and that was the bug: whether the
+    # notifier runs is a *routing* decision -- `plan_handoffs` matches the rule's
+    # required scopes against the incident grant and withholds the wake when the
+    # grant cannot cover them. Started by Pub/Sub instead, it ran regardless, so
+    # in the deployed topology a withheld handoff was a refusal recorded in the
+    # log and contradicted by the transport. `agent.wake` carries the plan's
+    # decision across the process boundary; `approval.staged` stays, because a
+    # chief approving a shutoff is an announcement and not a routing decision.
+    "agency-notifier": frozenset({Topic.AGENT_WAKE, Topic.APPROVAL_STAGED}),
     # The recorder subscribes to everything the incident produces, because the
     # log is meant to be complete rather than selective.
+    # The recorder keeps its blanket subscription, deliberately. It is the
+    # append-only log, and its job is completeness rather than selection: a log
+    # that only recorded the incidents somebody routed it to would be a log with
+    # holes exactly where a routing decision went wrong. It reads and writes the
+    # log and nothing else, so there is no authority here for a plan to gate.
     "incident-recorder": frozenset(
         {
             Topic.INCIDENT_OPENED,

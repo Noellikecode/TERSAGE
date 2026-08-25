@@ -1,43 +1,1297 @@
 {
-  "municipality_id": "san-francisco-ca",
   "jurisdiction_id": "sf-city-county",
-  "note": "Street addresses and coordinates are real public reference data, including one named landmark (415 Mission St). All records attached to them elsewhere in fixtures/ are synthetic: no filing, inspection, violation or condition here describes the real property.",
   "districts": [
     "sffd-district-03",
     "sffd-district-05"
   ],
   "addresses": [
     {
-      "address_id": "sf-0450-hayes",
-      "display": "450 Hayes St, San Francisco, CA 94102",
-      "district_id": "sffd-district-03",
-      "latitude": 37.7768,
-      "longitude": -122.4247,
-      "parcel_ref": "0808-021"
+      "address_id": "sf-0001-church",
+      "display": "1 Church St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76995,
+      "longitude": -122.428744,
+      "parcel_ref": "0874-014"
     },
     {
-      "address_id": "sf-1215-fell",
-      "display": "1215 Fell St, San Francisco, CA 94117",
-      "district_id": "sffd-district-03",
-      "latitude": 37.7745,
-      "longitude": -122.4383,
-      "parcel_ref": "1203-014"
+      "address_id": "sf-0001-hermann",
+      "display": "1 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770641,
+      "longitude": -122.425406,
+      "parcel_ref": "0872-001"
     },
     {
-      "address_id": "sf-0899-valencia",
-      "display": "899 Valencia St, San Francisco, CA 94110",
-      "district_id": "sffd-district-03",
-      "latitude": 37.7592,
-      "longitude": -122.4212,
-      "parcel_ref": "3617-032"
+      "address_id": "sf-0002-church",
+      "display": "2 Church St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770116,
+      "longitude": -122.429395,
+      "parcel_ref": "0874-008"
     },
     {
-      "address_id": "sf-2130-mission",
-      "display": "2130 Mission St, San Francisco, CA 94110",
+      "address_id": "sf-0002-steiner",
+      "display": "2 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-024"
+    },
+    {
+      "address_id": "sf-0004-steiner",
+      "display": "4 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-025"
+    },
+    {
+      "address_id": "sf-0006-steiner",
+      "display": "6 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-026"
+    },
+    {
+      "address_id": "sf-0007-octavia",
+      "display": "7 Octavia St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772228,
+      "longitude": -122.42423,
+      "parcel_ref": "0856-003"
+    },
+    {
+      "address_id": "sf-0008-buchanan",
+      "display": "8 Buchanan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770074,
+      "longitude": -122.426208,
+      "parcel_ref": "0872-029"
+    },
+    {
+      "address_id": "sf-0008-laguna",
+      "display": "8 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771127,
+      "longitude": -122.425018,
+      "parcel_ref": "0871-008"
+    },
+    {
+      "address_id": "sf-0008-steiner",
+      "display": "8 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-027"
+    },
+    {
+      "address_id": "sf-0010-ada",
+      "display": "10 Ada Ct, San Francisco, CA",
       "district_id": "sffd-district-03",
-      "latitude": 37.7627,
-      "longitude": -122.4194,
-      "parcel_ref": "3574-011"
+      "latitude": 37.78589,
+      "longitude": -122.415586,
+      "parcel_ref": "0319-014"
+    },
+    {
+      "address_id": "sf-0010-laguna",
+      "display": "10 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771318,
+      "longitude": -122.424959,
+      "parcel_ref": "0871-021"
+    },
+    {
+      "address_id": "sf-0010-steiner",
+      "display": "10 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-028"
+    },
+    {
+      "address_id": "sf-0012-laguna",
+      "display": "12 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771318,
+      "longitude": -122.424959,
+      "parcel_ref": "0871-022"
+    },
+    {
+      "address_id": "sf-0012-steiner",
+      "display": "12 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-029"
+    },
+    {
+      "address_id": "sf-0014-laguna",
+      "display": "14 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771318,
+      "longitude": -122.424959,
+      "parcel_ref": "0871-023"
+    },
+    {
+      "address_id": "sf-0016-laguna",
+      "display": "16 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771416,
+      "longitude": -122.424908,
+      "parcel_ref": "0871-010"
+    },
+    {
+      "address_id": "sf-0018-steiner",
+      "display": "18 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769675,
+      "longitude": -122.431364,
+      "parcel_ref": "0875-011"
+    },
+    {
+      "address_id": "sf-0020-church",
+      "display": "20 Church St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769959,
+      "longitude": -122.42947,
+      "parcel_ref": "0874-009"
+    },
+    {
+      "address_id": "sf-0025-fillmore",
+      "display": "25 Fillmore St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769718,
+      "longitude": -122.430181,
+      "parcel_ref": "0875-002"
+    },
+    {
+      "address_id": "sf-0026-church",
+      "display": "26 Church St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76989,
+      "longitude": -122.429464,
+      "parcel_ref": "0874-010"
+    },
+    {
+      "address_id": "sf-0026-steiner",
+      "display": "26 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769771,
+      "longitude": -122.431386,
+      "parcel_ref": "0875-012"
+    },
+    {
+      "address_id": "sf-0032-church",
+      "display": "32 Church St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769822,
+      "longitude": -122.429457,
+      "parcel_ref": "0874-011"
+    },
+    {
+      "address_id": "sf-0034-buchanan",
+      "display": "34 Buchanan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770159,
+      "longitude": -122.426357,
+      "parcel_ref": "0872-008"
+    },
+    {
+      "address_id": "sf-0034-shannon",
+      "display": "34 Shannon St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786456,
+      "longitude": -122.412117,
+      "parcel_ref": "0317-026"
+    },
+    {
+      "address_id": "sf-0040-buchanan",
+      "display": "40 Buchanan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770241,
+      "longitude": -122.426374,
+      "parcel_ref": "0872-008A"
+    },
+    {
+      "address_id": "sf-0041-octavia",
+      "display": "41 Octavia St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772494,
+      "longitude": -122.424051,
+      "parcel_ref": "0856-002"
+    },
+    {
+      "address_id": "sf-0044-potomac",
+      "display": "44 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769955,
+      "longitude": -122.432289,
+      "parcel_ref": "0866-010"
+    },
+    {
+      "address_id": "sf-0046-pierce",
+      "display": "46 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769868,
+      "longitude": -122.433083,
+      "parcel_ref": "0865-011"
+    },
+    {
+      "address_id": "sf-0047-octavia",
+      "display": "47 Octavia St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772692,
+      "longitude": -122.424002,
+      "parcel_ref": "0856-001"
+    },
+    {
+      "address_id": "sf-0047-pierce",
+      "display": "47 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769831,
+      "longitude": -122.433621,
+      "parcel_ref": "0864-010"
+    },
+    {
+      "address_id": "sf-0047-potomac",
+      "display": "47 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769907,
+      "longitude": -122.432769,
+      "parcel_ref": "0865-026"
+    },
+    {
+      "address_id": "sf-0049-carmelita",
+      "display": "49 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769844,
+      "longitude": -122.434512,
+      "parcel_ref": "0863-009"
+    },
+    {
+      "address_id": "sf-0049-potomac",
+      "display": "49 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769907,
+      "longitude": -122.432769,
+      "parcel_ref": "0865-027"
+    },
+    {
+      "address_id": "sf-0050-carmelita",
+      "display": "50 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76984,
+      "longitude": -122.433959,
+      "parcel_ref": "0864-011"
+    },
+    {
+      "address_id": "sf-0050-church",
+      "display": "50 Church St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769757,
+      "longitude": -122.429636,
+      "parcel_ref": "0874-003"
+    },
+    {
+      "address_id": "sf-0050-laguna",
+      "display": "50 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.7716,
+      "longitude": -122.425022,
+      "parcel_ref": "0871-012"
+    },
+    {
+      "address_id": "sf-0050-potomac",
+      "display": "50 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770023,
+      "longitude": -122.432303,
+      "parcel_ref": "0866-011"
+    },
+    {
+      "address_id": "sf-0050-scott",
+      "display": "50 Scott St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769615,
+      "longitude": -122.433428,
+      "parcel_ref": "0876-001"
+    },
+    {
+      "address_id": "sf-0051-pierce",
+      "display": "51 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769887,
+      "longitude": -122.433659,
+      "parcel_ref": "0864-009"
+    },
+    {
+      "address_id": "sf-0051-potomac",
+      "display": "51 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769907,
+      "longitude": -122.432769,
+      "parcel_ref": "0865-028"
+    },
+    {
+      "address_id": "sf-0052-pierce",
+      "display": "52 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769942,
+      "longitude": -122.433099,
+      "parcel_ref": "0865-012"
+    },
+    {
+      "address_id": "sf-0053-carmelita",
+      "display": "53 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769894,
+      "longitude": -122.43459,
+      "parcel_ref": "0863-008"
+    },
+    {
+      "address_id": "sf-0053-potomac",
+      "display": "53 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769982,
+      "longitude": -122.432785,
+      "parcel_ref": "0865-009"
+    },
+    {
+      "address_id": "sf-0054-carmelita",
+      "display": "54 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.7699,
+      "longitude": -122.433994,
+      "parcel_ref": "0864-012"
+    },
+    {
+      "address_id": "sf-0055-fillmore",
+      "display": "55 Fillmore St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769919,
+      "longitude": -122.430369,
+      "parcel_ref": "0875-001"
+    },
+    {
+      "address_id": "sf-0055-hermann",
+      "display": "55 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77055,
+      "longitude": -122.425951,
+      "parcel_ref": "0872-012"
+    },
+    {
+      "address_id": "sf-0055-laguna",
+      "display": "55 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771697,
+      "longitude": -122.426147,
+      "parcel_ref": "0857-005"
+    },
+    {
+      "address_id": "sf-0055-pierce",
+      "display": "55 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769955,
+      "longitude": -122.433673,
+      "parcel_ref": "0864-008"
+    },
+    {
+      "address_id": "sf-0056-pierce",
+      "display": "56 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77001,
+      "longitude": -122.433113,
+      "parcel_ref": "0865-013"
+    },
+    {
+      "address_id": "sf-0056-potomac",
+      "display": "56 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77009,
+      "longitude": -122.432316,
+      "parcel_ref": "0866-012"
+    },
+    {
+      "address_id": "sf-0057-carmelita",
+      "display": "57 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769962,
+      "longitude": -122.434597,
+      "parcel_ref": "0863-007"
+    },
+    {
+      "address_id": "sf-0058-carmelita",
+      "display": "58 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769968,
+      "longitude": -122.434008,
+      "parcel_ref": "0864-013"
+    },
+    {
+      "address_id": "sf-0058-waller",
+      "display": "58 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772175,
+      "longitude": -122.42465,
+      "parcel_ref": "0856-037"
+    },
+    {
+      "address_id": "sf-0059-pierce",
+      "display": "59 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770023,
+      "longitude": -122.433687,
+      "parcel_ref": "0864-007"
+    },
+    {
+      "address_id": "sf-0059-potomac",
+      "display": "59 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77005,
+      "longitude": -122.432799,
+      "parcel_ref": "0865-008"
+    },
+    {
+      "address_id": "sf-0060-carmelita",
+      "display": "60 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770036,
+      "longitude": -122.434021,
+      "parcel_ref": "0864-014"
+    },
+    {
+      "address_id": "sf-0060-pierce",
+      "display": "60 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770078,
+      "longitude": -122.433126,
+      "parcel_ref": "0865-014"
+    },
+    {
+      "address_id": "sf-0060-potomac",
+      "display": "60 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770158,
+      "longitude": -122.43233,
+      "parcel_ref": "0866-013"
+    },
+    {
+      "address_id": "sf-0060-waller",
+      "display": "60 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772175,
+      "longitude": -122.42465,
+      "parcel_ref": "0856-038"
+    },
+    {
+      "address_id": "sf-0061-carmelita",
+      "display": "61 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770031,
+      "longitude": -122.434605,
+      "parcel_ref": "0863-006"
+    },
+    {
+      "address_id": "sf-0061-potomac",
+      "display": "61 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770118,
+      "longitude": -122.432813,
+      "parcel_ref": "0865-007"
+    },
+    {
+      "address_id": "sf-0063-pierce",
+      "display": "63 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770091,
+      "longitude": -122.4337,
+      "parcel_ref": "0864-006"
+    },
+    {
+      "address_id": "sf-0064-pierce",
+      "display": "64 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770145,
+      "longitude": -122.43314,
+      "parcel_ref": "0865-015"
+    },
+    {
+      "address_id": "sf-0064-potomac",
+      "display": "64 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770226,
+      "longitude": -122.432344,
+      "parcel_ref": "0866-014"
+    },
+    {
+      "address_id": "sf-0064-waller",
+      "display": "64 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772164,
+      "longitude": -122.424735,
+      "parcel_ref": "0856-051"
+    },
+    {
+      "address_id": "sf-0065-carmelita",
+      "display": "65 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770099,
+      "longitude": -122.434613,
+      "parcel_ref": "0863-005"
+    },
+    {
+      "address_id": "sf-0065-hermann",
+      "display": "65 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770488,
+      "longitude": -122.426155,
+      "parcel_ref": "0872-013"
+    },
+    {
+      "address_id": "sf-0065-potomac",
+      "display": "65 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770253,
+      "longitude": -122.43284,
+      "parcel_ref": "0865-005"
+    },
+    {
+      "address_id": "sf-0066-carmelita",
+      "display": "66 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770104,
+      "longitude": -122.434035,
+      "parcel_ref": "0864-015"
+    },
+    {
+      "address_id": "sf-0066-potomac",
+      "display": "66 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770292,
+      "longitude": -122.432365,
+      "parcel_ref": "0866-015"
+    },
+    {
+      "address_id": "sf-0066-waller",
+      "display": "66 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772164,
+      "longitude": -122.424735,
+      "parcel_ref": "0856-052"
+    },
+    {
+      "address_id": "sf-0067-pierce",
+      "display": "67 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770159,
+      "longitude": -122.433714,
+      "parcel_ref": "0864-005"
+    },
+    {
+      "address_id": "sf-0067-potomac",
+      "display": "67 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770321,
+      "longitude": -122.432854,
+      "parcel_ref": "0865-004"
+    },
+    {
+      "address_id": "sf-0067-waller",
+      "display": "67 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77163,
+      "longitude": -122.424677,
+      "parcel_ref": "0871-024"
+    },
+    {
+      "address_id": "sf-0068-pierce",
+      "display": "68 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770213,
+      "longitude": -122.433154,
+      "parcel_ref": "0865-016"
+    },
+    {
+      "address_id": "sf-0068-potomac",
+      "display": "68 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770362,
+      "longitude": -122.432378,
+      "parcel_ref": "0866-016"
+    },
+    {
+      "address_id": "sf-0068-waller",
+      "display": "68 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772153,
+      "longitude": -122.424821,
+      "parcel_ref": "0856-009"
+    },
+    {
+      "address_id": "sf-0069-carmelita",
+      "display": "69 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770168,
+      "longitude": -122.43462,
+      "parcel_ref": "0863-004"
+    },
+    {
+      "address_id": "sf-0069-potomac",
+      "display": "69 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770389,
+      "longitude": -122.432867,
+      "parcel_ref": "0865-003"
+    },
+    {
+      "address_id": "sf-0069-waller",
+      "display": "69 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77163,
+      "longitude": -122.424677,
+      "parcel_ref": "0871-025"
+    },
+    {
+      "address_id": "sf-0070-carmelita",
+      "display": "70 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770172,
+      "longitude": -122.434048,
+      "parcel_ref": "0864-016"
+    },
+    {
+      "address_id": "sf-0070-potomac",
+      "display": "70 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770429,
+      "longitude": -122.432385,
+      "parcel_ref": "0866-017"
+    },
+    {
+      "address_id": "sf-0070-waller",
+      "display": "70 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772142,
+      "longitude": -122.424906,
+      "parcel_ref": "0856-010"
+    },
+    {
+      "address_id": "sf-0071-pierce",
+      "display": "71 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770226,
+      "longitude": -122.433728,
+      "parcel_ref": "0864-004"
+    },
+    {
+      "address_id": "sf-0071-potomac",
+      "display": "71 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770458,
+      "longitude": -122.432881,
+      "parcel_ref": "0865-029"
+    },
+    {
+      "address_id": "sf-0071-waller",
+      "display": "71 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77163,
+      "longitude": -122.424677,
+      "parcel_ref": "0871-026"
+    },
+    {
+      "address_id": "sf-0072-pierce",
+      "display": "72 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770281,
+      "longitude": -122.433167,
+      "parcel_ref": "0865-017"
+    },
+    {
+      "address_id": "sf-0072-potomac",
+      "display": "72 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770509,
+      "longitude": -122.4324,
+      "parcel_ref": "0866-018"
+    },
+    {
+      "address_id": "sf-0073-carmelita",
+      "display": "73 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770236,
+      "longitude": -122.434628,
+      "parcel_ref": "0863-003"
+    },
+    {
+      "address_id": "sf-0073-potomac",
+      "display": "73 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770458,
+      "longitude": -122.432881,
+      "parcel_ref": "0865-031"
+    },
+    {
+      "address_id": "sf-0073-waller",
+      "display": "73 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771627,
+      "longitude": -122.424808,
+      "parcel_ref": "0871-017"
+    },
+    {
+      "address_id": "sf-0074-carmelita",
+      "display": "74 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770239,
+      "longitude": -122.434062,
+      "parcel_ref": "0864-017"
+    },
+    {
+      "address_id": "sf-0075-pierce",
+      "display": "75 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770294,
+      "longitude": -122.433741,
+      "parcel_ref": "0864-003"
+    },
+    {
+      "address_id": "sf-0075-potomac",
+      "display": "75 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770458,
+      "longitude": -122.432881,
+      "parcel_ref": "0865-032"
+    },
+    {
+      "address_id": "sf-0075-waller",
+      "display": "75 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771627,
+      "longitude": -122.424808,
+      "parcel_ref": "0871-019"
+    },
+    {
+      "address_id": "sf-0076-pierce",
+      "display": "76 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770349,
+      "longitude": -122.433181,
+      "parcel_ref": "0865-018"
+    },
+    {
+      "address_id": "sf-0077-carmelita",
+      "display": "77 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770305,
+      "longitude": -122.434636,
+      "parcel_ref": "0863-018"
+    },
+    {
+      "address_id": "sf-0077-hermann",
+      "display": "77 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770456,
+      "longitude": -122.426321,
+      "parcel_ref": "0872-010"
+    },
+    {
+      "address_id": "sf-0077-waller",
+      "display": "77 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771627,
+      "longitude": -122.424808,
+      "parcel_ref": "0871-020"
+    },
+    {
+      "address_id": "sf-0078-buchanan",
+      "display": "78 Buchanan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770432,
+      "longitude": -122.426509,
+      "parcel_ref": "0872-009"
+    },
+    {
+      "address_id": "sf-0078-carmelita",
+      "display": "78 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770307,
+      "longitude": -122.434076,
+      "parcel_ref": "0864-018"
+    },
+    {
+      "address_id": "sf-0079-pierce",
+      "display": "79 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770362,
+      "longitude": -122.433755,
+      "parcel_ref": "0864-002"
+    },
+    {
+      "address_id": "sf-0080-pierce",
+      "display": "80 Pierce St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770418,
+      "longitude": -122.433195,
+      "parcel_ref": "0865-019"
+    },
+    {
+      "address_id": "sf-0080-waller",
+      "display": "80 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772079,
+      "longitude": -122.424992,
+      "parcel_ref": "0856-028"
+    },
+    {
+      "address_id": "sf-0082-potomac",
+      "display": "82 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770589,
+      "longitude": -122.432488,
+      "parcel_ref": "0866-048"
+    },
+    {
+      "address_id": "sf-0084-potomac",
+      "display": "84 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770589,
+      "longitude": -122.432488,
+      "parcel_ref": "0866-049"
+    },
+    {
+      "address_id": "sf-0084-waller",
+      "display": "84 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772066,
+      "longitude": -122.425097,
+      "parcel_ref": "0856-011A"
+    },
+    {
+      "address_id": "sf-0086-potomac",
+      "display": "86 Potomac St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770589,
+      "longitude": -122.432488,
+      "parcel_ref": "0866-050"
+    },
+    {
+      "address_id": "sf-0099-carmelita",
+      "display": "99 Carmelita St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770446,
+      "longitude": -122.434512,
+      "parcel_ref": "0863-013"
+    },
+    {
+      "address_id": "sf-0100-buchanan",
+      "display": "100 Buchanan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771697,
+      "longitude": -122.426147,
+      "parcel_ref": "0857-004"
+    },
+    {
+      "address_id": "sf-0100-laguna",
+      "display": "100 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772053,
+      "longitude": -122.4252,
+      "parcel_ref": "0856-012"
+    },
+    {
+      "address_id": "sf-0101-steiner",
+      "display": "101 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769994,
+      "longitude": -122.431984,
+      "parcel_ref": "0866-009"
+    },
+    {
+      "address_id": "sf-0107-steiner",
+      "display": "107 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770072,
+      "longitude": -122.432,
+      "parcel_ref": "0866-008"
+    },
+    {
+      "address_id": "sf-0110-beulah",
+      "display": "110 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767628,
+      "longitude": -122.451905,
+      "parcel_ref": "1250-010"
+    },
+    {
+      "address_id": "sf-0115-haight",
+      "display": "115 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772644,
+      "longitude": -122.424215,
+      "parcel_ref": "0856-023"
+    },
+    {
+      "address_id": "sf-0115-steiner",
+      "display": "115 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770147,
+      "longitude": -122.432015,
+      "parcel_ref": "0866-007"
+    },
+    {
+      "address_id": "sf-0119-haight",
+      "display": "119 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772598,
+      "longitude": -122.424333,
+      "parcel_ref": "0856-021"
+    },
+    {
+      "address_id": "sf-0121-steiner",
+      "display": "121 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770219,
+      "longitude": -122.432029,
+      "parcel_ref": "0866-033"
+    },
+    {
+      "address_id": "sf-0123-steiner",
+      "display": "123 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770219,
+      "longitude": -122.432029,
+      "parcel_ref": "0866-034"
+    },
+    {
+      "address_id": "sf-0124-laguna",
+      "display": "124 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772252,
+      "longitude": -122.425133,
+      "parcel_ref": "0856-013"
+    },
+    {
+      "address_id": "sf-0125-steiner",
+      "display": "125 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770219,
+      "longitude": -122.432029,
+      "parcel_ref": "0866-035"
+    },
+    {
+      "address_id": "sf-0127-steiner",
+      "display": "127 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770292,
+      "longitude": -122.432044,
+      "parcel_ref": "0866-036"
+    },
+    {
+      "address_id": "sf-0129-steiner",
+      "display": "129 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770292,
+      "longitude": -122.432044,
+      "parcel_ref": "0866-037"
+    },
+    {
+      "address_id": "sf-0130-beulah",
+      "display": "130 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767719,
+      "longitude": -122.452157,
+      "parcel_ref": "1250-012"
+    },
+    {
+      "address_id": "sf-0131-steiner",
+      "display": "131 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770292,
+      "longitude": -122.432044,
+      "parcel_ref": "0866-038"
+    },
+    {
+      "address_id": "sf-0133-steiner",
+      "display": "133 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770495,
+      "longitude": -122.432085,
+      "parcel_ref": "0866-028"
+    },
+    {
+      "address_id": "sf-0135-steiner",
+      "display": "135 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770495,
+      "longitude": -122.432085,
+      "parcel_ref": "0866-029"
+    },
+    {
+      "address_id": "sf-0136-beulah",
+      "display": "136 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767708,
+      "longitude": -122.452243,
+      "parcel_ref": "1250-013"
+    },
+    {
+      "address_id": "sf-0137-haight",
+      "display": "137 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772574,
+      "longitude": -122.424514,
+      "parcel_ref": "0856-020"
+    },
+    {
+      "address_id": "sf-0137-steiner",
+      "display": "137 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770428,
+      "longitude": -122.432071,
+      "parcel_ref": "0866-003"
+    },
+    {
+      "address_id": "sf-0139-steiner",
+      "display": "139 Steiner St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770358,
+      "longitude": -122.432073,
+      "parcel_ref": "0866-030"
+    },
+    {
+      "address_id": "sf-0140-laguna",
+      "display": "140 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772336,
+      "longitude": -122.425157,
+      "parcel_ref": "0856-014"
+    },
+    {
+      "address_id": "sf-0148-beulah",
+      "display": "148 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767687,
+      "longitude": -122.452414,
+      "parcel_ref": "1250-015"
+    },
+    {
+      "address_id": "sf-0148-laguna",
+      "display": "148 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772404,
+      "longitude": -122.425171,
+      "parcel_ref": "0856-015"
+    },
+    {
+      "address_id": "sf-0150-duboce",
+      "display": "150 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770072,
+      "longitude": -122.427492,
+      "parcel_ref": "0873-001"
+    },
+    {
+      "address_id": "sf-0155-haight",
+      "display": "155 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772545,
+      "longitude": -122.424749,
+      "parcel_ref": "0856-019"
+    },
+    {
+      "address_id": "sf-0160-beulah",
+      "display": "160 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767665,
+      "longitude": -122.452584,
+      "parcel_ref": "1250-016A"
+    },
+    {
+      "address_id": "sf-0170-beulah",
+      "display": "170 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767603,
+      "longitude": -122.452659,
+      "parcel_ref": "1250-017"
+    },
+    {
+      "address_id": "sf-0173-haight",
+      "display": "173 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772519,
+      "longitude": -122.424952,
+      "parcel_ref": "0856-018"
+    },
+    {
+      "address_id": "sf-0175-haight",
+      "display": "175 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772571,
+      "longitude": -122.425088,
+      "parcel_ref": "0856-034"
+    },
+    {
+      "address_id": "sf-0177-haight",
+      "display": "177 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772571,
+      "longitude": -122.425088,
+      "parcel_ref": "0856-035"
+    },
+    {
+      "address_id": "sf-0179-haight",
+      "display": "179 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772571,
+      "longitude": -122.425088,
+      "parcel_ref": "0856-036"
+    },
+    {
+      "address_id": "sf-0182-laguna",
+      "display": "182 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772546,
+      "longitude": -122.425287,
+      "parcel_ref": "0856-030"
+    },
+    {
+      "address_id": "sf-0184-laguna",
+      "display": "184 Laguna St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772546,
+      "longitude": -122.425287,
+      "parcel_ref": "0856-031"
+    },
+    {
+      "address_id": "sf-0185-haight",
+      "display": "185 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.77256,
+      "longitude": -122.425173,
+      "parcel_ref": "0856-017"
+    },
+    {
+      "address_id": "sf-0188-beulah",
+      "display": "188 Beulah St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767553,
+      "longitude": -122.452777,
+      "parcel_ref": "1250-047"
+    },
+    {
+      "address_id": "sf-0188-buchanan",
+      "display": "188 Buchanan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771697,
+      "longitude": -122.426147,
+      "parcel_ref": "0857-002"
+    },
+    {
+      "address_id": "sf-0191-haight",
+      "display": "191 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772546,
+      "longitude": -122.425287,
+      "parcel_ref": "0856-032"
+    },
+    {
+      "address_id": "sf-0193-haight",
+      "display": "193 Haight St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.772546,
+      "longitude": -122.425287,
+      "parcel_ref": "0856-033"
+    },
+    {
+      "address_id": "sf-0267-hermann",
+      "display": "267 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770106,
+      "longitude": -122.429491,
+      "parcel_ref": "0874-007"
+    },
+    {
+      "address_id": "sf-0273-hermann",
+      "display": "273 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770101,
+      "longitude": -122.429586,
+      "parcel_ref": "0874-021"
+    },
+    {
+      "address_id": "sf-0275-hermann",
+      "display": "275 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770101,
+      "longitude": -122.429586,
+      "parcel_ref": "0874-022"
+    },
+    {
+      "address_id": "sf-0277-hermann",
+      "display": "277 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770101,
+      "longitude": -122.429586,
+      "parcel_ref": "0874-023"
+    },
+    {
+      "address_id": "sf-0279-hermann",
+      "display": "279 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770115,
+      "longitude": -122.429782,
+      "parcel_ref": "0874-015"
+    },
+    {
+      "address_id": "sf-0281-hermann",
+      "display": "281 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770115,
+      "longitude": -122.429782,
+      "parcel_ref": "0874-016"
+    },
+    {
+      "address_id": "sf-0283-hermann",
+      "display": "283 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770115,
+      "longitude": -122.429782,
+      "parcel_ref": "0874-017"
+    },
+    {
+      "address_id": "sf-0285-hermann",
+      "display": "285 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770115,
+      "longitude": -122.429782,
+      "parcel_ref": "0874-018"
+    },
+    {
+      "address_id": "sf-0287-hermann",
+      "display": "287 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770115,
+      "longitude": -122.429782,
+      "parcel_ref": "0874-019"
+    },
+    {
+      "address_id": "sf-0289-hermann",
+      "display": "289 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770115,
+      "longitude": -122.429782,
+      "parcel_ref": "0874-020"
+    },
+    {
+      "address_id": "sf-0337-hermann",
+      "display": "337 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769976,
+      "longitude": -122.430681,
+      "parcel_ref": "0875-019"
     },
     {
       "address_id": "sf-0350-rhode-island",
@@ -48,12 +1302,900 @@
       "parcel_ref": "3958-002"
     },
     {
-      "address_id": "sf-1550-bryant",
-      "display": "1550 Bryant St, San Francisco, CA 94103",
+      "address_id": "sf-0355-hermann",
+      "display": "355 Hermann St, San Francisco, CA",
       "district_id": "sffd-district-05",
-      "latitude": 37.7676,
-      "longitude": -122.4108,
-      "parcel_ref": "3999-018"
+      "latitude": 37.769906,
+      "longitude": -122.430946,
+      "parcel_ref": "0875-035"
+    },
+    {
+      "address_id": "sf-0357-hermann",
+      "display": "357 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769906,
+      "longitude": -122.430946,
+      "parcel_ref": "0875-034"
+    },
+    {
+      "address_id": "sf-0361-hermann",
+      "display": "361 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769895,
+      "longitude": -122.431033,
+      "parcel_ref": "0875-039"
+    },
+    {
+      "address_id": "sf-0363-hermann",
+      "display": "363 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769895,
+      "longitude": -122.431033,
+      "parcel_ref": "0875-040"
+    },
+    {
+      "address_id": "sf-0367-hermann",
+      "display": "367 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769884,
+      "longitude": -122.431118,
+      "parcel_ref": "0875-015"
+    },
+    {
+      "address_id": "sf-0373-hermann",
+      "display": "373 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769873,
+      "longitude": -122.431204,
+      "parcel_ref": "0875-014"
+    },
+    {
+      "address_id": "sf-0379-hermann",
+      "display": "379 Hermann St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769899,
+      "longitude": -122.431411,
+      "parcel_ref": "0875-013"
+    },
+    {
+      "address_id": "sf-0400-hyde",
+      "display": "400 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78471,
+      "longitude": -122.415861,
+      "parcel_ref": "0322-006A"
+    },
+    {
+      "address_id": "sf-0401-taylor",
+      "display": "401 Taylor St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786156,
+      "longitude": -122.411687,
+      "parcel_ref": "0317-003"
+    },
+    {
+      "address_id": "sf-0402-duboce",
+      "display": "402 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769595,
+      "longitude": -122.430156,
+      "parcel_ref": "0875-002A"
+    },
+    {
+      "address_id": "sf-0414-duboce",
+      "display": "414 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769633,
+      "longitude": -122.430474,
+      "parcel_ref": "0875-022"
+    },
+    {
+      "address_id": "sf-0415-mission",
+      "display": "415 Mission St, San Francisco, CA 94105",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7897,
+      "longitude": -122.3972,
+      "parcel_ref": "3717-143"
+    },
+    {
+      "address_id": "sf-0415-taylor",
+      "display": "415 Taylor St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786324,
+      "longitude": -122.411845,
+      "parcel_ref": "0317-002"
+    },
+    {
+      "address_id": "sf-0417-hyde",
+      "display": "417 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784719,
+      "longitude": -122.416355,
+      "parcel_ref": "0321-008"
+    },
+    {
+      "address_id": "sf-0421-leavenworth",
+      "display": "421 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784991,
+      "longitude": -122.414754,
+      "parcel_ref": "0322-002"
+    },
+    {
+      "address_id": "sf-0425-hyde",
+      "display": "425 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784804,
+      "longitude": -122.416504,
+      "parcel_ref": "0321-007"
+    },
+    {
+      "address_id": "sf-0428-ofarrell",
+      "display": "428 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786152,
+      "longitude": -122.411915,
+      "parcel_ref": "0317-004"
+    },
+    {
+      "address_id": "sf-0430-hyde",
+      "display": "430 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784897,
+      "longitude": -122.415899,
+      "parcel_ref": "0322-006B"
+    },
+    {
+      "address_id": "sf-0434-ofarrell",
+      "display": "434 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786106,
+      "longitude": -122.411999,
+      "parcel_ref": "0317-005"
+    },
+    {
+      "address_id": "sf-0437-hyde",
+      "display": "437 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784909,
+      "longitude": -122.416438,
+      "parcel_ref": "0321-006"
+    },
+    {
+      "address_id": "sf-0438-ofarrell",
+      "display": "438 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786094,
+      "longitude": -122.412094,
+      "parcel_ref": "0317-006"
+    },
+    {
+      "address_id": "sf-0440-hyde",
+      "display": "440 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785003,
+      "longitude": -122.415806,
+      "parcel_ref": "0322-007"
+    },
+    {
+      "address_id": "sf-0442-hyde",
+      "display": "442 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785084,
+      "longitude": -122.415823,
+      "parcel_ref": "0322-008"
+    },
+    {
+      "address_id": "sf-0445-leavenworth",
+      "display": "445 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785283,
+      "longitude": -122.414787,
+      "parcel_ref": "0322-001"
+    },
+    {
+      "address_id": "sf-0450-hayes",
+      "display": "450 Hayes St, San Francisco, CA 94102",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7768,
+      "longitude": -122.4247,
+      "parcel_ref": "0808-021"
+    },
+    {
+      "address_id": "sf-0450-ofarrell",
+      "display": "450 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786146,
+      "longitude": -122.412403,
+      "parcel_ref": "0317-007"
+    },
+    {
+      "address_id": "sf-0451-hyde",
+      "display": "451 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784965,
+      "longitude": -122.41645,
+      "parcel_ref": "0321-005"
+    },
+    {
+      "address_id": "sf-0455-hyde",
+      "display": "455 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785056,
+      "longitude": -122.416469,
+      "parcel_ref": "0321-003"
+    },
+    {
+      "address_id": "sf-0460-duboce",
+      "display": "460 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769609,
+      "longitude": -122.430687,
+      "parcel_ref": "0875-003A"
+    },
+    {
+      "address_id": "sf-0462-duboce",
+      "display": "462 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769801,
+      "longitude": -122.430797,
+      "parcel_ref": "0875-023"
+    },
+    {
+      "address_id": "sf-0464-duboce",
+      "display": "464 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769618,
+      "longitude": -122.430886,
+      "parcel_ref": "0875-036"
+    },
+    {
+      "address_id": "sf-0466-duboce",
+      "display": "466 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769618,
+      "longitude": -122.430886,
+      "parcel_ref": "0875-037"
+    },
+    {
+      "address_id": "sf-0467-hyde",
+      "display": "467 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785152,
+      "longitude": -122.416489,
+      "parcel_ref": "0321-002"
+    },
+    {
+      "address_id": "sf-0468-duboce",
+      "display": "468 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769618,
+      "longitude": -122.430886,
+      "parcel_ref": "0875-038"
+    },
+    {
+      "address_id": "sf-0470-duboce",
+      "display": "470 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76961,
+      "longitude": -122.430971,
+      "parcel_ref": "0875-006"
+    },
+    {
+      "address_id": "sf-0474-ofarrell",
+      "display": "474 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78609,
+      "longitude": -122.412669,
+      "parcel_ref": "0317-009"
+    },
+    {
+      "address_id": "sf-0476-duboce",
+      "display": "476 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769602,
+      "longitude": -122.431057,
+      "parcel_ref": "0875-007"
+    },
+    {
+      "address_id": "sf-0482-duboce",
+      "display": "482 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769592,
+      "longitude": -122.431145,
+      "parcel_ref": "0875-008"
+    },
+    {
+      "address_id": "sf-0490-duboce",
+      "display": "490 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-030"
+    },
+    {
+      "address_id": "sf-0492-duboce",
+      "display": "492 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-031"
+    },
+    {
+      "address_id": "sf-0494-duboce",
+      "display": "494 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-032"
+    },
+    {
+      "address_id": "sf-0496-duboce",
+      "display": "496 Duboce Ave, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.769529,
+      "longitude": -122.431335,
+      "parcel_ref": "0875-033"
+    },
+    {
+      "address_id": "sf-0500-ellis",
+      "display": "500 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784805,
+      "longitude": -122.414716,
+      "parcel_ref": "0322-003"
+    },
+    {
+      "address_id": "sf-0500-hyde",
+      "display": "500 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785624,
+      "longitude": -122.416076,
+      "parcel_ref": "0319-018"
+    },
+    {
+      "address_id": "sf-0500-jones",
+      "display": "500 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786069,
+      "longitude": -122.412836,
+      "parcel_ref": "0317-010A"
+    },
+    {
+      "address_id": "sf-0500-leavenworth",
+      "display": "500 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78582,
+      "longitude": -122.414429,
+      "parcel_ref": "0318-014"
+    },
+    {
+      "address_id": "sf-0501-geary",
+      "display": "501 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786617,
+      "longitude": -122.411811,
+      "parcel_ref": "0317-001"
+    },
+    {
+      "address_id": "sf-0501-jones",
+      "display": "501 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785918,
+      "longitude": -122.413387,
+      "parcel_ref": "0318-007"
+    },
+    {
+      "address_id": "sf-0501-waller",
+      "display": "501 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770657,
+      "longitude": -122.432043,
+      "parcel_ref": "0866-001"
+    },
+    {
+      "address_id": "sf-0509-leavenworth",
+      "display": "509 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785781,
+      "longitude": -122.414929,
+      "parcel_ref": "0319-005"
+    },
+    {
+      "address_id": "sf-0511-jones",
+      "display": "511 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786014,
+      "longitude": -122.413273,
+      "parcel_ref": "0318-006"
+    },
+    {
+      "address_id": "sf-0511-waller",
+      "display": "511 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770736,
+      "longitude": -122.432115,
+      "parcel_ref": "0866-024"
+    },
+    {
+      "address_id": "sf-0515-waller",
+      "display": "515 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770686,
+      "longitude": -122.432196,
+      "parcel_ref": "0866-023"
+    },
+    {
+      "address_id": "sf-0518-ellis",
+      "display": "518 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784876,
+      "longitude": -122.414972,
+      "parcel_ref": "0322-004"
+    },
+    {
+      "address_id": "sf-0520-leavenworth",
+      "display": "520 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786006,
+      "longitude": -122.414466,
+      "parcel_ref": "0318-015"
+    },
+    {
+      "address_id": "sf-0521-waller",
+      "display": "521 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770686,
+      "longitude": -122.432282,
+      "parcel_ref": "0866-022"
+    },
+    {
+      "address_id": "sf-0522-hyde",
+      "display": "522 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785823,
+      "longitude": -122.416098,
+      "parcel_ref": "0319-019"
+    },
+    {
+      "address_id": "sf-0525-hyde",
+      "display": "525 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785709,
+      "longitude": -122.416589,
+      "parcel_ref": "0320-005"
+    },
+    {
+      "address_id": "sf-0525-jones",
+      "display": "525 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786125,
+      "longitude": -122.413408,
+      "parcel_ref": "0318-005"
+    },
+    {
+      "address_id": "sf-0525-leavenworth",
+      "display": "525 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785873,
+      "longitude": -122.415037,
+      "parcel_ref": "0319-004"
+    },
+    {
+      "address_id": "sf-0527-waller",
+      "display": "527 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770684,
+      "longitude": -122.432371,
+      "parcel_ref": "0866-025"
+    },
+    {
+      "address_id": "sf-0529-waller",
+      "display": "529 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770684,
+      "longitude": -122.432371,
+      "parcel_ref": "0866-026"
+    },
+    {
+      "address_id": "sf-0530-jones",
+      "display": "530 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786276,
+      "longitude": -122.412707,
+      "parcel_ref": "0317-011"
+    },
+    {
+      "address_id": "sf-0531-geary",
+      "display": "531 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786643,
+      "longitude": -122.412155,
+      "parcel_ref": "0317-027"
+    },
+    {
+      "address_id": "sf-0531-hyde",
+      "display": "531 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785785,
+      "longitude": -122.4167,
+      "parcel_ref": "0320-004"
+    },
+    {
+      "address_id": "sf-0531-waller",
+      "display": "531 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770684,
+      "longitude": -122.432371,
+      "parcel_ref": "0866-027"
+    },
+    {
+      "address_id": "sf-0533-jones",
+      "display": "533 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78627,
+      "longitude": -122.413297,
+      "parcel_ref": "0318-004"
+    },
+    {
+      "address_id": "sf-0533-waller",
+      "display": "533 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770714,
+      "longitude": -122.432464,
+      "parcel_ref": "0866-020A"
+    },
+    {
+      "address_id": "sf-0534-hyde",
+      "display": "534 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78593,
+      "longitude": -122.416131,
+      "parcel_ref": "0319-020"
+    },
+    {
+      "address_id": "sf-0535-leavenworth",
+      "display": "535 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785966,
+      "longitude": -122.415056,
+      "parcel_ref": "0319-003"
+    },
+    {
+      "address_id": "sf-0536-jones",
+      "display": "536 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786362,
+      "longitude": -122.412782,
+      "parcel_ref": "0317-012"
+    },
+    {
+      "address_id": "sf-0537-hyde",
+      "display": "537 Hyde St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785887,
+      "longitude": -122.41672,
+      "parcel_ref": "0320-002"
+    },
+    {
+      "address_id": "sf-0539-waller",
+      "display": "539 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770708,
+      "longitude": -122.432553,
+      "parcel_ref": "0866-020"
+    },
+    {
+      "address_id": "sf-0540-leavenworth",
+      "display": "540 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786165,
+      "longitude": -122.414424,
+      "parcel_ref": "0318-016"
+    },
+    {
+      "address_id": "sf-0540-ofarrell",
+      "display": "540 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785991,
+      "longitude": -122.413711,
+      "parcel_ref": "0318-008"
+    },
+    {
+      "address_id": "sf-0545-jones",
+      "display": "545 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786372,
+      "longitude": -122.413318,
+      "parcel_ref": "0318-002"
+    },
+    {
+      "address_id": "sf-0545-leavenworth",
+      "display": "545 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786111,
+      "longitude": -122.414955,
+      "parcel_ref": "0319-028"
+    },
+    {
+      "address_id": "sf-0546-jones",
+      "display": "546 Jones St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78645,
+      "longitude": -122.412864,
+      "parcel_ref": "0317-013"
+    },
+    {
+      "address_id": "sf-0549-geary",
+      "display": "549 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786641,
+      "longitude": -122.412442,
+      "parcel_ref": "0317-020"
+    },
+    {
+      "address_id": "sf-0549-shannon",
+      "display": "549 Shannon St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786381,
+      "longitude": -122.412429,
+      "parcel_ref": "0317-024"
+    },
+    {
+      "address_id": "sf-0550-leavenworth",
+      "display": "550 Leavenworth St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786285,
+      "longitude": -122.414496,
+      "parcel_ref": "0318-016A"
+    },
+    {
+      "address_id": "sf-0550-ofarrell",
+      "display": "550 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785961,
+      "longitude": -122.413947,
+      "parcel_ref": "0318-009"
+    },
+    {
+      "address_id": "sf-0559-waller",
+      "display": "559 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770629,
+      "longitude": -122.432804,
+      "parcel_ref": "0865-001"
+    },
+    {
+      "address_id": "sf-0560-ellis",
+      "display": "560 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784833,
+      "longitude": -122.415309,
+      "parcel_ref": "0322-005"
+    },
+    {
+      "address_id": "sf-0563-waller",
+      "display": "563 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770618,
+      "longitude": -122.432892,
+      "parcel_ref": "0865-025"
+    },
+    {
+      "address_id": "sf-0565-geary",
+      "display": "565 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786529,
+      "longitude": -122.412535,
+      "parcel_ref": "0317-018"
+    },
+    {
+      "address_id": "sf-0565-waller",
+      "display": "565 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770618,
+      "longitude": -122.432892,
+      "parcel_ref": "0865-046"
+    },
+    {
+      "address_id": "sf-0567-waller",
+      "display": "567 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770618,
+      "longitude": -122.432892,
+      "parcel_ref": "0865-047"
+    },
+    {
+      "address_id": "sf-0569-waller",
+      "display": "569 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770607,
+      "longitude": -122.432977,
+      "parcel_ref": "0865-033"
+    },
+    {
+      "address_id": "sf-0570-ellis",
+      "display": "570 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784791,
+      "longitude": -122.415637,
+      "parcel_ref": "0322-006"
+    },
+    {
+      "address_id": "sf-0570-ofarrell",
+      "display": "570 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785935,
+      "longitude": -122.414151,
+      "parcel_ref": "0318-012"
+    },
+    {
+      "address_id": "sf-0571-waller",
+      "display": "571 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770607,
+      "longitude": -122.432977,
+      "parcel_ref": "0865-034"
+    },
+    {
+      "address_id": "sf-0573-waller",
+      "display": "573 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770607,
+      "longitude": -122.432977,
+      "parcel_ref": "0865-035"
+    },
+    {
+      "address_id": "sf-0577-geary",
+      "display": "577 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786564,
+      "longitude": -122.412727,
+      "parcel_ref": "0317-029"
+    },
+    {
+      "address_id": "sf-0579-geary",
+      "display": "579 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786564,
+      "longitude": -122.412727,
+      "parcel_ref": "0317-028"
+    },
+    {
+      "address_id": "sf-0579-waller",
+      "display": "579 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770596,
+      "longitude": -122.433063,
+      "parcel_ref": "0865-023"
+    },
+    {
+      "address_id": "sf-0580-ofarrell",
+      "display": "580 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78592,
+      "longitude": -122.414268,
+      "parcel_ref": "0318-013"
+    },
+    {
+      "address_id": "sf-0581-waller",
+      "display": "581 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770585,
+      "longitude": -122.433148,
+      "parcel_ref": "0865-022"
+    },
+    {
+      "address_id": "sf-0585-geary",
+      "display": "585 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786581,
+      "longitude": -122.412841,
+      "parcel_ref": "0317-015"
+    },
+    {
+      "address_id": "sf-0587-waller",
+      "display": "587 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770574,
+      "longitude": -122.433233,
+      "parcel_ref": "0865-021"
+    },
+    {
+      "address_id": "sf-0591-waller",
+      "display": "591 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770562,
+      "longitude": -122.433331,
+      "parcel_ref": "0865-020"
+    },
+    {
+      "address_id": "sf-0595-geary",
+      "display": "595 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786566,
+      "longitude": -122.412958,
+      "parcel_ref": "0317-014"
+    },
+    {
+      "address_id": "sf-0600-ellis",
+      "display": "600 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7846,
+      "longitude": -122.41633,
+      "parcel_ref": "0321-009"
+    },
+    {
+      "address_id": "sf-0600-ofarrell",
+      "display": "600 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785687,
+      "longitude": -122.414901,
+      "parcel_ref": "0319-007"
+    },
+    {
+      "address_id": "sf-0601-geary",
+      "display": "601 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786525,
+      "longitude": -122.413349,
+      "parcel_ref": "0318-001"
+    },
+    {
+      "address_id": "sf-0601-waller",
+      "display": "601 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770527,
+      "longitude": -122.433662,
+      "parcel_ref": "0864-026"
+    },
+    {
+      "address_id": "sf-0603-waller",
+      "display": "603 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770527,
+      "longitude": -122.433662,
+      "parcel_ref": "0864-027"
+    },
+    {
+      "address_id": "sf-0605-waller",
+      "display": "605 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770527,
+      "longitude": -122.433662,
+      "parcel_ref": "0864-028"
+    },
+    {
+      "address_id": "sf-0606-ellis",
+      "display": "606 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784616,
+      "longitude": -122.416483,
+      "parcel_ref": "0321-011"
+    },
+    {
+      "address_id": "sf-0607-waller",
+      "display": "607 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770517,
+      "longitude": -122.433742,
+      "parcel_ref": "0864-025"
+    },
+    {
+      "address_id": "sf-0611-waller",
+      "display": "611 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770506,
+      "longitude": -122.433825,
+      "parcel_ref": "0864-024"
+    },
+    {
+      "address_id": "sf-0620-ofarrell",
+      "display": "620 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785719,
+      "longitude": -122.415116,
+      "parcel_ref": "0319-008"
     },
     {
       "address_id": "sf-0621-clement",
@@ -64,20 +2206,892 @@
       "parcel_ref": "1440-025"
     },
     {
+      "address_id": "sf-0621-waller",
+      "display": "621 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770496,
+      "longitude": -122.433906,
+      "parcel_ref": "0864-023"
+    },
+    {
+      "address_id": "sf-0624-ellis",
+      "display": "624 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784605,
+      "longitude": -122.416568,
+      "parcel_ref": "0321-012"
+    },
+    {
+      "address_id": "sf-0627-waller",
+      "display": "627 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770478,
+      "longitude": -122.433987,
+      "parcel_ref": "0864-022"
+    },
+    {
+      "address_id": "sf-0628-ellis",
+      "display": "628 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784594,
+      "longitude": -122.416654,
+      "parcel_ref": "0321-013"
+    },
+    {
+      "address_id": "sf-0628-ofarrell",
+      "display": "628 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785709,
+      "longitude": -122.4152,
+      "parcel_ref": "0319-009"
+    },
+    {
+      "address_id": "sf-0631-ofarrell",
+      "display": "631 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78524,
+      "longitude": -122.41512,
+      "parcel_ref": "0322A-001"
+    },
+    {
+      "address_id": "sf-0632-ellis",
+      "display": "632 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784648,
+      "longitude": -122.41677,
+      "parcel_ref": "0321-014"
+    },
+    {
+      "address_id": "sf-0633-waller",
+      "display": "633 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770468,
+      "longitude": -122.43407,
+      "parcel_ref": "0864-029"
+    },
+    {
+      "address_id": "sf-0635-waller",
+      "display": "635 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770468,
+      "longitude": -122.43407,
+      "parcel_ref": "0864-030"
+    },
+    {
+      "address_id": "sf-0639-geary",
+      "display": "639 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78636,
+      "longitude": -122.413825,
+      "parcel_ref": "0318-021"
+    },
+    {
+      "address_id": "sf-0639-waller",
+      "display": "639 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770457,
+      "longitude": -122.434151,
+      "parcel_ref": "0864-020"
+    },
+    {
+      "address_id": "sf-0640-ofarrell",
+      "display": "640 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785785,
+      "longitude": -122.415346,
+      "parcel_ref": "0319-010"
+    },
+    {
+      "address_id": "sf-0641-ofarrell",
+      "display": "641 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785195,
+      "longitude": -122.415466,
+      "parcel_ref": "0322-012"
+    },
+    {
+      "address_id": "sf-0643-waller",
+      "display": "643 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770447,
+      "longitude": -122.43423,
+      "parcel_ref": "0864-019"
+    },
+    {
+      "address_id": "sf-0646-ellis",
+      "display": "646 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784633,
+      "longitude": -122.416887,
+      "parcel_ref": "0321-015"
+    },
+    {
+      "address_id": "sf-0646-ofarrell",
+      "display": "646 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785704,
+      "longitude": -122.415462,
+      "parcel_ref": "0319-012"
+    },
+    {
+      "address_id": "sf-0650-ellis",
+      "display": "650 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784618,
+      "longitude": -122.417004,
+      "parcel_ref": "0321-016"
+    },
+    {
+      "address_id": "sf-0651-geary",
+      "display": "651 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786344,
+      "longitude": -122.413955,
+      "parcel_ref": "0318-020"
+    },
+    {
+      "address_id": "sf-0656-ofarrell",
+      "display": "656 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785687,
+      "longitude": -122.41559,
+      "parcel_ref": "0319-013"
+    },
+    {
+      "address_id": "sf-0661-waller",
+      "display": "661 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770446,
+      "longitude": -122.434512,
+      "parcel_ref": "0863-014"
+    },
+    {
+      "address_id": "sf-0663-waller",
+      "display": "663 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770446,
+      "longitude": -122.434512,
+      "parcel_ref": "0863-015"
+    },
+    {
+      "address_id": "sf-0665-geary",
+      "display": "665 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786325,
+      "longitude": -122.414105,
+      "parcel_ref": "0318-019"
+    },
+    {
+      "address_id": "sf-0665-waller",
+      "display": "665 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770434,
+      "longitude": -122.434606,
+      "parcel_ref": "0863-012"
+    },
+    {
+      "address_id": "sf-0666-ellis",
+      "display": "666 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784588,
+      "longitude": -122.417239,
+      "parcel_ref": "0321-039"
+    },
+    {
+      "address_id": "sf-0666-ofarrell",
+      "display": "666 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785709,
+      "longitude": -122.415869,
+      "parcel_ref": "0319-016"
+    },
+    {
+      "address_id": "sf-0667-geary",
+      "display": "667 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786311,
+      "longitude": -122.414213,
+      "parcel_ref": "0318-018"
+    },
+    {
+      "address_id": "sf-0667-ofarrell",
+      "display": "667 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785256,
+      "longitude": -122.415647,
+      "parcel_ref": "0322-011"
+    },
+    {
+      "address_id": "sf-0673-geary",
+      "display": "673 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786373,
+      "longitude": -122.41432,
+      "parcel_ref": "0318-017"
+    },
+    {
+      "address_id": "sf-0673-waller",
+      "display": "673 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770423,
+      "longitude": -122.434692,
+      "parcel_ref": "0863-011"
+    },
+    {
+      "address_id": "sf-0675-ofarrell",
+      "display": "675 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785239,
+      "longitude": -122.41578,
+      "parcel_ref": "0322-010"
+    },
+    {
+      "address_id": "sf-0679-geary",
+      "display": "679 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786403,
+      "longitude": -122.41452,
+      "parcel_ref": "0318-016B"
+    },
+    {
+      "address_id": "sf-0679-waller",
+      "display": "679 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770407,
+      "longitude": -122.434786,
+      "parcel_ref": "0863-016"
+    },
+    {
+      "address_id": "sf-0681-waller",
+      "display": "681 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770407,
+      "longitude": -122.434786,
+      "parcel_ref": "0863-017"
+    },
+    {
+      "address_id": "sf-0683-ofarrell",
+      "display": "683 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785212,
+      "longitude": -122.415984,
+      "parcel_ref": "0322-009"
+    },
+    {
+      "address_id": "sf-0684-ellis",
+      "display": "684 Ellis St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784449,
+      "longitude": -122.417511,
+      "parcel_ref": "0321-020"
+    },
+    {
+      "address_id": "sf-0700-ofarrell",
+      "display": "700 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785563,
+      "longitude": -122.416512,
+      "parcel_ref": "0320-006"
+    },
+    {
+      "address_id": "sf-0701-geary",
+      "display": "701 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786295,
+      "longitude": -122.414992,
+      "parcel_ref": "0319-001"
+    },
+    {
+      "address_id": "sf-0701-ofarrell",
+      "display": "701 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78522,
+      "longitude": -122.416504,
+      "parcel_ref": "0321-001"
+    },
+    {
+      "address_id": "sf-0701-shrader",
+      "display": "701 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768273,
+      "longitude": -122.45195,
+      "parcel_ref": "1250-001"
+    },
+    {
+      "address_id": "sf-0707-shrader",
+      "display": "707 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768192,
+      "longitude": -122.451933,
+      "parcel_ref": "1250-002"
+    },
+    {
+      "address_id": "sf-0716-larkin",
+      "display": "716 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784567,
+      "longitude": -122.417537,
+      "parcel_ref": "0321-022"
+    },
+    {
+      "address_id": "sf-0716-ofarrell",
+      "display": "716 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785545,
+      "longitude": -122.416652,
+      "parcel_ref": "0320-007"
+    },
+    {
+      "address_id": "sf-0717-shrader",
+      "display": "717 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76807,
+      "longitude": -122.451908,
+      "parcel_ref": "1250-003A"
+    },
+    {
+      "address_id": "sf-0720-ofarrell",
+      "display": "720 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78557,
+      "longitude": -122.416753,
+      "parcel_ref": "0320-008"
+    },
+    {
+      "address_id": "sf-0721-geary",
+      "display": "721 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78619,
+      "longitude": -122.415158,
+      "parcel_ref": "0319-027"
+    },
+    {
+      "address_id": "sf-0721-shrader",
+      "display": "721 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768003,
+      "longitude": -122.451939,
+      "parcel_ref": "1250-004"
+    },
+    {
+      "address_id": "sf-0724-larkin",
+      "display": "724 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784635,
+      "longitude": -122.417551,
+      "parcel_ref": "0321-023"
+    },
+    {
+      "address_id": "sf-0725-geary",
+      "display": "725 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786175,
+      "longitude": -122.415275,
+      "parcel_ref": "0319-026"
+    },
+    {
+      "address_id": "sf-0725-ofarrell",
+      "display": "725 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785038,
+      "longitude": -122.416705,
+      "parcel_ref": "0321-038"
+    },
+    {
+      "address_id": "sf-0730-larkin",
+      "display": "730 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784703,
+      "longitude": -122.417566,
+      "parcel_ref": "0321-024"
+    },
+    {
+      "address_id": "sf-0730-ofarrell",
+      "display": "730 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785569,
+      "longitude": -122.416889,
+      "parcel_ref": "0320-009"
+    },
+    {
+      "address_id": "sf-0733-shrader",
+      "display": "733 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767936,
+      "longitude": -122.451925,
+      "parcel_ref": "1250-005"
+    },
+    {
+      "address_id": "sf-0734-larkin",
+      "display": "734 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784801,
+      "longitude": -122.417547,
+      "parcel_ref": "0321-025"
+    },
+    {
+      "address_id": "sf-0735-geary",
+      "display": "735 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786159,
+      "longitude": -122.415401,
+      "parcel_ref": "0319-025A"
+    },
+    {
+      "address_id": "sf-0735-ofarrell",
+      "display": "735 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785019,
+      "longitude": -122.416855,
+      "parcel_ref": "0321-037"
+    },
+    {
+      "address_id": "sf-0739-shrader",
+      "display": "739 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767868,
+      "longitude": -122.451911,
+      "parcel_ref": "1250-036"
+    },
+    {
+      "address_id": "sf-0740-larkin",
+      "display": "740 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784865,
+      "longitude": -122.417561,
+      "parcel_ref": "0321-026"
+    },
+    {
+      "address_id": "sf-0740-ofarrell",
+      "display": "740 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785566,
+      "longitude": -122.417053,
+      "parcel_ref": "0320-010"
+    },
+    {
+      "address_id": "sf-0741-ofarrell",
+      "display": "741 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785005,
+      "longitude": -122.416961,
+      "parcel_ref": "0321-036"
+    },
+    {
+      "address_id": "sf-0741-shrader",
+      "display": "741 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767868,
+      "longitude": -122.451911,
+      "parcel_ref": "1250-035"
+    },
+    {
+      "address_id": "sf-0744-larkin",
+      "display": "744 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784975,
+      "longitude": -122.417705,
+      "parcel_ref": "0321-027"
+    },
+    {
+      "address_id": "sf-0747-geary",
+      "display": "747 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786138,
+      "longitude": -122.415567,
+      "parcel_ref": "0319-025"
+    },
+    {
+      "address_id": "sf-0750-ofarrell",
+      "display": "750 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.78554,
+      "longitude": -122.417253,
+      "parcel_ref": "0320-011"
+    },
+    {
+      "address_id": "sf-0750-stanyan",
+      "display": "750 Stanyan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768081,
+      "longitude": -122.452986,
+      "parcel_ref": "1250-025"
+    },
+    {
+      "address_id": "sf-0753-ofarrell",
+      "display": "753 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784989,
+      "longitude": -122.417089,
+      "parcel_ref": "0321-034"
+    },
+    {
+      "address_id": "sf-0753-shrader",
+      "display": "753 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767738,
+      "longitude": -122.451841,
+      "parcel_ref": "1250-008"
+    },
+    {
+      "address_id": "sf-0757-shrader",
+      "display": "757 Shrader St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767651,
+      "longitude": -122.451721,
+      "parcel_ref": "1250-009"
+    },
+    {
+      "address_id": "sf-0764-stanyan",
+      "display": "764 Stanyan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767947,
+      "longitude": -122.452959,
+      "parcel_ref": "1250-024"
+    },
+    {
+      "address_id": "sf-0765-geary",
+      "display": "765 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786114,
+      "longitude": -122.415755,
+      "parcel_ref": "0319-023"
+    },
+    {
+      "address_id": "sf-0765-ofarrell",
+      "display": "765 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784967,
+      "longitude": -122.417257,
+      "parcel_ref": "0321-032"
+    },
+    {
+      "address_id": "sf-0770-ofarrell",
+      "display": "770 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785514,
+      "longitude": -122.417449,
+      "parcel_ref": "0320-012"
+    },
+    {
+      "address_id": "sf-0770-stanyan",
+      "display": "770 Stanyan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767885,
+      "longitude": -122.452903,
+      "parcel_ref": "1250-023"
+    },
+    {
+      "address_id": "sf-0771-ofarrell",
+      "display": "771 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784952,
+      "longitude": -122.417378,
+      "parcel_ref": "0321-031"
+    },
+    {
+      "address_id": "sf-0772-stanyan",
+      "display": "772 Stanyan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767783,
+      "longitude": -122.452882,
+      "parcel_ref": "1250-022"
+    },
+    {
+      "address_id": "sf-0775-geary",
+      "display": "775 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786089,
+      "longitude": -122.415949,
+      "parcel_ref": "0319-022"
+    },
+    {
+      "address_id": "sf-0777-ofarrell",
+      "display": "777 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785001,
+      "longitude": -122.41751,
+      "parcel_ref": "0321-030"
+    },
+    {
+      "address_id": "sf-0784-stanyan",
+      "display": "784 Stanyan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.767676,
+      "longitude": -122.452904,
+      "parcel_ref": "1250-021"
+    },
+    {
+      "address_id": "sf-0791-ofarrell",
+      "display": "791 Ofarrell St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.784985,
+      "longitude": -122.417628,
+      "parcel_ref": "0321-028"
+    },
+    {
+      "address_id": "sf-0795-geary",
+      "display": "795 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786116,
+      "longitude": -122.416168,
+      "parcel_ref": "0319-021"
+    },
+    {
+      "address_id": "sf-0798-stanyan",
+      "display": "798 Stanyan St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76753,
+      "longitude": -122.452959,
+      "parcel_ref": "1250-040"
+    },
+    {
+      "address_id": "sf-0800-larkin",
+      "display": "800 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785357,
+      "longitude": -122.417658,
+      "parcel_ref": "0320-014"
+    },
+    {
+      "address_id": "sf-0801-geary",
+      "display": "801 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786081,
+      "longitude": -122.416561,
+      "parcel_ref": "0320-001"
+    },
+    {
+      "address_id": "sf-0807-geary",
+      "display": "807 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786066,
+      "longitude": -122.416679,
+      "parcel_ref": "0320-023"
+    },
+    {
+      "address_id": "sf-0816-larkin",
+      "display": "816 Larkin St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785484,
+      "longitude": -122.417683,
+      "parcel_ref": "0320-015"
+    },
+    {
+      "address_id": "sf-0819-geary",
+      "display": "819 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786051,
+      "longitude": -122.416795,
+      "parcel_ref": "0320-022"
+    },
+    {
+      "address_id": "sf-0823-geary",
+      "display": "823 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.786036,
+      "longitude": -122.41691,
+      "parcel_ref": "0320-021"
+    },
+    {
+      "address_id": "sf-0835-geary",
+      "display": "835 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785946,
+      "longitude": -122.417067,
+      "parcel_ref": "0320-020"
+    },
+    {
+      "address_id": "sf-0855-geary",
+      "display": "855 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785916,
+      "longitude": -122.417302,
+      "parcel_ref": "0320-019"
+    },
+    {
+      "address_id": "sf-0869-geary",
+      "display": "869 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785971,
+      "longitude": -122.417598,
+      "parcel_ref": "0320-018A"
+    },
+    {
+      "address_id": "sf-0895-geary",
+      "display": "895 Geary St, San Francisco, CA",
+      "district_id": "sffd-district-03",
+      "latitude": 37.785774,
+      "longitude": -122.417711,
+      "parcel_ref": "0320-024"
+    },
+    {
+      "address_id": "sf-0899-valencia",
+      "display": "899 Valencia St, San Francisco, CA 94110",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7592,
+      "longitude": -122.4212,
+      "parcel_ref": "3617-032"
+    },
+    {
+      "address_id": "sf-1215-fell",
+      "display": "1215 Fell St, San Francisco, CA 94117",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7745,
+      "longitude": -122.4383,
+      "parcel_ref": "1203-014"
+    },
+    {
+      "address_id": "sf-1550-bryant",
+      "display": "1550 Bryant St, San Francisco, CA 94103",
+      "district_id": "sffd-district-05",
+      "latitude": 37.7676,
+      "longitude": -122.4108,
+      "parcel_ref": "3999-018"
+    },
+    {
+      "address_id": "sf-1727-waller",
+      "display": "1727 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768149,
+      "longitude": -122.452157,
+      "parcel_ref": "1250-034"
+    },
+    {
+      "address_id": "sf-1733-waller",
+      "display": "1733 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.76809,
+      "longitude": -122.452232,
+      "parcel_ref": "1250-033"
+    },
+    {
+      "address_id": "sf-1745-waller",
+      "display": "1745 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768068,
+      "longitude": -122.452403,
+      "parcel_ref": "1250-031"
+    },
+    {
+      "address_id": "sf-1749-waller",
+      "display": "1749 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768057,
+      "longitude": -122.452489,
+      "parcel_ref": "1250-030"
+    },
+    {
+      "address_id": "sf-1757-waller",
+      "display": "1757 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768046,
+      "longitude": -122.452574,
+      "parcel_ref": "1250-029"
+    },
+    {
+      "address_id": "sf-1765-waller",
+      "display": "1765 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768035,
+      "longitude": -122.452659,
+      "parcel_ref": "1250-028"
+    },
+    {
+      "address_id": "sf-1771-waller",
+      "display": "1771 Waller St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.768075,
+      "longitude": -122.452755,
+      "parcel_ref": "1250-027"
+    },
+    {
+      "address_id": "sf-1800-market",
+      "display": "1800 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771778,
+      "longitude": -122.424028,
+      "parcel_ref": "0871-014"
+    },
+    {
+      "address_id": "sf-1828-market",
+      "display": "1828 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771553,
+      "longitude": -122.424425,
+      "parcel_ref": "0871-016"
+    },
+    {
+      "address_id": "sf-1870-market",
+      "display": "1870 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771261,
+      "longitude": -122.424673,
+      "parcel_ref": "0871-004"
+    },
+    {
+      "address_id": "sf-1874-market",
+      "display": "1874 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771214,
+      "longitude": -122.424762,
+      "parcel_ref": "0871-005"
+    },
+    {
+      "address_id": "sf-1884-market",
+      "display": "1884 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771149,
+      "longitude": -122.424846,
+      "parcel_ref": "0871-006"
+    },
+    {
+      "address_id": "sf-1890-market",
+      "display": "1890 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.771138,
+      "longitude": -122.424927,
+      "parcel_ref": "0871-007"
+    },
+    {
+      "address_id": "sf-1930-market",
+      "display": "1930 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770524,
+      "longitude": -122.425672,
+      "parcel_ref": "0872-002"
+    },
+    {
+      "address_id": "sf-1942-market",
+      "display": "1942 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770337,
+      "longitude": -122.425838,
+      "parcel_ref": "0872-004"
+    },
+    {
+      "address_id": "sf-1998-market",
+      "display": "1998 Market St, San Francisco, CA",
+      "district_id": "sffd-district-05",
+      "latitude": 37.770074,
+      "longitude": -122.426208,
+      "parcel_ref": "0872-025"
+    },
+    {
+      "address_id": "sf-2130-mission",
+      "display": "2130 Mission St, San Francisco, CA 94110",
+      "district_id": "sffd-district-03",
+      "latitude": 37.7627,
+      "longitude": -122.4194,
+      "parcel_ref": "3574-011"
+    },
+    {
       "address_id": "sf-3120-24th",
       "display": "3120 24th St, San Francisco, CA 94110",
       "district_id": "sffd-district-03",
       "latitude": 37.7526,
       "longitude": -122.4155,
       "parcel_ref": "6520-009"
-    },
-    {
-      "address_id": "sf-0415-mission",
-      "display": "415 Mission St, San Francisco, CA 94105",
-      "district_id": "sffd-district-03",
-      "latitude": 37.7897,
-      "longitude": -122.3972,
-      "parcel_ref": "3717-143"
     }
   ]
 }

@@ -183,13 +183,17 @@ class FleetRunner:
                 correlation_id=correlation_id,
             )
 
+        started = self._clock.now()
+        # Computed before the payload so the agent is handed the same deadline
+        # the runtime will enforce, rather than a number it inferred.
+        effective_deadline = deadline or _declared_deadline(descriptor, started)
         payload = AgentInput(
             correlation_id=correlation_id,
             causation_id=causation_id,
             ids=dict(ids or {}),
             parameters=dict(parameters or {}),
+            deadline=effective_deadline,
         )
-        started = self._clock.now()
         run_id = self._ids.new_id("run")
         # The key is derived from what the run is *about*, so a duplicate
         # dispatch of the same tick is recognisable as the same work.
@@ -208,7 +212,6 @@ class FleetRunner:
             )
         )
 
-        effective_deadline = deadline or _declared_deadline(descriptor, started)
         result = await self._runtime.invoke(descriptor, payload, grant, effective_deadline)
 
         finished = record.finished(

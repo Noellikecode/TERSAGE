@@ -275,3 +275,47 @@ async def test_an_unavailable_screen_is_distinguishable_from_a_quiet_one() -> No
     assert outcome.screen_unavailable_reason == "SCREEN_UNAVAILABLE"
     assert outcome.screen == "dead-screen"
     assert outcome.used_model is False
+
+
+async def test_the_screen_bounds_how_many_documents_it_screens_at_once() -> None:
+    """Admission is gated, and the gate covers both screens rather than one.
+
+    Found by ingesting a district: several hundred documents screened at once
+    lost about one in six to ``DeadlineExceeded`` against a service answering
+    in 170 ms. Two causes, and the gate is what addresses both -- the local
+    detector is pure CPU on the event loop, so unbounded concurrency starved
+    the loop and made the remote screen's own timers fire late; and an
+    unbounded burst of gRPC calls over one channel exceeded the per-call
+    deadline. A screen that cannot run withholds the document, so the visible
+    symptom was a district that ingested nothing while every log line blamed an
+    outage.
+    """
+    import asyncio
+
+    from firstdue.security.armor import _MAX_IN_FLIGHT, ModelArmorClient
+
+    peak = 0
+    live = 0
+
+    def _sanitize(_module, _text):
+        nonlocal peak, live
+        live += 1
+        peak = max(peak, live)
+        try:
+            return _Sanitized()
+        finally:
+            live -= 1
+
+    class _Sanitized:
+        sanitization_result = None
+
+    client = ModelArmorClient(
+        template="projects/p/locations/us-central1/templates/t",
+        project_id="p",
+        module=object(),
+    )
+    client._sanitize = _sanitize  # type: ignore[method-assign]
+
+    await asyncio.gather(*[client.inspect(f"clean permit text {i}") for i in range(64)])
+
+    assert peak <= _MAX_IN_FLIGHT, f"{peak} screens were in flight at once"

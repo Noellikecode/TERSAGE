@@ -2,6 +2,7 @@
   "_comment": "Source of truth: Topic in backend/src/firstdue/domain/events.py.",
   "topics": [
     "agent.published",
+    "agent.wake",
     "approval.staged",
     "brief.emitted",
     "conflict.detected",

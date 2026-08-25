@@ -807,3 +807,43 @@ async def test_langgraph_runs_the_same_nodes_to_the_same_chain() -> None:
     assert builtin.trace.decisions == compiled.trace.decisions
     assert builtin.trace.stop is compiled.trace.stop is GraphStop.CLOSED
     assert builtin.state.selected == compiled.state.selected
+
+
+async def test_a_routed_agent_is_woken_by_the_plan_and_not_by_the_incident_opening() -> None:
+    """The plan is the only thing that starts a routed agent, in both topologies.
+
+    ``plan_handoffs`` decides who runs by matching a rule's required capability
+    and scopes against what each descriptor declares, and *withholds* the wake
+    when the incident grant cannot cover them. In one process that decision was
+    enforced, because the interceptor called the runner. Across eleven Cloud Run
+    services it was not: an agent subscribed to ``incident.opened`` was started
+    by Pub/Sub whatever the plan said, so a handoff withheld for a missing scope
+    ran anyway while the log recorded a refusal that never happened.
+
+    Asserted on the routing map rather than on a delivery, because the map is
+    what Terraform builds the subscriptions from -- and the subscription is
+    where the bypass lived.
+    """
+    from firstdue.domain.events import Topic
+    from firstdue.registry.routing import CONSUMES
+
+    notifier = CONSUMES["agency-notifier"]
+    assert Topic.AGENT_WAKE in notifier
+    assert (
+        Topic.INCIDENT_OPENED not in notifier
+    ), "a routed agent subscribed to the incident opening runs whatever the plan decided"
+
+
+async def test_the_recorder_still_hears_everything() -> None:
+    """Completeness is the log's job, and it is not a routing decision.
+
+    The recorder keeps its blanket subscription on purpose: a log that only
+    recorded the incidents somebody routed it to would have holes in exactly
+    the place a routing mistake happened. It reads and writes the log and
+    nothing else, so there is no authority here for a plan to gate.
+    """
+    from firstdue.domain.events import Topic
+    from firstdue.registry.routing import CONSUMES
+
+    assert Topic.INCIDENT_OPENED in CONSUMES["incident-recorder"]
+    assert Topic.INCIDENT_CLOSED in CONSUMES["incident-recorder"]
