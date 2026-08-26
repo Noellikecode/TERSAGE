@@ -498,6 +498,13 @@ def _solar_mapper(
             "roof_segments": mapped_segments,
             "segment_count": len(mapped_segments),
             "max_plane_height_m": max(heights) if heights else None,
+            # The lowest plane too, because the *spread* between them is what
+            # says whether one storey count describes the whole building. At
+            # 2130 Mission the roof runs from 3.4 m to 14.4 m above ground: a
+            # single-storey shopfront in front of a four-storey rear. Only the
+            # maximum reaches the geometry watcher today, and a lone number
+            # cannot tell a flat roof from a stepped one.
+            "min_plane_height_m": min(heights) if heights else None,
             "panel_count": potential.get("maxArrayPanelsCount"),
             "roof_area_m2": potential.get("wholeRoofStats", {}).get("groundAreaMeters2"),
             "solar_array_present": bool(potential.get("maxArrayPanelsCount")),

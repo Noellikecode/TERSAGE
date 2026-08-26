@@ -332,3 +332,90 @@ def test_the_model_draws_the_filed_storeys_when_the_height_allows_them() -> None
     # 16.29 m over 2 is 8.1 m a floor: the filing cannot stand, so the measured
     # count is drawn and everything above the filing stays DISPUTED.
     assert not records_agree_on_stories(16.29, 2)
+
+
+# ------------------------------------------------- a roof that is not level ---
+
+
+def _solar(record_ref: str, *, high: float, low: float) -> object:
+    from firstdue.domain.enums import Classification
+    from firstdue.ports.sources import SourceRecord
+
+    return SourceRecord(
+        record_ref=record_ref,
+        address_id="sf-2130-mission",
+        classification=Classification.PUBLIC,
+        fields={"max_plane_height_m": high, "min_plane_height_m": low},
+        document_text=None,
+        observed_at=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+
+
+def _ground(elevation: float) -> object:
+    from firstdue.domain.enums import Classification
+    from firstdue.ports.sources import SourceRecord
+
+    return SourceRecord(
+        record_ref="usgs-3dep/point",
+        address_id="sf-2130-mission",
+        classification=Classification.PUBLIC,
+        fields={"ground_elevation_m": elevation},
+        document_text=None,
+        observed_at=datetime(2026, 8, 20, tzinfo=UTC),
+    )
+
+
+def test_a_stepped_roof_is_recognised_as_stepped() -> None:
+    """2130 Mission: a one-storey shopfront in front of a four-storey rear.
+
+    Its roof planes run 3.4 m to 14.4 m above the ground. The tallest is the
+    right number for a collapse zone and an aerial ladder. It is not a storey
+    count for the whole structure, and dividing it by a ceiling reported four
+    storeys against a permit that may describe the low half correctly.
+    """
+    from firstdue.agents.geometry_watcher import measured_height
+
+    stepped = measured_height(_ground(9.93), _solar("solar/mission", high=24.30, low=13.38))
+    assert stepped is not None
+    assert round(stepped.height_m, 2) == 14.37
+    assert round(stepped.plane_spread_m or 0, 2) == 10.92
+    assert stepped.is_stepped
+
+
+def test_a_flat_roof_is_not() -> None:
+    """450 Hayes measures 15.4 m to 16.3 m: under a metre of range.
+
+    One number describes this building, so the storey count derived from it is
+    evidence and the disagreement with the permit is a finding.
+    """
+    from firstdue.agents.geometry_watcher import measured_height
+
+    flat = measured_height(_ground(21.82), _solar("solar/hayes", high=38.11, low=37.25))
+    assert flat is not None
+    assert not flat.is_stepped
+
+
+def test_a_pitched_roof_is_not_mistaken_for_a_stepped_one() -> None:
+    """Ridge-to-eave on an ordinary roof is a few metres, not a storey."""
+    from firstdue.agents.geometry_watcher import measured_height
+
+    pitched = measured_height(_ground(10.0), _solar("solar/pitched", high=19.0, low=16.5))
+    assert pitched is not None
+    assert not pitched.is_stepped
+
+
+def test_a_reading_that_cannot_say_does_not_claim_a_stepped_roof() -> None:
+    """A surface model gives one height and knows nothing about the profile.
+
+    Absent is not flat. Treating a missing spread as level would let a DSM
+    silently reinstate the storey count this withholds.
+    """
+    from firstdue.agents.geometry_watcher import MeasuredHeight, measured_height
+
+    solar = _solar("solar/no-low", high=24.3, low=None)  # type: ignore[arg-type]
+    solar.fields.pop("min_plane_height_m")  # type: ignore[attr-defined]
+    unknown = measured_height(_ground(9.93), solar)
+    assert unknown is not None
+    assert unknown.plane_spread_m is None
+    assert not unknown.is_stepped
+    assert isinstance(unknown, MeasuredHeight)

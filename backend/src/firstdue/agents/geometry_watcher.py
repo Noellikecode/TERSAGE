@@ -125,6 +125,21 @@ class MeasuredHeight:
     #: Every record the number rests on, in citation order.
     citations: tuple[str, ...]
     method: str
+    #: How far the roof's lowest plane sits below its highest, when the reading
+    #: reports one. ``None`` where the shape cannot say -- a DSM gives a single
+    #: height and knows nothing about the roof's profile.
+    plane_spread_m: float | None = None
+
+    @property
+    def is_stepped(self) -> bool:
+        """Whether the roof spans more than one storey of vertical range.
+
+        A pitched roof puts a few metres between ridge and eave. A spread wider
+        than a storey means sections of the building have *different storey
+        counts*, and no single number derived from the tallest part describes
+        the rest of it.
+        """
+        return self.plane_spread_m is not None and self.plane_spread_m > TYPICAL_STOREY_M
 
     @property
     def source_ref(self) -> str:
@@ -159,6 +174,9 @@ def measured_height(
     if plane is None or ground is None:
         return None
 
+    low = solar.fields.get("min_plane_height_m")
+    spread = None if low is None else abs(float(plane) - float(low))
+
     height = float(plane) - float(ground)
     if height < MIN_STRUCTURE_HEIGHT_M:
         # A roof plane below the ground it sits on means the two readings are
@@ -174,6 +192,7 @@ def measured_height(
         primary=solar,
         citations=(solar.record_ref, lidar.record_ref),
         method="solar-plane-minus-3dep-ground",
+        plane_spread_m=spread,
     )
 
 
@@ -440,18 +459,41 @@ class GeometryWatcher:
                     source_ref=measurement.source_ref,
                 )
             )
-            measured_facts.append(
-                self._fact(
-                    profile.address_id,
-                    Keys.STORIES,
-                    IntegerValue(integer=stories_from_height(height_m)),
-                    record=measurement.primary,
-                    source_type=SourceType.LIDAR_DSM,
-                    confidence=0.76 if derived else 0.81,
-                    now=now,
-                    source_ref=measurement.source_ref,
+            # A storey count only where one number can describe the building.
+            #
+            # 2130 Mission's roof runs from 3.4 m to 14.4 m above the ground:
+            # a single-storey shopfront in front of a four-storey rear. The
+            # tallest plane is the right height for a collapse zone and an
+            # aerial ladder, and it is not a storey count for the whole
+            # structure -- dividing it by a ceiling reported four storeys and
+            # raised a severity-5 conflict against a permit that may be
+            # describing the low half correctly.
+            #
+            # Absent, not zero, and not a guess. The height still lands; the
+            # storey count renders UNKNOWN, which is what the instrument can
+            # actually support.
+            if measurement.is_stepped:
+                logger.info(
+                    "geometry_storeys_withheld",
+                    extra={
+                        "address_id": profile.address_id,
+                        "reason": "stepped_roof",
+                        "plane_spread_m": round(measurement.plane_spread_m or 0.0, 2),
+                    },
                 )
-            )
+            else:
+                measured_facts.append(
+                    self._fact(
+                        profile.address_id,
+                        Keys.STORIES,
+                        IntegerValue(integer=stories_from_height(height_m)),
+                        record=measurement.primary,
+                        source_type=SourceType.LIDAR_DSM,
+                        confidence=0.76 if derived else 0.81,
+                        now=now,
+                        source_ref=measurement.source_ref,
+                    )
+                )
 
         if solar is not None:
             measured_facts.append(
