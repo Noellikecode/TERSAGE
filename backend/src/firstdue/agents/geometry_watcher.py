@@ -25,6 +25,7 @@ renderer shows it as disputed.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -77,6 +78,19 @@ DEFAULT_FOOTPRINT: Final[tuple[Point2D, ...]] = (
 _DEFAULT_ASPECT: Final[float] = 22.0 / 11.5
 
 
+def _area_of(raw: object) -> float | None:
+    """A positive area in square metres, or ``None``.
+
+    `3200 m2` from the assessor, `398.13` from Solar: the unit travels with a
+    filed value and is not a reason to discard it.
+    """
+    match = re.match(r"\s*([0-9]*\.?[0-9]+)", str(raw))
+    if match is None:
+        return None
+    area = float(match.group(1))
+    return area if area > 0 else None
+
+
 def _footprint_of_area(area_m2: object, fallback: tuple[Point2D, ...]) -> tuple[Point2D, ...]:
     """A rectangle of a measured ground area, in the default's proportions.
 
@@ -86,11 +100,8 @@ def _footprint_of_area(area_m2: object, fallback: tuple[Point2D, ...]) -> tuple[
 
     An unusable or absent area returns the fallback rather than a guess.
     """
-    try:
-        area = float(str(area_m2))
-    except (TypeError, ValueError):
-        return fallback
-    if not area > 0:
+    area = _area_of(area_m2)
+    if area is None:
         return fallback
     width = math.sqrt(area / _DEFAULT_ASPECT)
     depth = area / width
@@ -517,15 +528,34 @@ class GeometryWatcher:
             raw = parcel.fields.get("footprint")
             if isinstance(raw, list) and len(raw) >= 3:
                 footprint = tuple((float(p[0]), float(p[1])) for p in raw)
-        elif solar is not None:
-            # No parcel ring for this address, but Solar measured the roof's
-            # ground area. A rectangle of that area is not the building's
-            # *shape* and is not offered as one -- it is the right size, which
-            # is what the collapse zone and the massing render read. The
-            # alternative is `DEFAULT_FOOTPRINT`, a constant 11.5 x 22 m that
-            # every structure in the district shared and that no source ever
-            # measured.
-            footprint = _footprint_of_area(solar.fields.get("roof_area_m2"), footprint)
+        else:
+            # No parcel ring. Two records can size the rectangle, and the
+            # larger of them wins -- because a building is at least as wide as
+            # its own roof.
+            #
+            # Solar measures the roof, which is the footprint only of a building
+            # with straight sides. 415 Mission is Salesforce Tower: it tapers,
+            # so its 684 m2 roof drew a shape seventeen times taller than it was
+            # wide, while the assessor had the 3,200 m2 floor plate on file.
+            # Preferring the filing outright is the wrong correction, though --
+            # at 450 Hayes the assessor's 240 m2 is *smaller* than the 398 m2
+            # Solar measured, and this system does not let a filing overwrite a
+            # measurement anywhere else.
+            #
+            # So neither source is ranked. The physical fact is: a roof cannot
+            # overhang a building's whole floor plate, so whichever number is
+            # larger is the one the footprint has to clear.
+            areas = [
+                _area_of(solar.fields.get("roof_area_m2")) if solar is not None else None,
+                _area_of(
+                    filed.value.unwrap()
+                    if (filed := profile.facts.get(Keys.FOOTPRINT_AREA_M2)) is not None
+                    and filed.value.is_known
+                    else None
+                ),
+            ]
+            known = [a for a in areas if a is not None]
+            footprint = _footprint_of_area(max(known) if known else None, footprint)
 
         segments: list[RoofSegment] = []
         obstructions: list[Obstruction] = []
@@ -591,6 +621,21 @@ class GeometryWatcher:
                 if fact.source_type is SourceType.LIDAR_DSM:
                     measured = max(measured, int(fact.value.unwrap()))
                     measured_fact_id = fact.fact_id
+
+        # When the height and the filing can both be true, the filing is the
+        # better count and the renderer should use it.
+        #
+        # `stories_from_height` divides by an assumed 3.2 m ceiling. At 325 m
+        # that reports 102 storeys for a tower whose permit says 62 and whose
+        # implied ceiling is 5.25 m -- ordinary for an office building. Drawing
+        # 102 levels is the renderer repeating the guess the conflict rule
+        # already declined to make.
+        #
+        # Where they cannot both be true -- 450 Hayes at 16.29 m against a filed
+        # 2 -- the measured count stands and the storeys above the filing stay
+        # DISPUTED, which is the finding.
+        if filed and height_m and records_agree_on_stories(height_m, filed):
+            measured = filed
 
         total = max(filed, measured, 1)
         levels: list[Level] = []

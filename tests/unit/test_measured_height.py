@@ -280,3 +280,55 @@ def test_an_unusable_pair_does_not_clear_a_conflict() -> None:
     assert storey_height_implied_by(16.29, 0) is None
     assert not records_agree_on_stories(16.29, 0)
     assert not records_agree_on_stories(0.5, 1)
+
+
+# ---------------------------------------------- the model uses its records ---
+
+
+def test_a_roof_does_not_size_a_building_that_tapers() -> None:
+    """Salesforce Tower's roof is 684 m2 and its floor plate is 3,200 m2.
+
+    Sizing the massing model from the roof drew it seventeen times taller than
+    it was wide. Preferring the filing outright is the wrong correction -- at
+    450 Hayes the assessor's number is *smaller* than what Solar measured, and
+    nothing else in this system lets a filing overwrite a measurement. A roof
+    cannot overhang the whole floor plate, so the larger number is the one the
+    footprint has to clear.
+    """
+    from firstdue.agents.geometry_watcher import DEFAULT_FOOTPRINT, _footprint_of_area
+
+    def area_of(ring: tuple[tuple[float, float], ...]) -> float:
+        return (max(p[0] for p in ring) - min(p[0] for p in ring)) * (
+            max(p[1] for p in ring) - min(p[1] for p in ring)
+        )
+
+    tower = _footprint_of_area(max(684.0, 3200.0), DEFAULT_FOOTPRINT)
+    assert round(area_of(tower)) == 3200
+    hayes = _footprint_of_area(max(398.13, 240.0), DEFAULT_FOOTPRINT)
+    assert round(area_of(hayes)) == 398
+
+
+def test_a_filed_area_keeps_its_unit() -> None:
+    """The assessor files `3200 m2`, Solar reports `398.13`. Both are areas."""
+    from firstdue.agents.geometry_watcher import _area_of
+
+    assert _area_of("3200 m2") == 3200.0
+    assert _area_of(398.13) == 398.13
+    for bad in (None, "", "nonsense", 0, -1):
+        assert _area_of(bad) is None
+
+
+def test_the_model_draws_the_filed_storeys_when_the_height_allows_them() -> None:
+    """And the measured ones when it does not.
+
+    The renderer used to divide height by an assumed 3.2 m ceiling regardless,
+    so a 62-storey tower was drawn with 102 levels -- the same guess the
+    conflict rule had already declined to make.
+    """
+    from firstdue.agents.geometry_watcher import records_agree_on_stories
+
+    # 325 m over 62 storeys is 5.25 m a floor: draw the 62 that were filed.
+    assert records_agree_on_stories(325.75, 62)
+    # 16.29 m over 2 is 8.1 m a floor: the filing cannot stand, so the measured
+    # count is drawn and everything above the filing stays DISPUTED.
+    assert not records_agree_on_stories(16.29, 2)
