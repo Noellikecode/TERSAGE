@@ -14,18 +14,53 @@
  * - **The district bar, full width, directly under the header.** True in both
  *   modes, so it is above the mode switch rather than inside it. Read as an
  *   instrument panel: a number, a meter, a two-word label.
- * - **Standby: three columns, the same shape as an incident.** The slow loop
- *   flanks the screen in two columns, and the middle carries the region --
- *   satellite fire activity and fire weather at the top, the ranked structures
- *   under it, and a selected structure under that. Standby used to be a fleet
- *   grid across the whole width, which meant the screen changed shape entirely
- *   at dispatch; an officer re-learning the layout at the moment a fire starts
- *   is the cost that bought.
- * - **Incident: three columns.** The incident-loop agents down the left, the
- *   massing model beside the building photograph in the middle with the brief
- *   under them, and the slow-loop agents down the right. The slow loop does not
- *   stop when a fire starts, and a rail that vanished would imply it had -- so
- *   it moves, it does not disappear.
+ * - **Two columns, the same two in both modes.** The fleet down the left, wide
+ *   enough that an agent is a thing you press rather than a line of six-point
+ *   type, and everything that fleet found to its right. Standby used to be a
+ *   fleet grid across the whole width, which meant the screen changed shape
+ *   entirely at dispatch; an officer re-learning the layout at the moment a
+ *   fire starts is the cost that bought.
+ * - **The flanks are cards; the middle is not.** Both rails sit on `surface`,
+ *   the tone the header and footer already use, inside a rounded hairline
+ *   border with a little air around it. The middle keeps `ground` and is not
+ *   outlined at all, so what an officer is looking at reads as the surface of
+ *   the screen and the two rails read as instruments placed on it. One step on
+ *   a three-tone scale that already existed, no new colour.
+ * - **The flanks are sized to be read; the middle is sized to be looked at.**
+ *   Both rails scale with the viewport between a floor and a cap -- floored so
+ *   a laptop still fits a full agent id and a brief section without wrapping
+ *   them to death, capped so an ultrawide does not turn either into a page.
+ *   The two incident flanks are the same track, deliberately: the fleet is one
+ *   of two things beside the building there, not the only one, and two equal
+ *   rails read as instruments either side of a subject rather than as a
+ *   hierarchy nobody meant. Standby's rail is the wider one, because standby
+ *   has no second flank to share the width with.
+ *
+ *   Between them the middle takes better than half the screen from 1280 up --
+ *   51% at 1280, 57% at 1440, 60% at 1920, and three quarters of standby.
+ *   Below that the flanks are on their floors and the middle gives way, which
+ *   is the right trade: a rail too narrow to read is not buying the building
+ *   anything. That is the point of the sizing. The fleet and the brief are
+ *   read, the building is looked at, and the one being looked at should be the
+ *   biggest thing on the display.
+ *
+ *   They were wider. 320 fixed pixels was too narrow -- the fleet whispered
+ *   down one edge and the pane about the selected agent had no room to say
+ *   anything -- and the correction overshot: at 32vw the two rails together
+ *   took as much of a 1920 display as the building did.
+ * - **Standby: the region to the right of the fleet.** Satellite fire activity
+ *   at the top, the structures whose records disagree under it, and a selected
+ *   structure under that. There is no survey ranking on this screen: the
+ *   backend still scores the district, but a rank an officer cannot act on
+ *   differently from the one below it was taking the middle of the display to
+ *   say so.
+ * - **Incident: three columns.** The fleet on the left, the building in the
+ *   middle -- the computed structure beside the photograph of it -- and the
+ *   brief down the right. The brief used to run the full width under the
+ *   model, so a three-stage brief filling in pushed the building it described
+ *   off the top of the screen. In a column of its own it grows downwards past
+ *   nothing. The slow loop leaves the screen and says so in a line of its own
+ *   -- it did not stop because a fire started.
  *
  * Which agent belongs to which *loop* is `FleetPanel`'s decision, made from the
  * `loop` prop each column passes. The layout never re-answers that. Standby is
@@ -37,9 +72,10 @@
  * nothing, the console says so rather than inventing a row.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { GeometryCanvas, type ViewAngle } from '@/components/GeometryCanvas';
+import { StructureModel, type ViewAngle } from '@/components/StructureModel';
+import { PhotorealisticModel, type GeometryState } from '@/components/PhotorealisticModel';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
 import { BuildingImagery, type ImageryView } from '@/components/incident/BuildingImagery';
 import { IntakePanel } from '@/components/incident/IntakePanel';
@@ -50,7 +86,6 @@ import { AttributeGrid } from '@/components/profile/AttributeGrid';
 import { ConflictPanel, type ResolutionSubmission } from '@/components/profile/ConflictPanel';
 import { Timeline } from '@/components/profile/Timeline';
 import { AgentRail } from '@/components/standby/AgentRail';
-import { RankedBands } from '@/components/standby/RankedBands';
 import { RecordsDisagree } from '@/components/standby/RecordsDisagree';
 import { DispatchPanel, SAMPLE_CALLS } from '@/components/standby/DispatchPanel';
 import { DistrictStrip } from '@/components/standby/DistrictStrip';
@@ -145,6 +180,27 @@ const AUTO_PASS_MS = 25000;
 const AUTO_PASS_INCIDENT_MS = 60000;
 const AUTO_CALL_MS = 50000;
 const CALL_WARNING_MS = 6000;
+
+/** How long between walls on the drone sweep.
+ *
+ * Long enough that an officer sees each face arrive as its own event rather
+ * than four appearing together, short enough that the building is covered
+ * inside the first brief. The backend decides when the sweep is finished; this
+ * only decides how fast it is asked. */
+const SWEEP_INTERVAL_MS = 3500;
+
+/** A hard ceiling on sweep requests, so a backend that never reports `complete`
+ *  cannot spin this loop for ever. Four walls, one spare. */
+const SWEEP_FACES = 5;
+
+/** What one step of the sweep reports back. A refusal is a value: `flown` false
+ *  with a reason, never an exception. */
+interface DroneSweepResult {
+  flown: boolean;
+  complete: boolean;
+  reason?: string;
+  face?: string;
+}
 
 /**
  * What one slow-loop pass reported, in one line.
@@ -293,7 +349,11 @@ export function CommandCenter({
   const [stats, setStats] = useState<DistrictStatsView | null>(initialStats);
   const [queue, setQueue] = useState<QueueView | null>(initialQueue);
   /** Which way the incident building is being looked at. Street on arrival. */
-  const [imageryView, setImageryView] = useState<ImageryView>('street');
+  /** Street and aerial are photographs the backend fetches; `3d` is the tile
+      renderer, which streams in the browser. One control, three viewpoints --
+      the type is wider than `ImageryView` because only two of them are a
+      request the imagery port knows how to serve. */
+  const [imageryView, setImageryView] = useState<ImageryView | '3d'>('street');
   const [agents] = useState<AgentDescriptorView[]>(initialAgents);
   const [subscriptions, setSubscriptions] = useState<SubscriptionView[]>(initialSubscriptions);
   const [events, setEvents] = useState<AuditEventView[]>(initialEvents);
@@ -317,7 +377,14 @@ export function CommandCenter({
   const [profile, setProfile] = useState<BuildingProfileView | null>(null);
   const [timeline, setTimeline] = useState<TimelineEventView[]>([]);
   const [geometry, setGeometry] = useState<GeometryView | null>(null);
+  /** Whether geometry is on its way, here, or not coming. `geometry === null`
+      cannot say which, and a panel that guessed reported a backend fault
+      while the request was still open. */
+  const [geometryState, setGeometryState] = useState<GeometryState>('idle');
+  /** Why the sweep stopped early, when it did. Null while it is flying or done. */
+  const [sweepNotice, setSweepNotice] = useState<string | null>(null);
   const [view, setView] = useState<ViewAngle>('ISO');
+
 
   const [incident, setIncident] = useState<OpenIncidentResponse | null>(null);
   const [outcomes, setOutcomes] = useState<ResourceOutcomeView[]>([]);
@@ -526,6 +593,7 @@ export function CommandCenter({
 
   const openProfile = useCallback(async (addressId: string) => {
     setSelected(addressId);
+    setGeometryState('loading');
     const [profileResult, timelineResult, geometryResult] = await Promise.all([
       browserGet<BuildingProfileView>(`/api/v1/buildings/${addressId}`),
       browserGet<TimelineEventView[]>(`/api/v1/buildings/${addressId}/timeline`),
@@ -534,7 +602,58 @@ export function CommandCenter({
     setProfile(profileResult.ok ? profileResult.data : null);
     setTimeline(timelineResult.ok ? timelineResult.data : []);
     setGeometry(geometryResult.ok ? geometryResult.data : null);
+    setGeometryState(geometryResult.ok ? 'ready' : 'unavailable');
   }, []);
+
+  /**
+   * Fly the drone sweep, one wall per tick.
+   *
+   * The console decides *when*, and nothing else. Each call advances the sweep
+   * by one face inside the backend, where **Sensor Fusion** reads the frame,
+   * registers the thermal observation and amends the brief; the profile is
+   * re-read afterwards so the massing model paints what the agent recorded
+   * rather than what this component predicted.
+   *
+   * Stopping conditions are the backend's, not a counter here: it reports
+   * `complete` when every face the footprint has is covered, and a `reason`
+   * when it refuses -- a live vision model, or an address the slow loop never
+   * profiled. Either way the sweep stops and says so instead of retrying into
+   * a wall that will never resolve.
+   */
+  const sweepRef = useRef<{ running: boolean; stop: boolean }>({ running: false, stop: false });
+
+  const flyDroneSweep = useCallback(
+    async (incidentId: string, addressId: string) => {
+      if (sweepRef.current.running) return;
+      sweepRef.current = { running: true, stop: false };
+      setSweepNotice(null);
+      try {
+        for (let face = 0; face < SWEEP_FACES; face += 1) {
+          if (sweepRef.current.stop) return;
+          const result = await browserPost<DroneSweepResult>(
+            `/api/v1/incidents/${incidentId}/drone-sweep`,
+          );
+          if (!result.ok) {
+            setSweepNotice(`Drone sweep stopped: ${result.error.message}`);
+            return;
+          }
+          if (!result.data.flown) {
+            // `complete` is the ordinary end of a sweep, not a fault.
+            if (!result.data.complete) setSweepNotice(result.data.reason ?? 'Drone sweep refused.');
+            return;
+          }
+          // Re-read the structure so the thermal on screen is the agent's.
+          await openProfile(addressId);
+          if (result.data.complete) return;
+          await new Promise((resolve) => setTimeout(resolve, SWEEP_INTERVAL_MS));
+        }
+      } finally {
+        sweepRef.current.running = false;
+      }
+    },
+    [openProfile],
+  );
+
 
   const dispatch = useCallback(
     async (addressId: string, narrative = '', channel: IntakeChannel = 'CALL_911') => {
@@ -562,8 +681,11 @@ export function CommandCenter({
       await openProfile(result.data.address_id);
       // Prose is asked for only after the instant brief is on screen.
       void browserPost(`/api/v1/incidents/${result.data.incident_id}/brief/enrich`);
+      // And the drone goes up. Not awaited: the brief is what the first ninety
+      // seconds are for, and the sweep paints onto it as each wall lands.
+      void flyDroneSweep(result.data.incident_id, result.data.address_id);
     },
-    [openProfile],
+    [openProfile, flyDroneSweep],
   );
 
   demoRef.current = {
@@ -803,6 +925,7 @@ export function CommandCenter({
     setNotice(
       `Incident closed. Grant revoked, log sealed with ${result.data.log_entries} entries.`,
     );
+    sweepRef.current.stop = true;
     setIncident(null);
     // Back to standby, updated: the resolution and the survey both landed.
     await refreshStandby();
@@ -902,6 +1025,7 @@ export function CommandCenter({
     loop,
     className,
     columnAgents,
+    control,
     emptyNote,
     srHeading,
     subheading,
@@ -920,6 +1044,15 @@ export function CommandCenter({
     className: string;
     /** An explicit subset, for a column that is half of one loop. */
     columnAgents?: AgentDescriptorView[];
+    /**
+     * A control that belongs to this loop, pinned under the heading.
+     *
+     * The only one so far is the hand-run slow-loop pass. It is here rather
+     * than in the middle of the screen because what it acts on is the loop
+     * this column lists: a button that reruns the fleet reads as part of the
+     * fleet, and the middle is for what the fleet found.
+     */
+    control?: ReactNode;
     /**
      * What to say when this column's subset is empty.
      *
@@ -941,7 +1074,7 @@ export function CommandCenter({
     srHeading?: string;
   }) => (
     <section aria-labelledby={id} className={className}>
-      <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2 px-4 pb-2 pt-3">
+      <div className="flex shrink-0 flex-wrap items-baseline justify-between gap-2 border-b border-line px-4 pb-2 pt-3">
         <h2
           id={id}
           className={heading ? 'text-label uppercase text-muted' : 'sr-only'}
@@ -953,7 +1086,8 @@ export function CommandCenter({
           <p className="w-full text-micro normal-case text-muted">{subheading}</p>
         )}
       </div>
-      <div className="px-4 pb-4 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+      {control}
+      <div className="px-4 pb-4 pt-2 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
         {columnAgents && columnAgents.length === 0 && emptyNote ? (
           <p className="border border-dashed border-line p-4 text-body text-muted">
             {emptyNote}
@@ -974,15 +1108,21 @@ export function CommandCenter({
     </section>
   );
 
-  /** The computed structure. Middle column during an incident, under the fleet
-      in standby -- it has a place either way, but only once a structure has
-      been selected does it have anything to draw. */
+  /** The computed structure. Right of the fleet in either mode -- it has a
+      place both ways, but only once a structure has been selected does it have
+      anything to draw. */
   const structurePanel = (
     <section aria-labelledby="structure-heading" className="min-w-0 bg-ground p-4">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <h2 id="structure-heading" className="text-micro uppercase tracking-widest text-muted">
-          Massing model
+          Structure
         </h2>
+        {/* One model now, not a pair of competing ones. The photorealistic
+            view moved to the imagery panel, where the other Google-sourced
+            pictures of this building already live -- it answers "what does it
+            look like", which is that panel's question. This panel answers
+            "what do the records say it is", and the camera angles are its
+            own. */}
         <div className="flex flex-wrap gap-1" role="group" aria-label="Fixed camera views">
           {VIEWS.map((angle) => (
             <button
@@ -999,7 +1139,11 @@ export function CommandCenter({
           ))}
         </div>
       </div>
-      <GeometryCanvas geometry={geometry} view={view} forceFallback={forceSvgGeometry} />
+      {/* Why the sweep stopped, when it stopped early. Nothing while it is
+          flying: a progress line for something visibly progressing is noise,
+          and the faces filling in on the model are the progress. */}
+      {sweepNotice && <p className="mb-2 text-body text-muted">{sweepNotice}</p>}
+      <StructureModel geometry={geometry} view={view} forceFallback={forceSvgGeometry} />
     </section>
   );
 
@@ -1022,8 +1166,14 @@ export function CommandCenter({
         <h2 id="imagery-heading" className="text-micro uppercase tracking-widest text-muted">
           Building imagery
         </h2>
+        {/* Three viewpoints from one provider. `3d` is Google's Photorealistic
+            3D Tiles and it belongs here rather than beside the structure model:
+            all three answer "what does this building look like", and the panel
+            next door answers the different question of what the records say it
+            is. Putting them in one place also stops the console implying that
+            photogrammetry and a derived massing are two takes on one claim. */}
         <div className="flex gap-1" role="group" aria-label="Imagery viewpoint">
-          {(['street', 'aerial'] as const).map((option) => (
+          {(['street', 'aerial', '3d'] as const).map((option) => (
             <button
               key={option}
               type="button"
@@ -1041,7 +1191,16 @@ export function CommandCenter({
           ))}
         </div>
       </div>
-      <BuildingImagery addressId={incident?.address_id ?? null} view={imageryView} />
+      {imageryView === '3d' ? (
+        <PhotorealisticModel
+          latitude={geometry?.latitude ?? null}
+          longitude={geometry?.longitude ?? null}
+          label={incident?.address_id ?? selected ?? 'the selected structure'}
+          geometryState={geometryState}
+        />
+      ) : (
+        <BuildingImagery addressId={incident?.address_id ?? null} view={imageryView} />
+      )}
     </section>
   );
 
@@ -1082,54 +1241,40 @@ export function CommandCenter({
   );
 
   /**
-   * The structures the slow loop has ranked, as one line of chips.
+   * The slow loop, run by hand.
    *
-   * This is what is left of the survey queue panel. The panel carried a rank, a
-   * score and every ranking rule inline, and it took the middle of the screen
-   * to do it. The rank is a recorded backend value and stays; the score and the
-   * rule text are gone with the panel rather than being restated here, so the
-   * strip claims only what it can attribute.
+   * This control used to travel with the survey ranking, on the grounds that
+   * the queue was the thing a pass re-ranked. The ranking is off this screen
+   * now and the pass is not: it is the one button that makes the district
+   * move, so it sits at the head of the column that owns the loop it runs
+   * rather than in a strip of its own in the middle.
+   *
+   * The pass still ranks -- `structure-watch` reads the district and scores it
+   * whether or not anything draws the result -- so the completion notice keeps
+   * reporting what the backend did rather than only the part that shows.
    */
-  const structuresStrip = (
-    <section aria-labelledby="structures-heading" className="shrink-0 bg-ground px-4 py-2">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 id="structures-heading" className="text-micro uppercase tracking-widest text-muted">
-          Ranked for survey
-        </h2>
-        {queue && <span className="font-mono text-micro text-muted">{queue.count}</span>}
-
-        {/* The slow loop, run by hand. It sits with the queue because the
-            queue is the thing it re-ranks. */}
-        <button
-          type="button"
-          onClick={() => void runSlowLoopPass()}
-          disabled={passRunning}
-          aria-busy={passRunning}
-          data-testid="run-slow-loop-pass"
-          title="Polls every source, writes the facts it finds, detects conflicts, and re-ranks the queue."
-          className="ml-auto border border-line px-2 py-0.5 text-micro uppercase tracking-wide text-ink hover:border-live disabled:cursor-progress disabled:border-line disabled:text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
-        >
-          {passRunning ? 'Running a slow-loop pass…' : 'Run a slow-loop pass'}
-        </button>
-      </div>
+  const slowLoopControl = (
+    <div className="shrink-0 px-4 py-2">
+      <button
+        type="button"
+        onClick={() => void runSlowLoopPass()}
+        disabled={passRunning}
+        aria-busy={passRunning}
+        data-testid="run-slow-loop-pass"
+        title="Polls every source, writes the facts it finds, and detects conflicts."
+        className="w-full border border-line px-3 py-2 text-label uppercase tracking-wide text-ink hover:border-live disabled:cursor-progress disabled:border-line disabled:text-muted focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+      >
+        {passRunning ? 'Running a slow-loop pass…' : 'Run a slow-loop pass'}
+      </button>
       <p
         role="status"
         aria-atomic="true"
         data-testid="slow-loop-pass-status"
-        className={`text-micro ${passNotice?.startsWith('Slow-loop pass failed') ? 'text-alarm' : 'text-muted'}`}
+        className={`mt-1 text-micro ${passNotice?.startsWith('Slow-loop pass failed') ? 'text-alarm' : 'text-muted'}`}
       >
         {passRunning ? 'Slow-loop pass running: sources, facts, conflicts, ranking.' : passNotice}
       </p>
-      {/* Grouped by score, not numbered one to a hundred. The ranker produces
-          a handful of distinct scores and a long tie at the bottom; a rank
-          number on every row claimed an order inside that tie which does not
-          exist. See `RankedBands`. */}
-      <RankedBands
-        entries={queue?.entries ?? []}
-        selectedAddressId={selected}
-        onSelect={openProfile}
-      />
-    </section>
+    </div>
   );
 
   /**
@@ -1235,13 +1380,13 @@ export function CommandCenter({
         </div>
 
         {!incident && (
-          /* Standby: the same three columns an incident uses, so the screen
-             does not change shape under an officer at the moment a fire
-             starts. The slow loop flanks, split in half; the middle carries
-             the region -- what is burning out there and what the weather is
-             doing -- then the ranked structures, then whichever one is open.
-             Stacks below `lg`, where three columns is one unreadable column. */
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)] lg:overflow-hidden">
+          /* Standby: the same two columns an incident uses, so the screen does
+             not change shape under an officer at the moment a fire starts. The
+             slow loop holds the left, wide; the rest carries the region --
+             what is burning out there and what the weather is doing -- then
+             the structures whose records disagree, then whichever one is open.
+             Stacks below `lg`, where two columns is one unreadable column. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:gap-x-4 lg:bg-ground lg:p-2 lg:grid-cols-[clamp(320px,24vw,420px)_minmax(0,1fr)] lg:overflow-hidden">
             {fleetRegion({
               id: 'standby-fleet-heading',
               heading: 'Slow loop',
@@ -1249,7 +1394,9 @@ export function CommandCenter({
               note: `${slowRunning} agents`,
               loop: 'SLOW',
               columnAgents: slowFleet,
-              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
+              control: slowLoopControl,
+              className:
+                'flex min-w-0 flex-col bg-surface lg:min-h-0 lg:rounded-lg lg:border lg:border-line lg:overflow-hidden',
             })}
 
             <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:overflow-y-auto">
@@ -1261,8 +1408,6 @@ export function CommandCenter({
                 selectedAddressId={selected}
                 onSelect={openProfile}
               />
-
-              {structuresStrip}
 
               {profile && (
                 <>
@@ -1285,30 +1430,40 @@ export function CommandCenter({
         )}
 
         {incident && (
-          /* Incident: the agents acting right now on the left, the structure
-             and the brief filling the rest. The slow loop leaves the screen and
-             says so in a line of its own below -- it did not stop because a fire
-             started, and an officer should not have to assume either way.
-             Stacks below `lg`, where two columns is one unreadable column. */
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:grid-cols-[320px_minmax(0,1fr)] lg:overflow-hidden">
+          /* Incident: three columns. The agents acting right now on the left,
+             the building in the middle -- the computed structure beside the
+             photograph of it -- and the brief down the right, where it is read
+             top to bottom without competing with the model for the width. The
+             slow loop leaves the screen and says so in a line of its own below
+             -- it did not stop because a fire started, and an officer should
+             not have to assume either way.
+
+             The brief comes second in the source and third on screen. Stacked
+             on a narrow tablet the source order is the reading order, and the
+             brief is what the first ninety seconds are for: it belongs above
+             the profile timeline and the resource panel, not under them. The
+             two explicit column starts put it back on the right where there is
+             room for three. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:gap-x-4 lg:bg-ground lg:p-2 lg:grid-cols-[clamp(288px,19vw,380px)_minmax(0,1fr)_clamp(288px,19vw,380px)] lg:overflow-hidden">
             {fleetRegion({
               id: 'incident-fleet-heading',
               heading: 'Incident loop',
               note: `${incidentRunning} acting now`,
               loop: 'INCIDENT',
               columnAgents: incidentFleet,
-              className: 'flex min-w-0 flex-col bg-ground lg:min-h-0 lg:overflow-hidden',
+              className:
+                'flex min-w-0 flex-col bg-surface lg:min-h-0 lg:rounded-lg lg:border lg:border-line lg:overflow-hidden',
             })}
 
-            <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:overflow-y-auto">
-              {/* The computed structure and the real one, side by side. Stacks
-                  below `lg`, where 30% of a narrow screen is not a photograph. */}
-              <div className="grid shrink-0 grid-cols-1 gap-px bg-line lg:grid-cols-[7fr_3fr]">
-                {structurePanel}
-                {imageryPanel}
-              </div>
-
-              <section aria-labelledby="brief-heading" className="min-w-0 bg-ground p-4">
+            {/* The brief, in a column of its own that scrolls on its own. It
+                used to run the full width of the middle under the model, which
+                meant a three-stage brief pushed the building off the top of the
+                screen as it filled in. */}
+            <div className="flex min-w-0 flex-col gap-px bg-line lg:col-start-3 lg:row-start-1 lg:min-h-0 lg:rounded-lg lg:border lg:border-line lg:bg-surface lg:overflow-y-auto">
+              <section
+                aria-labelledby="brief-heading"
+                className="min-w-0 flex-1 bg-surface p-4"
+              >
                 <h2 id="brief-heading" className="sr-only">
                   Incident brief
                 </h2>
@@ -1319,6 +1474,17 @@ export function CommandCenter({
                   </div>
                 )}
               </section>
+            </div>
+
+            <div className="flex min-w-0 flex-col gap-px bg-line lg:col-start-2 lg:row-start-1 lg:min-h-0 lg:overflow-y-auto">
+              {/* The computed structure and the real one, side by side, in a
+                  column narrower than the screen. They stack below `xl`: two
+                  panels in a third of a 1280 display is neither a model nor a
+                  photograph. */}
+              <div className="grid shrink-0 grid-cols-1 gap-px bg-line xl:grid-cols-[3fr_2fr]">
+                {structurePanel}
+                {imageryPanel}
+              </div>
 
               <section
                 aria-labelledby="conditions-heading"
@@ -1330,7 +1496,10 @@ export function CommandCenter({
                 >
                   Resources and conditions
                 </h2>
-                <div className="grid gap-4 xl:grid-cols-2">
+                {/* Two panels abreast only where the middle column is wide
+                    enough to hold two. It is a third of the screen now, not
+                    all of it. */}
+                <div className="grid gap-4 2xl:grid-cols-2">
                   <ResourcePanel
                     outcomes={outcomes}
                     onRequest={requestResource}

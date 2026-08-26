@@ -312,6 +312,14 @@ export interface GeometryView {
   svg: string;
   has_disputed_mass: boolean;
   total_height_m: number;
+  /**
+   * Where the structure actually is, so a renderer can put a real view of the
+   * world behind the derived one. Reference data from the city adapter, and
+   * always present: the endpoint 404s on an address it cannot place rather
+   * than returning geometry with nowhere to put it.
+   */
+  latitude: number;
+  longitude: number;
 }
 
 // ---------------------------------------------------------------- incident --

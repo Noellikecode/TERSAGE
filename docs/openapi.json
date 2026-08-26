@@ -1565,6 +1565,14 @@
             "title": "Has Disputed Mass",
             "type": "boolean"
           },
+          "latitude": {
+            "title": "Latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "title": "Longitude",
+            "type": "number"
+          },
           "spec": {
             "$ref": "#/components/schemas/GeometrySpec"
           },
@@ -1581,7 +1589,9 @@
           "spec",
           "svg",
           "has_disputed_mass",
-          "total_height_m"
+          "total_height_m",
+          "latitude",
+          "longitude"
         ],
         "title": "GeometryView",
         "type": "object"
@@ -4683,6 +4693,51 @@
           }
         },
         "summary": "Close the incident",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/drone-sweep": {
+      "post": {
+        "description": "Advance the sweep by one wall.\n\nCalled repeatedly, it builds thermal coverage face by face at whatever\ncadence the caller chooses, through the same **Sensor Fusion** path a real\naircraft would use. The frames are generated and labelled ``synthetic-drone``\neverywhere they land; against a live vision model the sweep refuses rather\nthan producing a real reading of an imaginary building.\n\nReturns a value in every case. ``flown`` false with a ``reason`` is a\nrefusal, and ``complete`` true means every face the footprint has is\nalready covered.",
+        "operationId": "drone_sweep_api_v1_incidents__incident_id__drone_sweep_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Drone Sweep Api V1 Incidents  Incident Id  Drone Sweep Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fly one face of a synthetic drone sweep",
         "tags": [
           "incident"
         ]

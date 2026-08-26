@@ -118,6 +118,9 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     new RegExp(`^/api/v1/incidents/${ID}/resolutions$`),
     new RegExp(`^/api/v1/incidents/${ID}/resources$`),
     new RegExp(`^/api/v1/incidents/${ID}/thermal$`),
+    // The autonomous sweep. Advances one face per call, so the console drives
+    // the cadence and the agent does every reading.
+    new RegExp(`^/api/v1/incidents/${ID}/drone-sweep$`),
     new RegExp(`^/api/v1/incidents/${ID}/close$`),
     new RegExp(`^/api/v1/incidents/${ID}/approvals/${ID}$`),
     new RegExp(`^/api/v1/conflicts/${ID}/referral$`),

@@ -125,6 +125,12 @@ WRITE_ENDPOINTS: tuple[Endpoint, ...] = (
     ),
     Endpoint(
         "POST",
+        f"{PREFIX}/incidents/inc-x/drone-sweep",
+        Role.CAPTAIN,
+        {},
+    ),
+    Endpoint(
+        "POST",
         f"{PREFIX}/incidents/inc-x/resources",
         Role.CAPTAIN,
         {"kind_id": "water-supply"},

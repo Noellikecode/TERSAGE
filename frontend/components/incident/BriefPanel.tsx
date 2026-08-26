@@ -71,7 +71,7 @@ export function BriefPanel({ emission }: { emission: BriefEmissionView | null })
       </div>
 
       {emission.sections.map((section) => (
-        <section key={`${section.key}-${emission.version}`} className="border border-line bg-surface p-3">
+        <section key={`${section.key}-${emission.version}`} className="border border-line bg-raised p-3">
           <h3 className="text-micro uppercase tracking-widest text-muted">
             {section.key.replace(/_/g, ' ').toLowerCase()}
           </h3>
@@ -115,7 +115,7 @@ export function BriefPanel({ emission }: { emission: BriefEmissionView | null })
         </section>
       ))}
 
-      <section className="border border-line bg-surface p-3">
+      <section className="border border-line bg-raised p-3">
         <h3 className="text-micro uppercase tracking-widest text-muted">Narrative</h3>
         {emission.narrative_available && emission.narrative ? (
           <p className="mt-2 whitespace-pre-wrap text-ink">{emission.narrative}</p>
@@ -131,7 +131,7 @@ export function BriefPanel({ emission }: { emission: BriefEmissionView | null })
       {(emission.unknowns.length > 0 ||
         emission.unavailable.length > 0 ||
         emission.withheld.length > 0) && (
-        <section className="border border-unknown bg-surface p-3">
+        <section className="border border-unknown bg-raised p-3">
           <h3 className="text-micro uppercase tracking-widest text-muted">Gaps</h3>
           {emission.unknowns.length > 0 && (
             <p className="mt-1 text-micro leading-5 text-unknown">

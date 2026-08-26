@@ -10,6 +10,13 @@
  * A button rather than a hoverable div, because hover is not an input method
  * everyone has. Pointer, keyboard focus and click all reach the same pane, and
  * the row that is showing is the row that says so.
+ *
+ * It is sized to be pressed. The row used to be six-point type in a 320px
+ * rail -- a target under a centimetre tall on the display this runs on, which
+ * is a fine size for a log line and the wrong size for the primary control of
+ * the left third of the screen. The id reads at body size, the glyph is drawn
+ * large enough to carry state across a room, and the whole row clears the
+ * 44px touch target a gloved hand on a tablet needs.
  */
 
 import type { AgentDescriptorView } from '@/lib/api/types';
@@ -58,18 +65,18 @@ export function FleetRow({
         aria-current={selected ? 'true' : undefined}
         data-testid={`fleet-row-${agent.agent_id}`}
         data-state={state}
-        className={`flex w-full items-baseline gap-2 border-l-2 px-2 py-1 text-left text-micro transition-colors ${
+        className={`flex w-full items-baseline gap-3 border-l-4 px-3 py-2.5 text-left text-body transition-colors ${
           selected
-            ? 'border-live bg-surface text-ink'
-            : 'border-transparent text-muted hover:bg-surface hover:text-ink'
+            ? 'border-live bg-raised text-ink'
+            : 'border-transparent text-muted hover:bg-raised hover:text-ink'
         }`}
       >
         {/* Never colour alone: the glyph carries the state too. */}
-        <span aria-hidden="true" className={TONE[state]}>
+        <span aria-hidden="true" className={`text-title leading-none ${TONE[state]}`}>
           {GLYPH[state]}
         </span>
         <span className="flex-1 truncate font-mono">{agent.agent_id}</span>
-        <span className="shrink-0 tabular-nums text-muted">{metric}</span>
+        <span className="shrink-0 tabular-nums text-label text-muted">{metric}</span>
         {/* The state as a word, for anyone who cannot see the glyph. */}
         <span className="sr-only">{state}</span>
       </button>

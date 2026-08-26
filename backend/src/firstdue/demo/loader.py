@@ -29,8 +29,24 @@ async def load_demo_state(container: Container) -> int:
         return 0
 
     profiles = profiles_from_seed(document)
+    loaded = 0
+    already = 0
     for profile in profiles:
+        # A profile that is already there is the ordinary case on any restart
+        # against a durable store, and it used to be fatal: `create` refuses a
+        # duplicate -- correctly, it is the append-only guard -- so the second
+        # boot of a Firestore-backed process died in the lifespan hook with
+        # "profile already exists" and the service never became ready.
+        #
+        # Skipped rather than overwritten. The seed is the *starting* state; a
+        # district that has since been polled has facts and conflicts the seed
+        # does not know about, and rewriting it from the seed would throw away
+        # everything the fleet had learned since.
+        if await container.profiles.get(profile.address_id) is not None:
+            already += 1
+            continue
         await container.profiles.create(profile)
+        loaded += 1
         for fact in profile.all_facts():
             await container.facts.append(fact)
         for conflict in profile.conflicts:
@@ -39,7 +55,8 @@ async def load_demo_state(container: Container) -> int:
     logger.info(
         "demo_state_loaded",
         extra={
-            "profiles": len(profiles),
+            "profiles": loaded,
+            "already_present": already,
             "content_hash": str(document.get("content_hash", "")),
         },
     )

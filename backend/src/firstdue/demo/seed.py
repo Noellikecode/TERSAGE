@@ -332,7 +332,12 @@ def _build_profile(
     geometry = GeometrySpec(
         address_id=address.address_id,
         generated_at=epoch - timedelta(days=420),
-        footprint=((0.0, 0.0), (11.5, 0.0), (11.5, 22.0), (0.0, 22.0)),
+        # The parcel's real outline where the city publishes one. Every
+        # structure used to be this literal rectangle, so a district of 386
+        # buildings drew as 386 identical boxes at different heights -- which
+        # reads as a placeholder, because it was one. The fallback stays for the
+        # parcels whose ring the feed does not give.
+        footprint=address.footprint or ((0.0, 0.0), (11.5, 0.0), (11.5, 22.0), (0.0, 22.0)),
         levels=tuple(levels),
         roof_segments=(
             RoofSegment(pitch_deg=18.0, azimuth_deg=210.0, area_m2=126.5),

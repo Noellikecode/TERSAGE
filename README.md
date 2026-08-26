@@ -27,8 +27,9 @@ make demo         # API on :8000, console on :3000
 ```
 
 Open `http://localhost:3000`. The console opens on a district the slow loop has
-already surveyed — profiles built, conflicts found, a ranked survey queue — then
-a 911 call arrives on its own and the screen reorganises into the incident view.
+already surveyed — profiles built, conflicts found, the structures whose records
+disagree named one card each — then a 911 call arrives on its own and the screen
+reorganises into the incident view.
 
 Every port has a credential-free implementation with the same authorization
 rules, idempotency behaviour, event ordering and failure modes as the
@@ -263,14 +264,35 @@ coverage quadrants, a fan-out glyph — and a terminal that types out what it ju
 did. Slow-loop passes run on their own, so the fleet ticks over.
 
 **On dispatch** the page reorganises. The incident agents take both flanking
-columns, the massing model and a photograph of the building split the middle,
-and the slow loop moves off screen while still running and saying so.
+columns, the structure and a photograph of the building split the middle, and
+the slow loop moves off screen while still running and saying so.
+
+The two middle panels answer two different questions and never pretend to
+answer each other's.
+
+**Building imagery** is what the building looks like — street, aerial, and a
+`3d` viewpoint that streams Google's Photorealistic 3D Tiles, framed by
+inverting the east-north-up frame at the parcel's coordinates so the address
+sits at the origin, with drag-to-orbit.
+
+**Structure** is what the records say it *is*, generated in Three.js r128 from
+the GeometrySpec alone: storeys at their filed heights, a window grid and a
+doorway on the wall the backend labels Alpha, a gabled or hipped roof built
+from the roof segments' own pitch and count, roof obstructions where the
+records put them, the collapse zone at the 1.5× convention, and the disputed
+storey drawn translucent with its outline picked out. It builds up level by
+level and the drone sweep's heat map fades on after, and it orbits freely —
+drag to rotate, scroll to zoom, shift-drag to pan, double-click to return to
+the last named framing, with the ALPHA/BRAVO/CHARLIE/DELTA/ISO buttons jumping
+to a wall an officer can call over the radio. Openings are regular
+fenestration and the caption says so — no survey counted windows, and nobody
+should read a window count off a picture.
 
 ---
 
 ## Verification
 
-1,516 backend tests and 286 console tests. Strict mypy across 187 source files.
+1,495 backend tests and 310 console tests. Strict mypy across 187 source files.
 A contract suite that holds the in-memory and Firestore backends to one set of
 behaviours, an infrastructure suite that holds Terraform to the agent
 descriptors, and an observability suite that asserts telemetry carries no

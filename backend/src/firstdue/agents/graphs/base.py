@@ -54,7 +54,7 @@ useless. Nothing here raises on exhaustion and nothing here guesses.
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -154,12 +154,37 @@ class GraphState(BaseModel):
         return {
             "district_id": self.district_id,
             "waiting_on": self.waiting_on,
-            "ruled_out": list(self.ruled_out),
+            "ruled_out": bounded(self.ruled_out),
             "stop": str(self.stop) if self.stop is not None else None,
         }
 
 
 StateT = TypeVar("StateT", bound=GraphState)
+
+
+#: The most entries any one list on a checkpoint may carry.
+#:
+#: A checkpoint is a *resume hint*, not a ledger. Every list on one grows with
+#: the district -- addresses settled, registries queried, dead ends ruled out --
+#: and `MemoryCheckpoint` refuses a payload over
+#: :data:`~firstdue.domain.memory.MAX_CHECKPOINT_STATE_BYTES`, correctly: a
+#: memory must never become somewhere document contents accumulate.
+#:
+#: Unbounded, those two facts collide the moment a district is real. At nine
+#: addresses the payload fit; at 386 `hazard-watcher` exhausted its budget,
+#: tried to park, and the park *raised* -- so the pass that ran out of time also
+#: lost the record of where it got to, which is the one thing parking exists to
+#: keep.
+#:
+#: Truncating costs a repeated lookup on the next pass. Failing to park costs
+#: the pass. The most recent entries are kept because they are the frontier the
+#: next pass resumes from; the older ones have already done their work.
+MAX_CHECKPOINT_ENTRIES: Final[int] = 200
+
+
+def bounded(entries: Sequence[str]) -> list[str]:
+    """The tail of a list, short enough that a checkpoint can be written."""
+    return list(entries[-MAX_CHECKPOINT_ENTRIES:])
 
 
 @dataclass(frozen=True, slots=True)

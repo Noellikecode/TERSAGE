@@ -49,6 +49,7 @@ from firstdue.agents.graphs.base import (
     GraphStop,
     NodeResult,
     ReasoningPlanner,
+    bounded,
 )
 from firstdue.errors import SourceUnavailableError
 from firstdue.observability.logging import get_logger
@@ -156,9 +157,9 @@ class RecordsGraphState(GraphState):
         payload = super().checkpoint_payload()
         payload.update(
             {
-                "queried": list(self.queried),
-                "unavailable": list(self.unavailable),
-                "outstanding": list(self.outstanding),
+                "queried": bounded(self.queried),
+                "unavailable": bounded(self.unavailable),
+                "outstanding": bounded(self.outstanding),
                 "followed": len(self.followed),
                 "snapshots": len(self.snapshots),
             }

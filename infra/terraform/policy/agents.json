@@ -48,6 +48,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "geometry-watcher": {
@@ -61,6 +65,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "hazard-watcher": {
@@ -73,6 +81,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "incident-interceptor": {
@@ -85,6 +97,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "incident-recorder": {
@@ -97,6 +113,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "records-watcher": {
@@ -108,6 +128,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "referral-clerk": {
@@ -119,6 +143,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "sensor-fusion": {
@@ -131,6 +159,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     },
     "structure-watch": {
@@ -143,6 +175,10 @@
       "pubsub": [
         "roles/pubsub.publisher",
         "roles/pubsub.subscriber"
+      ],
+      "telemetry": [
+        "roles/cloudtrace.agent",
+        "roles/monitoring.metricWriter"
       ]
     }
   },
@@ -191,5 +227,6 @@
       "display": "CI staging smoke test",
       "roles": []
     }
-  }
+  },
+  "_comment_observability": "Every agent writes traces and metrics. Those two roles are not derived from scopes -- a scope says what data an agent may touch, and telemetry is not data it touches. Granted to every agent identity instead, because a worker that cannot export a span reports tracing_enabled and drops every trace: the failure is invisible at the agent and shows up as an empty Cloud Trace."
 }

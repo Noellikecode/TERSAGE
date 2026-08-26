@@ -61,6 +61,7 @@ from firstdue.agents.graphs.base import (
     GraphStop,
     NodeResult,
     ReasoningPlanner,
+    bounded,
 )
 from firstdue.domain.enums import Classification
 from firstdue.errors import SourceUnavailableError
@@ -229,10 +230,10 @@ class HazardGraphState(GraphState):
         payload = super().checkpoint_payload()
         payload.update(
             {
-                "queried": list(self.queried),
-                "unavailable": list(self.unavailable),
-                "settled": list(self.settled),
-                "open_ambiguities": [item.key for item in self.ambiguities],
+                "queried": bounded(self.queried),
+                "unavailable": bounded(self.unavailable),
+                "settled": bounded(self.settled),
+                "open_ambiguities": bounded([item.key for item in self.ambiguities]),
             }
         )
         return payload

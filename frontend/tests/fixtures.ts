@@ -264,6 +264,8 @@ export const GEOMETRY: GeometryView = {
   svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 120"><rect x="20" y="10" width="160" height="24" stroke-dasharray="5 3"/><text x="184" y="26">3.17 m DISPUTED</text></svg>',
   has_disputed_mass: true,
   total_height_m: 9.51,
+  latitude: 37.7749,
+  longitude: -122.4194,
 };
 
 export const AGENTS: AgentDescriptorView[] = [

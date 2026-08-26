@@ -160,7 +160,16 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "ANN201", "ANN001", "ANN003", "ANN202"]  # asserts, loose test signatures
 "backend/src/firstdue/cli.py" = ["T20"]             # the CLI is allowed to print
-"scripts/**" = ["T20", "SIM105"]                     # operator scripts report to a terminal
+"scripts/**" = [
+  "T20",     # operator scripts report to a terminal
+  "SIM105",
+  # These three are the shape of an operator script that talks to one Google
+  # API: `gcloud` for a token, and urllib against a constant host. The URLs are
+  # built from argparse defaults, not from anything a caller supplies.
+  "S603",
+  "S607",
+  "S310",
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["firstdue"]

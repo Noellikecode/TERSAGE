@@ -552,6 +552,12 @@ class GeometryView(BaseModel):
     svg: str
     has_disputed_mass: bool
     total_height_m: float
+    #: Where the structure is, so a renderer can put a real view of the world
+    #: behind the derived one. Reference data from the city adapter, not a
+    #: fact -- a parcel's coordinates are published, not inferred, and nothing
+    #: downstream merges or ages them.
+    latitude: float
+    longitude: float
 
 
 @router.get(
@@ -577,11 +583,16 @@ async def building_geometry(
             "no geometry has been derived for this address",
             details={"address_id": address_id},
         )
+    address = container.city.get_address(address_id)
+    if address is None:  # pragma: no cover - a profile implies a known address
+        raise NotFoundError("unknown address", details={"address_id": address_id})
     return GeometryView(
         spec=profile.geometry,
         svg=render_svg(profile),
         has_disputed_mass=profile.geometry.has_disputed_mass,
         total_height_m=round(profile.geometry.total_height_m, 2),
+        latitude=address.latitude,
+        longitude=address.longitude,
     )
 
 

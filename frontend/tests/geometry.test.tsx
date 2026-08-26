@@ -9,30 +9,30 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { GeometryCanvas, describeGeometry, faceLabelFor, ThermalLegend, thermalStep } from '@/components/GeometryCanvas';
+import { StructureModel, describeGeometry, faceLabelFor, ThermalLegend, thermalStep } from '@/components/StructureModel';
 import { GEOMETRY, GEOMETRY_SCANNED } from './fixtures';
 
 describe('the geometry view', () => {
   it('falls back to the static SVG when WebGL is unavailable', () => {
-    render(<GeometryCanvas geometry={GEOMETRY} forceFallback />);
+    render(<StructureModel geometry={GEOMETRY} forceFallback />);
     expect(screen.getByTestId('geometry-svg')).toBeInTheDocument();
     expect(screen.queryByTestId('geometry-canvas')).not.toBeInTheDocument();
   });
 
   it('says why it is showing the fallback', () => {
-    render(<GeometryCanvas geometry={GEOMETRY} forceFallback />);
+    render(<StructureModel geometry={GEOMETRY} forceFallback />);
     expect(screen.getByText(/static elevation/i)).toBeInTheDocument();
   });
 
   it('marks the disputed mass in the fallback, not only in the canvas', () => {
-    render(<GeometryCanvas geometry={GEOMETRY} forceFallback />);
+    render(<StructureModel geometry={GEOMETRY} forceFallback />);
     // The backend's SVG carries the dashed outline and the word.
     expect(screen.getByTestId('geometry-svg').innerHTML).toContain('DISPUTED');
     expect(screen.getByTestId('geometry-svg').innerHTML).toContain('stroke-dasharray');
   });
 
   it('describes the structure for a screen reader, disputes included', () => {
-    render(<GeometryCanvas geometry={GEOMETRY} forceFallback />);
+    render(<StructureModel geometry={GEOMETRY} forceFallback />);
     const description = screen.getByRole('img').getAttribute('aria-label') ?? '';
     expect(description).toContain('3 levels');
     expect(description).toContain('DISPUTED');
@@ -41,7 +41,7 @@ describe('the geometry view', () => {
   });
 
   it('renders an explicit panel when there is no geometry at all', () => {
-    render(<GeometryCanvas geometry={null} />);
+    render(<StructureModel geometry={null} />);
     expect(screen.getByText('No geometry on record')).toBeInTheDocument();
     expect(
       screen.getByText(/absence of measurement, not a measurement/i),

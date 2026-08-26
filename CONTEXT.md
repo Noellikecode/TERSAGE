@@ -320,27 +320,46 @@ One screen, two arrangements.
 In standby it leads with **what was found**, not with what found it. The
 district's vital signs across the top, then `Records disagree` — one card per
 structure whose paperwork and measurement do not match, in the sentence the
-rule wrote: *the permit records 2 storeys; lidar DSM measures 3*. Below that the
-survey queue, and down the left the fleet.
+rule wrote: *the permit records 2 storeys; lidar DSM measures 3*. Down the left,
+across roughly a third of the width, the fleet.
+
+**The survey ranking is not on this screen.** `structure-watch` still scores
+every structure on every pass and the queue endpoint still answers — the ranking
+is how the department decides where to send a company, and the reasons are
+recorded. What it is not is a thing to read under time pressure: a rank, a score
+and a band of structures tied on identical reasons asked an officer to act
+differently on row 47 than on row 48, and nothing separates them. The reason a
+structure is worth looking at survives, in words, in `Records disagree`. The
+number stays in the record.
 
 **The fleet is rows and one pane.** Nine agents as one line each — status, id,
 one live number — and a single detail pane carrying whichever is selected: role,
 publisher, pinned version, budget, its glyph, its reasoning terminal. Hover
 previews, click pins so it holds while somebody talks over it, arrow keys reach
-every row. Drawing all nine at once put five screens of scroll on the page
+every row. Each row is a real target now: the rail was 320 fixed pixels of
+six-point type, which left the fleet whispering down one edge and gave the pane
+no room to answer a question about the agent selected. It is about a quarter of
+the width in standby and a fifth during an incident, where it shares the flanks
+with the brief — sized to be read, where the middle is sized to be looked at, so
+the building is the largest thing on the display and the rails beside it are
+still legible across a room. Drawing all nine at once put five screens of scroll on the page
 before anything had happened, and made "which agent is working" the hardest
 thing on it to find.
 
-**The survey queue is banded by score, not numbered.** A district poll produces
-about six distinct scores across a hundred structures and ties most of them at
-the bottom on identical reasons. Numbering those 6 through 100 told a captain
-that 47 outranked 48; nothing separates them. Bands carry the score, the count,
-the rules every member shares, and fold when they are long.
+On dispatch the page reorganises into three columns. Incident agents to the
+left, the building in the middle — the massing model beside its photograph,
+street level or straight down, switchable — and the brief down the right. The
+brief used to run the full width under the model, so a three-stage brief filling
+in pushed the building it described off the top of the screen; in a column of
+its own it grows downwards past nothing. The slow loop leaves the screen and
+says so in a line of its own: it did not stop because a fire started, and an
+officer should not have to guess.
 
-On dispatch the page reorganises. Incident agents to the left, the massing model
-and the building's photograph to the right — street level or straight down,
-switchable. The slow loop leaves the screen and says so in a line of its own: it
-did not stop because a fire started, and an officer should not have to guess.
+**The flanks are chrome, the middle is the subject.** Both rails sit on
+`surface`, the same tone as the header and the footer; the middle column keeps
+`ground` and is set off by a hairline and a gutter rather than by anything
+louder. One step on the existing three-tone scale, no new colour, and the eye
+lands on the building instead of counting three identical panels.
 
 **No regional map.** It drew detections on a black rectangle with no coastline,
 no grid and no coordinates, stretched to fill the column, and always showed an

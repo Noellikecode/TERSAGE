@@ -683,6 +683,37 @@ async def analyze_frame(
 
 
 @router.post(
+    "/incidents/{incident_id}/drone-sweep",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Fly one face of a synthetic drone sweep",
+)
+async def drone_sweep(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    # The same write scope as any other frame: a sweep amends the brief and
+    # appends to the log. Watching a heat map build is not a read.
+    caller: Annotated[Caller, Depends(require_profile_write)],
+) -> dict[str, Any]:
+    """Advance the sweep by one wall.
+
+    Called repeatedly, it builds thermal coverage face by face at whatever
+    cadence the caller chooses, through the same **Sensor Fusion** path a real
+    aircraft would use. The frames are generated and labelled ``synthetic-drone``
+    everywhere they land; against a live vision model the sweep refuses rather
+    than producing a real reading of an imaginary building.
+
+    Returns a value in every case. ``flown`` false with a ``reason`` is a
+    refusal, and ``complete`` true means every face the footprint has is
+    already covered.
+    """
+    session = get_session(container)
+    return await session.run_drone_sweep_step(
+        incident_id,
+        correlation_id=get_correlation_id() or container.ids.new_id("corr"),
+    )
+
+
+@router.post(
     "/incidents/{incident_id}/resources",
     summary="Request a resource -- notification or commitment",
 )
@@ -796,6 +827,11 @@ async def close_incident(
     does, and a log that could still be appended to afterwards is a log nobody
     can rely on.
     """
+    # Before forgetting the session, undo the thermal this incident painted
+    # onto the stored model. Coverage belongs to the incident that flew it;
+    # leaving it behind shows a heat map from a fire that is out.
+    session = get_session(container)
+    cleared = await session.clear_painted_thermal(incident_id)
     result = await _controller(container).close(incident_id, closed_by=request.closed_by)
     sessions(container).forget(incident_id)
-    return result.model_dump(mode="json")
+    return {**result.model_dump(mode="json"), "thermal_cleared": cleared}

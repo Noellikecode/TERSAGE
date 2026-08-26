@@ -50,7 +50,7 @@ export function IntakePanel({ intake, narrative }: IntakePanelProps) {
   return (
     <section
       aria-labelledby="intake-heading"
-      className="border border-line bg-surface p-3"
+      className="border border-line bg-raised p-3"
       data-testid="intake-panel"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">

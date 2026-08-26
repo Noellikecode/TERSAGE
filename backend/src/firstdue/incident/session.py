@@ -37,8 +37,16 @@ from firstdue.domain.profiles import ProfileEvent, ProfileEventType, ProfileSnap
 from firstdue.domain.values import TextValue
 from firstdue.errors import NotFoundError, StaleVersionError, ValidationError
 from firstdue.extraction.coercion import coerce_value
+from firstdue.domain.geometry import GeometrySpec
 from firstdue.incident.controller import IncidentController, OpenIncidentResult
-from firstdue.incident.fusion import SensorFusion, ThermalFrame
+from firstdue.incident.drone import (
+    SYNTHETIC_SOURCE,
+    camera_bearing_for,
+    next_face,
+    sweep_permitted,
+    synthetic_frame,
+)
+from firstdue.incident.fusion import FrameAnalysis, SensorFusion, ThermalFrame
 from firstdue.incident.handoff import Handoff, RoutingPlan
 from firstdue.incident.intake import (
     IntakeChannel,
@@ -426,6 +434,75 @@ class IncidentSession:
         finally:
             self._pending_imagery.pop(correlation_id, None)
         return self._last_thermal.pop(incident_id, {})
+
+    async def run_drone_sweep_step(
+        self, incident_id: str, *, correlation_id: str
+    ) -> dict[str, Any]:
+        """Fly one face of a synthetic drone sweep through **Sensor Fusion**.
+
+        One face per call rather than all four, so the console can advance the
+        sweep on a cadence and an officer watches the thermal arrive wall by
+        wall. It is also the honest shape: four faces flown in one request
+        would report a whole building scanned at a single instant, which is not
+        what a drone does.
+
+        Nothing here reads a frame or decides a temperature. It picks the next
+        unflown wall, works out where a camera must point to see it, and hands
+        the bytes to the same path a ground station uses. Every refusal is a
+        value with a reason -- a live vision model, an address the slow loop
+        never profiled, a face the footprint does not have.
+        """
+        refusal = sweep_permitted(vision_model_ref=self._container.vision.model_ref)
+        if refusal:
+            return {"flown": False, "complete": False, "reason": refusal}
+
+        incident = await self._require_incident(incident_id)
+        snapshot = await self._container.snapshots.get(incident.profile_snapshot_id)
+        spec = snapshot.geometry if snapshot is not None else None
+        if spec is None:
+            return {
+                "flown": False,
+                "complete": False,
+                "reason": (
+                    "no geometry was profiled for this address before the incident, so "
+                    "a frame cannot be resolved to a wall"
+                ),
+            }
+
+        now = self._container.clock.now()
+        coverage = self.fusion.coverage(incident_id, now=now)
+        scanned = frozenset(entry.face for entry in coverage if entry.scanned)
+        face = next_face(scanned, spec)
+        if face is None:
+            return {"flown": False, "complete": True, "reason": "every face has current coverage"}
+
+        bearing = camera_bearing_for(face, spec)
+        if bearing is None:  # pragma: no cover - next_face only returns faces that exist
+            return {
+                "flown": False,
+                "complete": False,
+                "reason": f"the footprint has no {face} face to photograph",
+            }
+
+        result = await self.run_frame_analysis(
+            incident_id,
+            image=synthetic_frame(address_id=incident.address_id, face=face),
+            mime_type="image/png",
+            camera_bearing_deg=bearing,
+            source=SYNTHETIC_SOURCE,
+            correlation_id=correlation_id,
+        )
+        after = self.fusion.coverage(incident_id, now=self._container.clock.now())
+        remaining = [str(entry.face) for entry in after if not entry.scanned]
+        return {
+            "flown": True,
+            "complete": not remaining,
+            "face": str(face),
+            "camera_bearing_deg": round(bearing, 1),
+            "source": SYNTHETIC_SOURCE,
+            "remaining": remaining,
+            **result,
+        }
 
     async def run_resource_request(
         self,
@@ -862,6 +939,100 @@ class IncidentSession:
             "voids": len(voids),
         }
 
+    async def clear_painted_thermal(self, incident_id: str) -> bool:
+        """Strip the incident's thermal off the stored massing model.
+
+        The fusion module's rule is that **coverage lapses**: a frame older than
+        the window stops counting and the face goes back to UNSCANNED, because
+        yesterday's warm wall is not today's warm wall. Painting readings into
+        the durable profile quietly broke that -- the cells stayed on the model
+        after the incident closed, so a structure opened days later showed a
+        heat map from a fire that was out. A stale overlay is the most
+        convincing wrong thing that can be on a screen.
+
+        So the paint is undone when the incident is. The readings are not lost:
+        they are in the sealed incident log, which is where a reading from a
+        closed incident belongs.
+        """
+        incident = await self._container.incidents.get(incident_id)
+        if incident is None:
+            return False
+        profile = await self._container.profiles.get(incident.address_id)
+        if profile is None or profile.geometry is None:
+            return False
+        cleared = self.fusion.unscanned(profile.geometry)
+        if cleared == profile.geometry:
+            return False
+        try:
+            await self._container.profiles.save(
+                profile.model_copy(
+                    update={
+                        "geometry": cleared,
+                        "profile_version": profile.profile_version + 1,
+                    }
+                ),
+                expected_version=profile.profile_version,
+            )
+        except StaleVersionError:
+            logger.info("thermal_clear_contended", extra={"incident_id": incident_id})
+            return False
+        return True
+
+    async def _paint_geometry(
+        self,
+        # `incident` follows `_require_incident`, which the incident store types
+        # as Any; the analysis has a real type and carries it.
+        incident: Any,
+        analysis: FrameAnalysis,
+        spec: GeometrySpec | None,
+        *,
+        now: datetime,
+    ) -> bool:
+        """Fold this frame's thermal and structure into the stored massing model.
+
+        Without this the reading exists only in the fusion object and in the
+        brief, and the model on screen stays cold -- which is what an officer
+        reads as "nobody has flown that wall". The console fetches geometry from
+        the profile, so the profile is where a heat map has to land.
+
+        Contention loses deliberately. A slow-loop pass that saved between the
+        read and the write means the geometry moved under us; the coverage is
+        still in the fusion object and the next frame repaints from the newer
+        spec, so the cost of losing is one frame of overlay rather than a
+        thermal reading painted over somebody else's measurement.
+        """
+        if spec is None:
+            return False
+        profile = await self._container.profiles.get(incident.address_id)
+        if profile is None:  # pragma: no cover - an incident implies a profile
+            return False
+        painted = self.fusion.apply_analysis_to_geometry(
+            profile.geometry if profile.geometry is not None else spec,
+            analysis,
+            incident_id=incident.incident_id,
+            now=now,
+        )
+        try:
+            await self._container.profiles.save(
+                # The version has to move: the store rejects a write that is not
+                # strictly newer than what it holds, which is what stops a slow
+                # replayed write from overwriting a fresh one.
+                profile.model_copy(
+                    update={
+                        "geometry": painted,
+                        "profile_version": profile.profile_version + 1,
+                    }
+                ),
+                expected_version=profile.profile_version,
+            )
+        except StaleVersionError:
+            logger.info(
+                "thermal_paint_contended",
+                extra={"incident_id": incident.incident_id},
+            )
+            return False
+        return True
+
     async def analyze_imagery(
         self,
         incident_id: str,
@@ -903,9 +1074,11 @@ class IncidentSession:
 
         coverage = self.fusion.coverage(incident_id, now=now)
         voids = self.fusion.voids(incident_id, now=now)
+        painted = await self._paint_geometry(incident, analysis, spec, now=now)
         emission = await self.emit_amendment(incident_id, thermal=coverage, voids=voids)
         return {
             "registered": analysis.registered,
+            "geometry_painted": painted,
             "frame_id": analysis.frame.frame_id if analysis.frame else None,
             "face": str(analysis.frame.face) if analysis.frame else None,
             "observed_storeys": analysis.observed_storeys,

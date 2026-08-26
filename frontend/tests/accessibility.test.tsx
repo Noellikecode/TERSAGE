@@ -17,7 +17,6 @@ import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
 import { BuildingImagery } from '@/components/incident/BuildingImagery';
 import { CommandCenter } from '@/components/CommandCenter';
 import { StatusPill } from '@/components/StatusPill';
-import { SurveyQueue } from '@/components/standby/SurveyQueue';
 import { ThermalPanel } from '@/components/incident/ThermalPanel';
 import {
   AGENTS,
@@ -121,7 +120,7 @@ describe('landmarks and structure', () => {
     for (const name of [
       'District readiness',
       'Regional fire activity',
-      'Ranked for survey',
+      'Records disagree',
       'Slow loop',
     ]) {
       const region = screen.getByRole('region', { name });
@@ -144,15 +143,15 @@ describe('landmarks and structure', () => {
     }
   });
 
-  it('names the massing model region once a structure is selected', async () => {
+  it('names the structure region once a structure is selected', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: 'sf-0450-hayes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open sf-0450-hayes, records disagree' }));
     await waitFor(() =>
-      expect(screen.getByRole('region', { name: 'Massing model' })).toBeInTheDocument(),
+      expect(screen.getByRole('region', { name: 'Structure' })).toBeInTheDocument(),
     );
-    const region = screen.getByRole('region', { name: 'Massing model' });
+    const region = screen.getByRole('region', { name: 'Structure' });
     expect(document.getElementById(region.getAttribute('aria-labelledby') as string))
-      .toHaveTextContent('Massing model');
+      .toHaveTextContent('Structure');
   });
 });
 
@@ -256,18 +255,9 @@ describe('announcements', () => {
 });
 
 describe('keyboard operation', () => {
-  it('exposes the queue reasons through a real toggle button', () => {
-    render(<SurveyQueue entries={QUEUE.entries} />);
-    const toggles = screen.getAllByRole('button', { name: /why|hide why/i });
-    expect(toggles[0]).toHaveAttribute('aria-expanded');
-
-    fireEvent.click(toggles[1]!);
-    expect(toggles[1]).toHaveAttribute('aria-expanded', 'true');
-  });
-
   it('makes the camera views a pressed-state button group', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: 'sf-0450-hayes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open sf-0450-hayes, records disagree' }));
     await waitFor(() =>
       expect(screen.getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument(),
     );
@@ -284,7 +274,7 @@ describe('keyboard operation', () => {
     const { container } = renderConsole();
     // With a structure selected: that is the state with the most controls on
     // screen -- the camera views and the whole dispatch panel are in it.
-    fireEvent.click(screen.getByRole('button', { name: 'sf-0450-hayes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open sf-0450-hayes, records disagree' }));
     await waitFor(() =>
       expect(screen.getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument(),
     );
@@ -316,7 +306,7 @@ describe('keyboard operation', () => {
 
   it('names the profile region once it is opened', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: 'sf-0450-hayes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open sf-0450-hayes, records disagree' }));
     await waitFor(() =>
       expect(screen.getByRole('heading', { name: /sf-0450-hayes/ })).toBeInTheDocument(),
     );

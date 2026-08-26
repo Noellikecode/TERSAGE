@@ -86,6 +86,11 @@ class SanFranciscoAdapter:
                 latitude=entry["latitude"],
                 longitude=entry["longitude"],
                 parcel_ref=entry.get("parcel_ref"),
+                footprint=(
+                    tuple((float(x), float(y)) for x, y in entry["footprint"])
+                    if entry.get("footprint")
+                    else None
+                ),
             )
             self._by_id[address.address_id] = address
             self._by_normalized[_normalize_token(address.display)] = address.address_id

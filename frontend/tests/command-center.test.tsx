@@ -36,6 +36,16 @@ import {
   emission,
 } from './fixtures';
 
+/**
+ * How a structure is opened from standby now.
+ *
+ * The ranked chips are gone, so the disagreement list is the only path to a
+ * profile on this screen, and its buttons name themselves fully -- two
+ * controls with one accessible name is a screen reader saying the same address
+ * twice with no way to tell them apart.
+ */
+const openDisagreement = (addressId: string) => `Open ${addressId}, records disagree`;
+
 /** A street-level photograph, as the imagery endpoint returns one. */
 const IMAGERY = {
   address_id: ADDRESS,
@@ -185,7 +195,7 @@ function renderConsole(props: Partial<Parameters<typeof CommandCenter>[0]> = {})
 /** Standby, a profile opened from the queue, and a dispatch on top of it. */
 async function dispatchIncident() {
   renderConsole();
-  fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+  fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
   await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
   fireEvent.click(screen.getByTestId('dispatch-button'));
   await waitFor(() => expect(screen.getByLabelText('Active incident')).toBeInTheDocument());
@@ -264,28 +274,26 @@ describe('standby', () => {
     expect(screen.getAllByText('@1.0.0').length).toBeGreaterThan(0);
   });
 
-  it('groups ranked structures by score, in rank order, without numbering them', () => {
-    renderConsole();
-    const strip = screen.getByLabelText('Ranked structures');
-    const bands = Array.from(strip.children) as HTMLElement[];
-    // Two structures, two distinct scores, so two bands of one.
-    expect(bands).toHaveLength(2);
-    expect(within(bands[0]!).getByText('0.87')).toBeInTheDocument();
-    expect(within(bands[0]!).getByRole('button', { name: ADDRESS })).toBeInTheDocument();
-    expect(within(bands[1]!).getByText('0.42')).toBeInTheDocument();
-    expect(within(bands[1]!).getByRole('button', { name: 'sf-1215-fell' })).toBeInTheDocument();
-
-    // No rank number. The ranker produces a handful of scores and a long tie
-    // at the bottom; a number on every row claims an order inside that tie.
-    expect(within(bands[0]!).queryByText('1')).not.toBeInTheDocument();
-    // The rule reads as words; the raw id belongs to the agent's own panel.
-    expect(screen.queryByText('rank.open-conflict-severity')).not.toBeInTheDocument();
-  });
-
-  it('carries no ranked survey queue panel any more', () => {
+  it('carries no survey ranking on screen at all', () => {
+    // The backend still ranks -- `structure-watch` scores the district on every
+    // pass and the queue endpoint still answers -- and none of it is drawn. A
+    // rank, a score and a band of tied structures asked an officer to read an
+    // ordering they could not act on differently row to row, and it took the
+    // middle of the display to say so. What survives is the reason a structure
+    // is worth looking at, which `RecordsDisagree` states in words.
     renderConsole();
     expect(screen.queryByLabelText('Ranked survey queue')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Ranked structures')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Ranked for survey' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^why$/i })).not.toBeInTheDocument();
+    // The score the ranker produced for the top structure is nowhere on screen.
+    expect(screen.queryByText('0.87')).not.toBeInTheDocument();
+  });
+
+  it('keeps the hand-run slow-loop pass, in the column that owns the loop', () => {
+    renderConsole();
+    const [fleet] = screen.getAllByRole('region', { name: /loop/i }) as [HTMLElement];
+    expect(within(fleet).getByTestId('run-slow-loop-pass')).toBeInTheDocument();
   });
 });
 
@@ -311,7 +319,7 @@ describe('the layout', () => {
 
     const [fleet] = columns as [HTMLElement];
     const activity = screen.getByRole('region', { name: 'Regional fire activity' });
-    const structures = screen.getByRole('region', { name: 'Ranked for survey' });
+    const structures = screen.getByRole('region', { name: 'Records disagree' });
 
     expect(fleet.compareDocumentPosition(activity) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
@@ -360,21 +368,21 @@ describe('the layout', () => {
 
   it('keeps the massing model out of standby until a structure is selected', async () => {
     renderConsole();
-    expect(screen.queryByRole('region', { name: 'Massing model' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Structure' })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
     await waitFor(() =>
-      expect(screen.getByRole('region', { name: 'Massing model' })).toBeInTheDocument(),
+      expect(screen.getByRole('region', { name: 'Structure' })).toBeInTheDocument(),
     );
     // The camera views belong to the model wherever it is rendered.
-    const model = screen.getByRole('region', { name: 'Massing model' });
+    const model = screen.getByRole('region', { name: 'Structure' });
     expect(within(model).getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument();
     // The fleet column did not go anywhere to make room for it: the structure
-    // opens in the column beside it, under the ranked strip.
+    // opens in the column beside it, under the disagreement list.
     expect(screen.getAllByRole('region', { name: /loop/i })).toHaveLength(1);
     expect(
       screen
-        .getByRole('region', { name: 'Ranked for survey' })
+        .getByRole('region', { name: 'Records disagree' })
         .compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
@@ -602,16 +610,16 @@ describe('running a slow-loop pass by hand', () => {
 describe('the building profile', () => {
   it('opens from the queue without navigating away', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
 
     await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
-    // Still the same page: the structure strip is right where it was.
-    expect(screen.getByLabelText('Ranked structures')).toBeInTheDocument();
+    // Still the same page: the disagreement list is right where it was.
+    expect(screen.getByLabelText('Structures where records disagree')).toBeInTheDocument();
   });
 
   it('shows provenance and all three assertion states', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
     await waitFor(() =>
       expect(screen.getAllByText('structure.stories').length).toBeGreaterThan(0),
     );
@@ -627,7 +635,7 @@ describe('the building profile', () => {
 
   it('shows the conflict, the referral case number, and the timeline', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
     await waitFor(() =>
       expect(screen.getAllByText(/Permit records 2 storeys/).length).toBeGreaterThan(0),
     );
@@ -637,7 +645,7 @@ describe('the building profile', () => {
 
   it('will not offer to settle a conflict outside an incident', async () => {
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
     await waitFor(() =>
       expect(screen.getByText(/Open an incident to settle this on scene/)).toBeInTheDocument(),
     );
@@ -674,7 +682,7 @@ describe('the dispatch transition', () => {
     expect(within(incidentFleet).queryByText(/records-watcher/)).not.toBeInTheDocument();
 
     // And the structure sits beside it, still split model-then-photograph.
-    const model = screen.getByRole('region', { name: 'Massing model' });
+    const model = screen.getByRole('region', { name: 'Structure' });
     const imagery = screen.getByRole('region', { name: 'Building imagery' });
     expect(
       model.compareDocumentPosition(incidentFleet) & Node.DOCUMENT_POSITION_PRECEDING,
@@ -682,6 +690,27 @@ describe('the dispatch transition', () => {
     expect(
       model.compareDocumentPosition(imagery) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it('gives the brief a column of its own, ahead of the building in the source', async () => {
+    await dispatch();
+    const [incidentFleet] = screen.getAllByRole('region', { name: /loop/i }) as [HTMLElement];
+    const brief = screen.getByRole('region', { name: 'Incident brief' });
+    const model = screen.getByRole('region', { name: 'Structure' });
+
+    // Three columns, and the brief is not inside the one carrying the model
+    // any more: a brief that ran the full width under the building pushed the
+    // building off the top of the screen as its three stages filled in.
+    expect(brief.contains(model)).toBe(false);
+    expect(model.contains(brief)).toBe(false);
+
+    // Source order is the reading order when the columns stack on a tablet, so
+    // the brief sits above the model rather than under the profile timeline.
+    // On a wide screen two explicit column starts put it back on the right.
+    expect(
+      incidentFleet.compareDocumentPosition(brief) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(brief.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('names the fleet column after the loop it was asked for', async () => {
@@ -760,7 +789,7 @@ describe('the dispatch transition', () => {
     await waitFor(() =>
       expect(screen.queryByLabelText('Active incident')).not.toBeInTheDocument(),
     );
-    expect(screen.getByLabelText('Ranked structures')).toBeInTheDocument();
+    expect(screen.getByLabelText('Structures where records disagree')).toBeInTheDocument();
     expect(screen.getAllByRole('status')[0]).toHaveTextContent(/Grant revoked, log sealed/);
   });
 });
@@ -864,7 +893,7 @@ describe('degraded states', () => {
     );
 
     renderConsole();
-    fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
     await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
     fireEvent.click(screen.getByTestId('dispatch-button'));
 
@@ -877,9 +906,11 @@ describe('degraded states', () => {
     );
   });
 
-  it('shows an honest empty queue rather than invented rows', () => {
+  it('shows an honest empty district rather than invented rows', () => {
     renderConsole({ initialQueue: { district_id: 'd', entries: [], count: 0 } });
-    expect(screen.getByText('No ranked structures yet')).toBeInTheDocument();
+    expect(
+      screen.getByText('No structure in this district has an open disagreement.'),
+    ).toBeInTheDocument();
   });
 });
 
@@ -961,7 +992,7 @@ describe('the standby heartbeat', () => {
     vi.stubGlobal('fetch', fetchMock);
     try {
       renderConsole();
-      fireEvent.click(screen.getByRole('button', { name: ADDRESS }));
+      fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
       await tick(0);
       fireEvent.click(screen.getByTestId('dispatch-button'));
       await tick(0);

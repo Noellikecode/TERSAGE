@@ -15,8 +15,23 @@ TOFU    ?= tofu
 NPM     ?= npm
 FRONT   := frontend
 DISTRICT ?= sffd-district-03
+GCP_PROJECT ?= firstdue-dev
 API_PORT   ?= 8000
 FRONT_PORT ?= 3000
+
+# The browser's Maps key, for Google's Photorealistic 3D Tiles.
+#
+# It is a *separate variable* from the backend's `GOOGLE_MAPS_API_KEY` on
+# purpose. Every other credential here stays server-side; this one is inlined
+# into the client bundle, because the tile renderer streams straight from
+# `tile.googleapis.com` as the camera moves and proxying that would put the
+# console in the path of every tile. So the key is public by construction, and
+# it MUST be HTTP-referrer restricted in the Cloud console -- an unrestricted
+# browser key is billable by whoever finds it.
+#
+# Falls back to the backend key from `.env` so the demo runs out of the box.
+# That fallback is a convenience for a local demo, not a deployment pattern.
+MAPS_BROWSER_KEY ?= $(shell grep -h '^GOOGLE_MAPS_API_KEY=' .env 2>/dev/null | tail -1 | cut -d= -f2-)
 
 .PHONY: help
 help: ## Show this help
@@ -45,10 +60,17 @@ demo: seed ## Start the credential-free demo (API + console)
 	@echo "  api     http://localhost:$(API_PORT)"
 	@echo "  console http://localhost:$(FRONT_PORT)"
 	@echo "  console token derived from DEMO_SEED; see \`firstdue status\`"
+	@# Refuse a port already in use rather than losing the bind quietly. Uvicorn
+	@# prints "address already in use" and exits while the *old* process keeps
+	@# serving -- so a config change appears to have no effect, and the thing on
+	@# screen is a process started with different settings. Cost us three
+	@# debugging rounds; the check is one line.
+	@lsof -ti:$(API_PORT) >/dev/null 2>&1 && { echo "port $(API_PORT) is in use; stop it first"; exit 1; } || true
 	@trap 'kill 0' EXIT INT TERM; \
 	 USE_FAKE_AGENTS=true DEMO_PRIME_SLOW_LOOP=true PORT=$(API_PORT) $(UV) run firstdue serve & \
 	 cd $(FRONT) && \
 	   FIRSTDUE_CONSOLE_TOKEN=$$($(UV) run --directory .. firstdue status | awk '/^  chief/{print $$2}') \
+	   NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$(MAPS_BROWSER_KEY) \
 	   NEXT_PUBLIC_API_BASE_URL=http://localhost:$(API_PORT) $(NPM) run dev -- -p $(FRONT_PORT) & \
 	 wait
 
@@ -93,6 +115,46 @@ live-serve: ## Start the API in live mode (no console; see the target's note)
 	@echo "use \`make demo\` for the UI, or the deployed console."
 	@set -a && . ./.env && . ./.env.live && set +a && \
 	 PORT=$(API_PORT) $(UV) run firstdue serve
+
+.PHONY: live-demo
+live-demo: ## Live mode WITH the console: real models, real sources, real Firestore
+	@[ -f .env.live ] || { echo "missing .env.live - see docs/setup.md"; exit 1; }
+	@echo "==> minting a console token"
+	@# Live mode verifies a Google OIDC token against the incident service's
+	@# custom audience, and a bare user credential cannot choose an audience --
+	@# only a service account can. So the console's credential is minted by
+	@# impersonating `fd-ci-smoke`, the same identity the staging smoke suite
+	@# uses, and handed to the console as FIRSTDUE_CONSOLE_TOKEN. On Cloud Run
+	@# this comes from the metadata server; a laptop has none, which is the only
+	@# reason this target exists.
+	@#
+	@# The token lasts an hour. Re-run the target to refresh it.
+	@#
+	@# The console waits for the API rather than starting beside it. Live mode
+	@# checks every seeded profile against Firestore before it accepts traffic,
+	@# which is the better part of a minute -- and a console started in parallel
+	@# spends that minute rendering 503s that look like a broken backend rather
+	@# than a slow one.
+	@trap 'kill 0' EXIT INT TERM; \
+	 TOKEN=$$(gcloud auth print-identity-token \
+	   --impersonate-service-account=fd-ci-smoke@$(GCP_PROJECT).iam.gserviceaccount.com \
+	   --audiences=https://firstdue-incident --include-email 2>/dev/null); \
+	 [ -n "$$TOKEN" ] || { echo "could not mint a token; see infra/smoke-staging.sh for the grant it needs"; exit 1; }; \
+	 lsof -ti:$(API_PORT) >/dev/null 2>&1 && { echo "port $(API_PORT) is already in use; stop it first"; exit 1; } || true; \
+	 ( set -a && . ./.env && . ./.env.live && set +a && \
+	   PORT=$(API_PORT) $(UV) run firstdue serve ) & \
+	 echo "==> waiting for the API (it checks every seeded profile against Firestore)"; \
+	 for i in $$(seq 1 60); do \
+	   curl -sf http://localhost:$(API_PORT)/readyz >/dev/null 2>&1 && break; \
+	   sleep 2; \
+	 done; \
+	 curl -sf http://localhost:$(API_PORT)/readyz >/dev/null 2>&1 || { echo "the API did not come up; see the log above"; exit 1; }; \
+	 echo "  api     http://localhost:$(API_PORT)"; \
+	 echo "  console http://localhost:$(FRONT_PORT)"; \
+	 ( cd $(FRONT) && FIRSTDUE_CONSOLE_TOKEN=$$TOKEN \
+	   NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$(MAPS_BROWSER_KEY) \
+	   NEXT_PUBLIC_API_BASE_URL=http://localhost:$(API_PORT) $(NPM) run dev -- -p $(FRONT_PORT) ) & \
+	 wait
 
 .PHONY: seed
 seed: ## Build deterministic demo state

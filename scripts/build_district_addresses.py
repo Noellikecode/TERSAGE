@@ -88,6 +88,54 @@ def _display(row: dict[str, Any]) -> str:
     return f"{int(number)} {street} {suffix}, San Francisco, CA".replace("  ", " ")
 
 
+#: Metres per degree, near San Francisco. Good to well under a metre at parcel
+#: scale, which is the scale a massing model is drawn at.
+_M_PER_DEG_LAT: float = 110_540.0
+_M_PER_DEG_LON: float = 111_320.0
+
+#: A footprint with fewer vertices than this is not a building outline.
+_MIN_VERTICES: int = 4
+
+#: And one with more is a parcel nobody needs at this fidelity -- the renderer
+#: extrudes it, and a hundred-vertex ring costs more than it shows.
+_MAX_VERTICES: int = 24
+
+
+def _footprint(row: dict[str, Any], lat: float, lon: float) -> list[list[float]] | None:
+    """The parcel's real outline, in metres relative to its own centroid.
+
+    The seed used to extrude a literal rectangle for every structure, so every
+    building in the district was the same box at a different height. The feed
+    already carries the true polygon; converting it here means the massing model
+    is the shape of the actual parcel.
+
+    Projected with a local equirectangular approximation rather than a real
+    projection: over a single parcel the error is centimetres, and pulling in a
+    projection library to be more right than the source data would be false
+    precision.
+    """
+    shape = row.get("shape") or {}
+    coords = shape.get("coordinates") or []
+    # MultiPolygon -> first polygon -> outer ring.
+    ring = coords[0][0] if coords and coords[0] else None
+    if not ring or len(ring) < _MIN_VERTICES:
+        return None
+
+    import math
+
+    scale_lon = _M_PER_DEG_LON * math.cos(math.radians(lat))
+    points = [
+        [round((float(x) - lon) * scale_lon, 2), round((float(y) - lat) * _M_PER_DEG_LAT, 2)]
+        for x, y in ring
+    ]
+    # A GeoJSON ring repeats its first point; the renderer closes it itself.
+    if points and points[0] == points[-1]:
+        points.pop()
+    if len(points) < 3 or len(points) > _MAX_VERTICES:
+        return None
+    return points
+
+
 def fetch(limit: int, timeout: float) -> list[dict[str, Any]]:
     """Pull parcels for the supervisor districts we map, newest page first."""
     rows: list[dict[str, Any]] = []
@@ -130,6 +178,10 @@ def build(rows: list[dict[str, Any]], existing: dict[str, Any]) -> dict[str, Any
             "latitude": round(float(lat), 6),
             "longitude": round(float(lon), 6),
             "parcel_ref": f"{block}-{lot}" if block and lot else None,
+            # The real outline, when the feed gives a usable one. Absent, the
+            # seed falls back to its rectangle -- a building drawn as a box is
+            # worse than one drawn correctly and better than none at all.
+            "footprint": _footprint(row, float(lat), float(lon)),
         }
 
     return {

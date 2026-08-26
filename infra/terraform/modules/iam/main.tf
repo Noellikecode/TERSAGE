@@ -30,12 +30,21 @@ locals {
   scope_roles = local.policy.scope_roles
 
   # agent -> the distinct roles its scopes imply, plus the bus roles every
-  # agent needs to receive its own subscriptions.
+  # agent needs to receive its own subscriptions, plus telemetry.
+  #
+  # Telemetry is deliberately *not* scope-derived. A scope says what data an
+  # agent may touch, and a span is not data it touches -- so there is no scope
+  # that could imply it and inventing one would corrupt the mapping the whole
+  # identity model rests on. Every agent gets it, because a worker without it
+  # builds its exporter, logs `tracing_enabled`, and then drops every span:
+  # the failure is invisible at the agent and shows up only as an empty Cloud
+  # Trace, which is how nine of eleven services traced nothing.
   agent_roles = {
     for id, spec in local.agents :
     id => distinct(concat(
       flatten([for s in spec.scopes : local.scope_roles[s]]),
       spec.pubsub,
+      lookup(spec, "telemetry", []),
     ))
   }
 

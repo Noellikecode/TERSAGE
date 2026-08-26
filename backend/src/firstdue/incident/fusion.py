@@ -477,6 +477,31 @@ class SensorFusion:
             }
         )
 
+    def unscanned(self, spec: GeometrySpec) -> GeometrySpec:
+        """Every face back to UNSCANNED, with its heat map removed.
+
+        The counterpart to painting a reading onto a stored model. Coverage is
+        not a property a building keeps: it belongs to the incident that flew
+        the frames, and when that incident closes the model must stop claiming
+        a wall was measured. UNSCANNED, never a last-known temperature -- the
+        distinction this whole module exists to hold is that "nobody looked" is
+        not "it was cool".
+        """
+        return spec.model_copy(
+            update={
+                "faces": tuple(
+                    face.model_copy(
+                        update={
+                            "thermal": UnscannedValue(),
+                            "observed_at": None,
+                            "thermal_cells": (),
+                        }
+                    )
+                    for face in spec.faces
+                )
+            }
+        )
+
     def unavailable(self, spec: GeometrySpec, *, source_id: str, reason: str) -> GeometrySpec:
         """Mark every face as UNAVAILABLE because the sensor feed is down.
 

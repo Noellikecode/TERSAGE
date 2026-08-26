@@ -749,3 +749,49 @@ async def test_a_pass_with_no_registry_wired_closes_instead_of_spinning() -> Non
 
     assert run.trace.stop is GraphStop.CLOSED
     assert run.trace.node_sequence == (NODE_SURVEY,)
+
+
+def test_a_checkpoint_stays_writable_on_a_real_district() -> None:
+    """Parking must not fail because the district got big.
+
+    Every list on a checkpoint grows with the district -- addresses settled,
+    registries queried, dead ends ruled out -- and `MemoryCheckpoint` refuses a
+    payload over MAX_CHECKPOINT_STATE_BYTES, correctly: a memory must never
+    become somewhere document contents accumulate.
+
+    Unbounded, those two collide the moment a district is real. At nine
+    addresses the payload fit; at 386 the watcher exhausted its budget, tried to
+    park, and the park *raised* -- so the pass that ran out of time also lost the
+    record of where it got to, which is the one thing parking exists to keep.
+    """
+    import json
+
+    from firstdue.agents.graphs.base import MAX_CHECKPOINT_ENTRIES
+    from firstdue.agents.graphs.hazard import HazardGraphState
+    from firstdue.domain.memory import MAX_CHECKPOINT_STATE_BYTES
+
+    state = HazardGraphState(
+        district_id="sffd-district-03",
+        settled=tuple(f"sf-{i:05d}-mission-street" for i in range(4000)),
+        queried=tuple(f"epa-frs:110000{i:06d}" for i in range(4000)),
+        ruled_out=tuple(f"epa-frs:{i}:name-mismatch" for i in range(4000)),
+    )
+    payload = state.checkpoint_payload()
+
+    assert len(payload["settled"]) <= MAX_CHECKPOINT_ENTRIES
+    size = len(json.dumps(payload).encode("utf-8"))
+    assert size <= MAX_CHECKPOINT_STATE_BYTES, f"{size} bytes"
+
+
+def test_the_tail_is_kept_because_it_is_the_frontier() -> None:
+    """Truncation drops the oldest, not the newest.
+
+    The next pass resumes from where this one stopped, so the recent entries are
+    the ones worth carrying; the older ones have already done their work.
+    """
+    from firstdue.agents.graphs.base import MAX_CHECKPOINT_ENTRIES, bounded
+
+    kept = bounded([str(i) for i in range(MAX_CHECKPOINT_ENTRIES * 3)])
+
+    assert len(kept) == MAX_CHECKPOINT_ENTRIES
+    assert kept[-1] == str(MAX_CHECKPOINT_ENTRIES * 3 - 1)

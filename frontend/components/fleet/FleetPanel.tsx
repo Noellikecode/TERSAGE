@@ -241,13 +241,15 @@ export function FleetPanel({
               onFocus={() => setPreview(SUPERSEDED_KEY)}
               aria-current={shown === SUPERSEDED_KEY ? 'true' : undefined}
               data-testid="superseded-agents"
-              className={`flex w-full items-baseline gap-2 border-l-2 px-2 py-1 text-left text-micro transition-colors ${
+              className={`flex w-full items-baseline gap-3 border-l-4 px-3 py-2.5 text-left text-body transition-colors ${
                 shown === SUPERSEDED_KEY
-                  ? 'border-line bg-surface text-ink'
-                  : 'border-transparent text-muted hover:bg-surface hover:text-ink'
+                  ? 'border-line bg-raised text-ink'
+                  : 'border-transparent text-muted hover:bg-raised hover:text-ink'
               }`}
             >
-              <span aria-hidden="true">·</span>
+              <span aria-hidden="true" className="text-title leading-none">
+                ·
+              </span>
               <span className="flex-1 truncate">
                 {superseded.length} superseded · still catalogued
               </span>
