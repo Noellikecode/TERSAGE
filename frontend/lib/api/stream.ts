@@ -47,11 +47,26 @@ export function useBriefStream(incidentId: string | null): BriefStream {
   const sourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
+    // A new incident is a new brief, and the old one's frames must go.
+    //
+    // Versions restart at 1 for every incident, and `applyEmission` drops a
+    // version it has already seen -- so carrying the previous incident's
+    // emissions across does not merely show the wrong building for a moment.
+    // Every frame of the *new* incident is discarded as a redelivery, and the
+    // panel keeps rendering the previous building's construction, height and
+    // occupancy under the new address's header until the page is reloaded.
+    //
+    // Clearing on `null` too: closing an incident must not leave the last
+    // brief on screen for the next one to inherit.
+    setEmissions([]);
+    setRejected(0);
+
     // Checked as a *constructor*, not as a key: a browser that exposes the name
     // without an implementation would otherwise throw here and blank the
     // console at exactly the moment it is needed. Without SSE the brief still
     // shows -- it just does not update in place.
     if (!incidentId || typeof window === 'undefined' || typeof window.EventSource !== 'function') {
+      setState('idle');
       return;
     }
     setState('connecting');
