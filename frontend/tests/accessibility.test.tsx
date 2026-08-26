@@ -335,3 +335,67 @@ describe('the brief panel', () => {
     ).toBeInTheDocument();
   });
 });
+
+describe('a brief section with repeated labels', () => {
+  it('renders every reading, even where the label is not unique', () => {
+    // LOCATION_EXTENT reports a thermal delta per face and repeats
+    // "thermal delta ALPHA". Keyed on the label alone, React logged duplicate
+    // keys and warned a child may be duplicated or omitted -- a reading
+    // missing from a brief is the failure this project refuses everywhere.
+    const repeated = emission({
+      version: 6,
+      sections: [
+        {
+          key: 'LOCATION_EXTENT',
+          items: [
+            {
+              label: 'thermal delta ALPHA',
+              value_render: '18 C',
+              status: 'CONFIRMED',
+              canonical_key: null,
+              fact_id: null,
+              provenance: null,
+              derivation_note: null,
+              withheld_note: null,
+              reported_note: null,
+            },
+            {
+              label: 'thermal delta ALPHA',
+              value_render: '107 C',
+              status: 'CONFIRMED',
+              canonical_key: null,
+              fact_id: null,
+              provenance: null,
+              derivation_note: null,
+              withheld_note: null,
+              reported_note: null,
+            },
+          ],
+        },
+      ],
+    });
+
+    // Asserting on both readings being present is not enough: React renders
+    // duplicate-keyed children on first mount and only misbehaves during
+    // reconciliation, so that assertion passes with the bug in place. The
+    // warning is the thing that actually changed, so the warning is what this
+    // watches.
+    const warnings: string[] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      warnings.push(String(args[0]));
+      original(...(args as Parameters<typeof console.error>));
+    };
+    try {
+      render(<BriefPanel emission={repeated} />);
+    } finally {
+      console.error = original;
+    }
+
+    expect(warnings.filter((w) => /same key/i.test(w))).toEqual([]);
+    // And both readings are on screen. Neither collapses into the other.
+    expect(screen.getByText('18 C')).toBeInTheDocument();
+    expect(screen.getByText('107 C')).toBeInTheDocument();
+    expect(screen.getAllByText('thermal delta ALPHA')).toHaveLength(2);
+  });
+});

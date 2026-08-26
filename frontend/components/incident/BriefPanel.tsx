@@ -76,8 +76,22 @@ export function BriefPanel({ emission }: { emission: BriefEmissionView | null })
             {section.key.replace(/_/g, ' ').toLowerCase()}
           </h3>
           <dl className="mt-2 space-y-1.5">
-            {section.items.map((item) => (
-              <div key={`${section.key}-${item.label}`} className="flex flex-wrap items-baseline gap-2">
+            {section.items.map((item, index) => (
+              // Position, not label. A section may carry the same label more
+              // than once -- LOCATION_EXTENT reports a thermal delta per face
+              // and repeats "thermal delta ALPHA" -- and keying on the label
+              // alone gave React duplicate keys, which it warns may leave a
+              // child duplicated or omitted. A reading silently missing from a
+              // brief is the failure this project refuses everywhere else, so
+              // it is not left to chance even where nothing is dropped today.
+              //
+              // Safe as an index because a section's items are a rendered
+              // list, not a reorderable one: an emission is immutable, and the
+              // next version arrives as a whole new section keyed by version.
+              <div
+                key={`${section.key}-${index}-${item.label}`}
+                className="flex flex-wrap items-baseline gap-2"
+              >
                 <dt className="font-mono text-micro text-muted">{item.label}</dt>
                 <dd className="flex flex-wrap items-center gap-2">
                   <span

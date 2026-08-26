@@ -317,3 +317,53 @@ describe('the bounding box this backend actually sends', () => {
     expect(activity!.regionLabel).toBe('the region');
   });
 });
+
+describe('absence is one fact, not three', () => {
+  it('collapses a wholly unreported window into a single line', () => {
+    // Three columns each reading "not reported" under its own window spent a
+    // third of the panel restating one absence -- and the absence is the
+    // ordinary case, because POWER reanalysis lags by days.
+    const read = activity();
+    render(
+      <FireActivityMap
+        activity={{
+          ...read,
+          weather: {
+            ...read.weather!,
+            temperature_c: null,
+            relative_humidity_pct: null,
+            wind_speed_ms: null,
+            wind_direction_deg: null,
+          },
+        }}
+      />,
+    );
+    const line = screen.getByTestId('fire-weather-absent');
+    expect(line).toHaveTextContent(/No temperature, humidity or wind reported/);
+    // The window it looked at, and what kind of reading it is, both survive.
+    expect(line).toHaveTextContent('2026-08-18 → 2026-08-19');
+    expect(line).toHaveTextContent(/Reanalysis, days behind real time/);
+  });
+
+  it('still draws the full grid the moment one reading lands', () => {
+    const read = activity();
+    render(
+      <FireActivityMap
+        activity={{
+          ...read,
+          weather: { ...read.weather!, relative_humidity_pct: null, wind_speed_ms: null },
+        }}
+      />,
+    );
+    expect(screen.queryByTestId('fire-weather-absent')).not.toBeInTheDocument();
+    expect(within(screen.getByTestId('fire-weather')).getByText('24.3')).toBeInTheDocument();
+  });
+
+  it('keeps the standing explanation on the page, one click away', () => {
+    // Behind a disclosure, not deleted: it is the reason a judge should not
+    // read an empty city as a broken instrument.
+    render(<FireActivityMap activity={activity()} />);
+    expect(screen.getByText(/instrument working, not a fault/)).toBeInTheDocument();
+    expect(screen.getByText(/Why the city is always empty/)).toBeInTheDocument();
+  });
+});

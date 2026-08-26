@@ -118,15 +118,28 @@ export function ReasoningTerminal({
             // class rides on a keyed element, so the highlight replays only
             // when a genuinely new line lands -- a re-render with nothing new
             // reuses the element and nothing moves.
-            className={`whitespace-pre-wrap break-words ${
+            // One entry, one line. The body carries `record_ref=`,
+            // `patterns=` and `screen=`; wrapped in a 320px rail each entry ran
+            // to three or four visual lines and made the fleet the densest
+            // block of text on the screen. Clipped, the same box shows seven
+            // decisions instead of two.
+            //
+            // Nothing is dropped. The full line stays in the DOM, is exposed to
+            // assistive tech, and is the element's `title` -- a terminal that
+            // truncated the evidence would stop being a proof surface, which is
+            // the only reason it is on screen.
+            title={`${clock(line.at)} ${line.label}${line.actor ? ` [${line.actor}]` : ''}${
+              line.body ? ` ${line.body}` : ''
+            }`}
+            className={`flex items-baseline gap-1 overflow-hidden whitespace-nowrap ${
               index === lines.length - 1 ? 'fleet-fresh' : ''
             }`}
           >
-            <span className="text-muted">{clock(line.at)} </span>
-            <span className={TONE_CLASS[line.tone] ?? 'text-muted'}>
+            <span className="shrink-0 text-muted">{clock(line.at)} </span>
+            <span className={`shrink-0 ${TONE_CLASS[line.tone] ?? 'text-muted'}`}>
               <span aria-hidden="true">{TONE_GLYPH[line.tone] ?? '·'}</span> {line.label}
             </span>
-            {line.actor && <span className="text-muted"> [{line.actor}]</span>}
+            {line.actor && <span className="shrink-0 text-muted"> [{line.actor}]</span>}
             {line.body &&
               (index === lines.length - 1 && shown !== Number.POSITIVE_INFINITY ? (
                 /* Mid-type. The reveal is *visual only*: the clipped text is
@@ -141,7 +154,7 @@ export function ReasoningTerminal({
                   <span className="sr-only">{line.body}</span>
                 </span>
               ) : (
-                <span className="text-ink"> {line.body}</span>
+                <span className="min-w-0 truncate text-ink"> {line.body}</span>
               ))}
             {line.note && <span className="text-muted"> — {line.note}</span>}
           </li>

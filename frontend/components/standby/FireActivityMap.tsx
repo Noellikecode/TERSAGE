@@ -378,6 +378,16 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
 
   const weather = activity.weather;
   const window = windowLabel(weather);
+  // Every reading absent is one fact, not three. A three-column grid saying
+  // "not reported" three times, each under its own window, spent a third of
+  // this panel restating a single absence -- and the absence is the ordinary
+  // case, because POWER reanalysis lags by days.
+  const noReadings =
+    !!weather &&
+    weather.available &&
+    weather.temperature_c === null &&
+    weather.relative_humidity_pct === null &&
+    weather.wind_speed_ms === null;
   const cityCount = activity.inCityCount;
   const regionCount = activity.regionalCount;
 
@@ -411,10 +421,17 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
           </>
         )}
       </p>
-      <p className="text-micro leading-5 text-muted">
-        VIIRS pixels are ~375 m and built for wildfire, so a structure fire never registers here.
-        An empty city inside a busy region is the instrument working, not a fault.
-      </p>
+      {/* A standing explanation: true on every render, read once. It stays on
+          the page and stops occupying two lines above the finding. */}
+      <details className="mt-0.5">
+        <summary className="cursor-pointer text-micro text-muted hover:text-ink">
+          Why the city is always empty
+        </summary>
+        <p className="mt-1 text-micro leading-5 text-muted">
+          VIIRS pixels are ~375 m and built for wildfire, so a structure fire never registers here.
+          An empty city inside a busy region is the instrument working, not a fault.
+        </p>
+      </details>
 
       <div className="mt-3" data-testid="fire-weather">
         <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
@@ -422,7 +439,16 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
           <span className="text-micro text-muted">{weather?.source ?? 'NASA POWER'}</span>
         </div>
 
-        {weather && weather.available ? (
+        {noReadings ? (
+          // Still says which window it looked at and still says it is
+          // reanalysis: the absence is reported, not hidden.
+          <p className="mt-1 text-micro leading-5 text-muted" data-testid="fire-weather-absent">
+            No temperature, humidity or wind reported for {window ?? 'the requested window'}.{' '}
+            <span className="text-disputed">
+              Reanalysis, days behind real time — not the live NWS wind shown elsewhere.
+            </span>
+          </p>
+        ) : weather && weather.available ? (
           <>
             <dl className="mt-1 grid grid-cols-3 gap-1">
               <Reading
