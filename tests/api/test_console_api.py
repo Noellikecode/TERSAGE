@@ -77,7 +77,7 @@ def test_the_profile_shows_the_disagreement_rather_than_resolving_it(
 
     conflict = body["conflicts"][0]
     assert conflict["rule_id"] == "permit-vs-lidar-story-count"
-    assert conflict["severity"] == 4
+    assert conflict["severity"] == 5
     assert len(conflict["fact_ids"]) == 2
 
 

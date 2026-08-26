@@ -257,6 +257,30 @@ class PermitVersusLidarStoryCount:
 
         permit_stories = permit.value.unwrap()
         lidar_stories = lidar.value.unwrap()
+
+        # Ask whether both records can be true before calling them a conflict.
+        #
+        # The lidar storey count is a height divided by an assumed ceiling, and
+        # the assumption is the weakest thing in the comparison. Combining the
+        # two records instead -- what would a floor have to measure? -- uses the
+        # permit rather than discarding it. 5.25 m at 415 Mission is an office
+        # tower; 8.1 m at 450 Hayes is nothing anybody builds.
+        heights = context.of_source(Keys.HEIGHT_M, SourceType.LIDAR_DSM)
+        if heights:
+            from firstdue.agents.geometry_watcher import records_agree_on_stories
+
+            tallest = max(heights, key=lambda f: (f.observed_at, f.fact_id))
+            try:
+                measured_height = float(str(tallest.value.unwrap()))
+                filed_stories = float(str(permit_stories))
+            except (TypeError, ValueError):
+                # An unreadable number cannot clear a conflict. Fall through and
+                # report it: the finding is the safe side of this branch.
+                pass
+            else:
+                if records_agree_on_stories(measured_height, filed_stories):
+                    return ()
+
         try:
             difference = abs(float(lidar_stories) - float(permit_stories))
         except (TypeError, ValueError):

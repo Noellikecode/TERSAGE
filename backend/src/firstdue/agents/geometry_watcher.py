@@ -166,16 +166,56 @@ def measured_height(
     )
 
 
+#: Floor-to-floor heights a real structure is built at, metres. Tight
+#: residential at the bottom, commercial and mechanical floors at the top.
+SHORTEST_STOREY_M: Final[float] = 2.6
+TALLEST_STOREY_M: Final[float] = 5.5
+
+
 def stories_from_height(height_m: float, *, storey_m: float = TYPICAL_STOREY_M) -> int:
     """Deterministic storey count from a measured height.
 
     Rounds to nearest, floors at one. Same input, same answer, forever -- which
     is what lets the resulting disagreement with a permit be a finding rather
     than an artefact of how the number was computed today.
+
+    A point estimate, and the massing model needs one to draw levels with. It is
+    not evidence that a *different* count is wrong: see
+    :func:`storey_height_implied_by`.
     """
     if height_m < MIN_STRUCTURE_HEIGHT_M:
         return 1
     return max(1, round(height_m / storey_m))
+
+
+def storey_height_implied_by(height_m: float, stories: float) -> float | None:
+    """What one floor would have to measure for both records to be true.
+
+    Nothing sees the floors between a roof and the ground, so a storey count is
+    always inferred, and the inference needs a ceiling height that really varies
+    from 2.6 m to 5.5 m. Dividing by one assumed value and calling the result
+    *the* measured count throws away the other record that was already in hand.
+
+    415 Mission is Salesforce Tower. 325 m is right, the permit's 62 storeys is
+    right, and together they imply 5.25 m floors -- ordinary for an office
+    tower. A flat 3.2 m divisor instead reported 102 storeys and raised a
+    severity-5 conflict against a building nobody had mismeasured.
+
+    So this asks the question the other way round: given both records, how tall
+    is a floor? A plausible answer means they agree. ``None`` when the inputs
+    cannot support the question at all.
+    """
+    if stories <= 0 or height_m < MIN_STRUCTURE_HEIGHT_M:
+        return None
+    return height_m / stories
+
+
+def records_agree_on_stories(height_m: float, stories: float) -> bool:
+    """Whether a measured height and a filed storey count can both be true."""
+    implied = storey_height_implied_by(height_m, stories)
+    if implied is None:
+        return False
+    return SHORTEST_STOREY_M <= implied <= TALLEST_STOREY_M
 
 
 class GeometryWatchResult(BaseModel):

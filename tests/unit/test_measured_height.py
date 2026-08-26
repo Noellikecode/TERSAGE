@@ -229,3 +229,54 @@ def test_the_seeded_flight_predates_the_permit_that_disputes_it() -> None:
     )
     stale = [p.address_id for p in profiles_from_seed(document) if geometry_is_stale(p)]
     assert stale, "no seeded profile is stale, so the watcher will skip every one"
+
+
+# ------------------------------------------ a height is not a storey count ---
+
+
+def test_a_tower_and_its_permit_are_not_a_disagreement() -> None:
+    """415 Mission is Salesforce Tower. Both records are right.
+
+    325 m is the real height and 62 storeys is the real filing; together they
+    imply 5.25 m floors, which is what an office tower is built at. Dividing the
+    height by a flat 3.2 m residential ceiling reported 102 storeys and raised a
+    severity-5 conflict against a building nobody had mismeasured -- and put it
+    at the top of the standby screen, where it read as the system being broken.
+    """
+    from firstdue.agents.geometry_watcher import (
+        records_agree_on_stories,
+        storey_height_implied_by,
+    )
+
+    assert round(storey_height_implied_by(325.75, 62) or 0, 2) == 5.25
+    assert records_agree_on_stories(325.75, 62)
+
+
+def test_a_height_no_ceiling_can_explain_is_still_a_disagreement() -> None:
+    """The rule must not simply agree with everything.
+
+    450 Hayes measures 16.29 m against a filed 2 storeys: 8.1 m ceilings, which
+    nobody builds. That is the finding the whole product is about, and it has to
+    survive the fix for the tower.
+    """
+    from firstdue.agents.geometry_watcher import (
+        records_agree_on_stories,
+        storey_height_implied_by,
+    )
+
+    assert round(storey_height_implied_by(16.29, 2) or 0, 1) == 8.1
+    assert not records_agree_on_stories(16.29, 2)
+    # And a squashed one: 3 m over two storeys is 1.5 m of headroom.
+    assert not records_agree_on_stories(3.03, 2)
+
+
+def test_an_unusable_pair_does_not_clear_a_conflict() -> None:
+    """Absent or nonsensical inputs report the finding, never suppress it."""
+    from firstdue.agents.geometry_watcher import (
+        records_agree_on_stories,
+        storey_height_implied_by,
+    )
+
+    assert storey_height_implied_by(16.29, 0) is None
+    assert not records_agree_on_stories(16.29, 0)
+    assert not records_agree_on_stories(0.5, 1)

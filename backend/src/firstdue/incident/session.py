@@ -31,13 +31,13 @@ from firstdue.domain.conflicts import ConflictResolution, ConflictStatus
 from firstdue.domain.enums import Classification, PolicyAction, SourceType
 from firstdue.domain.events import EventEnvelope, Topic
 from firstdue.domain.facts import StructuralFact, natural_fact_id
+from firstdue.domain.geometry import GeometrySpec
 from firstdue.domain.identity import IncidentGrant
 from firstdue.domain.keys import Keys
 from firstdue.domain.profiles import ProfileEvent, ProfileEventType, ProfileSnapshot
 from firstdue.domain.values import TextValue
 from firstdue.errors import NotFoundError, StaleVersionError, ValidationError
 from firstdue.extraction.coercion import coerce_value
-from firstdue.domain.geometry import GeometrySpec
 from firstdue.incident.controller import IncidentController, OpenIncidentResult
 from firstdue.incident.drone import (
     SYNTHETIC_SOURCE,

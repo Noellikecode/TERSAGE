@@ -256,13 +256,18 @@ def _build_profile(
     ]
 
     if address.address_id == DISPUTED_ADDRESS_ID:
-        # The permit says two storeys; the lidar measures three. Both facts stay
-        # stored, and the disagreement is the finding.
+        # The permit says two storeys; the measurement says five. Both facts
+        # stay stored, and the disagreement is the finding.
+        #
+        # Five, not three, because 450 Hayes really measures 16.3 m and three
+        # storeys at that height is 5.4 m ceilings -- close enough to ordinary
+        # that the two records could both be true, which is not a conflict. Two
+        # storeys needs 8 m ceilings. Nobody builds that.
         lidar_stories = _fact(
             ids=ids,
             address_id=address.address_id,
             key=Keys.STORIES,
-            value=IntegerValue(integer=3),
+            value=IntegerValue(integer=5),
             source_type=SourceType.LIDAR_DSM,
             source_ref="usgs-3dep/dsm/2025-q2",
             observed_at=lidar_observed,
@@ -307,13 +312,16 @@ def _build_profile(
                 conflict_id=conflict.conflict_id,
             ),
         )
-        levels.append(
+        # Three disputed levels on top of the two the permit confirms: 6.6 m
+        # filed plus 9.7 m nobody filed for, which is the 16.3 m measured.
+        levels.extend(
             Level(
-                height_m=2.9,
+                height_m=3.23,
                 provenance=SourceType.LIDAR_DSM,
                 status=AssertionStatus.DISPUTED,
                 fact_id=lidar_stories.fact_id,
             )
+            for _ in range(3)
         )
 
     total_height = sum(level.height_m for level in levels)

@@ -53,11 +53,15 @@ async def test_the_demo_produces_the_disagreement_it_promises(container: Contain
     by_source = {f.source_type: f.value.unwrap() for f in stories.facts}
     # Both facts remain. Neither is corrected, averaged, or dropped.
     assert by_source[SourceType.PERMIT] == 2
-    assert by_source[SourceType.LIDAR_DSM] == 3
+    # Five, because 450 Hayes measures 16.29 m. Three storeys at that height is
+    # 5.4 m ceilings -- close enough to ordinary that both records could be
+    # true, which is not a disagreement. Two storeys needs 8 m ceilings.
+    assert by_source[SourceType.LIDAR_DSM] == 5
 
     conflict = profile.open_conflicts[0]
     assert conflict.rule_id == "permit-vs-lidar-story-count"
-    assert conflict.severity == 4
+    # Severity rises with the gap, and the gap is three storeys now.
+    assert conflict.severity == 5
     assert set(conflict.fact_ids) == {
         f.fact_id
         for f in stories.facts
