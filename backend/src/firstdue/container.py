@@ -104,6 +104,7 @@ from firstdue.ports.repositories import (
 from firstdue.ports.runtime import AgentRuntime
 from firstdue.ports.sources import SourceAdapter, SourceRegistry
 from firstdue.ports.threads import ThreadIndex
+from firstdue.ports.tiles import TileClient
 from firstdue.ports.vectors import VectorIndex
 from firstdue.ports.vision import VisionClient
 from firstdue.ports.writes import ExternalWriteTarget
@@ -174,6 +175,11 @@ class Container:
     #: bucket in front of someone else's quota, and one rebuilt per request
     #: arrives with neither.
     fire_activity: FireActivityClient
+    #: The two tile grids the regional terrain mesh is built from. On the
+    #: container for the same reason as the two above: it holds a Map Tiles
+    #: session, a tile cache and a token bucket, and one rebuilt per request
+    #: would mint a session for every square a camera move asks for.
+    tiles: TileClient
     vectors: VectorIndex
     sources: SourceRegistry
     write_targets: dict[str, ExternalWriteTarget]
@@ -668,6 +674,37 @@ def _build_imagery(settings: Settings, *, city: CityAdapter, clock: Clock) -> Im
     return GoogleImageryClient(api_key=settings.google_maps_api_key, city=city, clock=clock)
 
 
+def _build_tiles(settings: Settings, *, clock: Clock) -> TileClient:
+    """Map tiles for the regional terrain mesh. Three states, like imagery.
+
+    Follows ``IMAGERY_PROVIDER`` rather than introducing a fourth switch: the
+    terrain skin comes from the same Maps key and the same terms as the building
+    photograph, and a deployment that has decided about one has decided about
+    the other.
+
+    The region is passed in so the live client can refuse tiles outside it. That
+    check is what keeps a public console from being an open relay onto the
+    department's Map Tiles quota.
+    """
+    from firstdue.ports.fireactivity import BoundingBox
+
+    region = BoundingBox.parse(settings.fire_activity_region)
+
+    wants_google = settings.imagery_provider is ImageryProvider.GOOGLE or (
+        not settings.use_fake_agents
+    )
+    if not wants_google:
+        from firstdue.adapters.fake.tiles import FakeTileClient
+
+        return FakeTileClient(region=region)
+
+    from firstdue.adapters.tiles import GoogleTerrainTileClient, UnconfiguredTileClient
+
+    if not settings.google_maps_api_key:
+        return UnconfiguredTileClient()
+    return GoogleTerrainTileClient(api_key=settings.google_maps_api_key, region=region, clock=clock)
+
+
 def _build_memory(settings: Settings, *, stores: Stores, clock: Clock) -> MemoryBank | None:
     """Durable agent working memory, or an honest absence.
 
@@ -857,6 +894,7 @@ def build_container(settings: Settings) -> Container:
     )
     memory = _build_memory(settings, stores=stores, clock=clock)
     imagery = _build_imagery(settings, city=city, clock=clock)
+    tiles = _build_tiles(settings, clock=clock)
     fire_activity = _build_fire_activity(settings, city=city, clock=clock)
     referral_mailer = _build_referral_mailer(
         settings, clock=clock, stores=stores, fallback=office[1]
@@ -891,6 +929,7 @@ def build_container(settings: Settings) -> Container:
         model=model,
         vision=_build_vision(settings),
         imagery=imagery,
+        tiles=tiles,
         fire_activity=fire_activity,
         vectors=vectors,
         sources=source_registry,

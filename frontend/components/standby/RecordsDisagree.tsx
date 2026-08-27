@@ -78,28 +78,47 @@ export function RecordsDisagree({
   openConflicts,
   selectedAddressId,
   onSelect,
+  headless = false,
 }: {
   entries: QueueEntryView[];
   openConflicts?: number | null;
   selectedAddressId?: string | null;
   onSelect?: (addressId: string) => void;
+  /**
+   * Drop this panel's own landmark and heading, because something outside it
+   * already carries both.
+   *
+   * The console puts this inside a `PanelCard`, which is the labelled region
+   * and owns the name. Rendering the section here as well produced two nested
+   * regions called "Records disagree" -- ambiguous to anyone navigating by
+   * landmark, and caught by the accessibility suite rather than by eye.
+   * Standalone -- which is how the tests below render it -- it keeps its own.
+   */
+  headless?: boolean;
 }) {
   const found = disagreementsIn(entries);
 
+  const Frame = headless ? 'div' : 'section';
+  const frameProps = headless
+    ? {}
+    : { 'aria-labelledby': 'disagree-heading' };
+
   return (
-    <section
-      aria-labelledby="disagree-heading"
+    <Frame
+      {...frameProps}
       className="shrink-0 bg-ground px-4 py-3"
       data-testid="records-disagree"
     >
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h2 id="disagree-heading" className="text-micro uppercase tracking-widest text-muted">
-          Records disagree
-        </h2>
-        <p className="text-micro text-muted">
-          Where the paperwork and the measurement do not match. A crew should look.
-        </p>
-      </div>
+      {!headless && (
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 id="disagree-heading" className="text-micro uppercase tracking-widest text-muted">
+            Records disagree
+          </h2>
+          <p className="text-micro text-muted">
+            Where the paperwork and the measurement do not match. A crew should look.
+          </p>
+        </div>
+      )}
 
       {found.length === 0 ? (
         <p className="mt-2 text-micro text-muted">
@@ -163,6 +182,6 @@ export function RecordsDisagree({
           )}
         </>
       )}
-    </section>
+    </Frame>
   );
 }

@@ -377,13 +377,19 @@ describe('the layout', () => {
     // The camera views belong to the model wherever it is rendered.
     const model = screen.getByRole('region', { name: 'Structure' });
     expect(within(model).getByRole('group', { name: /fixed camera views/i })).toBeInTheDocument();
-    // The fleet column did not go anywhere to make room for it: the structure
-    // opens in the column beside it, under the disagreement list.
+    // The fleet column did not go anywhere to make room for it.
     expect(screen.getAllByRole('region', { name: /loop/i })).toHaveLength(1);
+    // The structure opens in the *middle* column, under the regional heat map
+    // and before the findings rail -- which is the column it occupies during an
+    // incident too, so the subject of the screen never changes place. It used
+    // to open under the disagreement list, when both shared one column.
+    const map = screen.getByRole('region', { name: 'Regional heat map' });
+    const disagree = screen.getByRole('region', { name: 'Records disagree' });
     expect(
-      screen
-        .getByRole('region', { name: 'Records disagree' })
-        .compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING,
+      map.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      model.compareDocumentPosition(disagree) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
   });
 
@@ -725,7 +731,10 @@ describe('the dispatch transition', () => {
   it('shows the elapsed clock and the incident identity', async () => {
     await dispatch();
     const banner = screen.getByLabelText('Active incident');
-    expect(within(banner).getByText(ADDRESS)).toBeInTheDocument();
+    // The street address leads: nobody rolls to a slug. The id stays on screen
+    // in parentheses, because it is what every event and log entry is keyed by.
+    expect(within(banner).getByText('450 Hayes St')).toBeInTheDocument();
+    expect(within(banner).getByText(`(${ADDRESS})`)).toBeInTheDocument();
     expect(within(banner).getByText('inc-1')).toBeInTheDocument();
     expect(within(banner).getByRole('status')).toBeInTheDocument();
   });
@@ -803,9 +812,23 @@ describe('the building imagery panel', () => {
     expect(screen.queryByRole('region', { name: 'Building imagery' })).not.toBeInTheDocument();
   });
 
-  it('shows the photograph of the incident address, with its attribution', async () => {
+  /**
+   * Open the panel and switch it to a photograph.
+   *
+   * The panel opens on the `3d` tile view, which streams in the browser and
+   * contacts no imagery endpoint. These tests are about what the *photograph*
+   * path does, so they ask for it explicitly rather than relying on whichever
+   * viewpoint happens to be the default.
+   */
+  async function openPhotograph() {
     await dispatchIncident();
     const panel = screen.getByRole('region', { name: 'Building imagery' });
+    fireEvent.click(within(panel).getByTestId('imagery-view-street'));
+    return panel;
+  }
+
+  it('shows the photograph of the incident address, with its attribution', async () => {
+    const panel = await openPhotograph();
     const photo = await within(panel).findByRole('img');
     expect(photo).toHaveAttribute('src', IMAGERY.data_url);
     expect(photo).toHaveAccessibleName(new RegExp(ADDRESS));
@@ -827,8 +850,7 @@ describe('the building imagery panel', () => {
         },
       }),
     );
-    await dispatchIncident();
-    const panel = screen.getByRole('region', { name: 'Building imagery' });
+    const panel = await openPhotograph();
     expect(await within(panel).findByText(/No street-level coverage/)).toBeInTheDocument();
     expect(within(panel).queryByRole('img')).not.toBeInTheDocument();
     // A 200 carrying a reason is an answer, not a failed request.
@@ -852,8 +874,7 @@ describe('the building imagery panel', () => {
         return base(input, init);
       }),
     );
-    await dispatchIncident();
-    const panel = screen.getByRole('region', { name: 'Building imagery' });
+    const panel = await openPhotograph();
     expect(await within(panel).findByText(/Imagery request failed/)).toBeInTheDocument();
     expect(within(panel).getByText(/imagery service timed out/)).toBeInTheDocument();
   });

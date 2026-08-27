@@ -69,6 +69,7 @@ describe('the allowlist', () => {
     `/api/v1/buildings/${ADDRESS}/timeline`,
     `/api/v1/buildings/${ADDRESS}/geometry`,
     `/api/v1/incidents/${INCIDENT_ID}/stream`,
+    `/api/v1/incidents/${INCIDENT_ID}/brief/stream-enriched`,
     `/api/v1/incidents/${INCIDENT_ID}/log`,
     '/api/v1/internal/audit/events',
     '/api/v1/internal/audit/decisions',

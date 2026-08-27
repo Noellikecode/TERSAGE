@@ -260,6 +260,17 @@ class FireDetection(BaseModel):
     acquired_at: datetime
     #: Instrument and platform as the feed named them, e.g. ``VIIRS (N)``.
     satellite: str = Field(min_length=1, max_length=60)
+    #: Channel-I4 brightness temperature, kelvin, as the feed reported it.
+    #:
+    #: **This is a temperature, not an anomaly.** VIIRS reports how hot the
+    #: pixel radiated; it does not ship a background to subtract, and this
+    #: product carries nothing that would let one be derived. A console that
+    #: printed "+8 °C above normal" would be inventing the normal. ``None``
+    #: where the feed omitted it -- never zero, which is 273 degrees of claim.
+    brightness_k: float | None = Field(default=None, ge=0.0)
+    #: Whether the pass was in daylight. Bears on how to read the reading: a
+    #: night detection is a thermal source rather than a sunlit surface.
+    daynight: Literal["day", "night", "unknown"] = "unknown"
     #: Whether this detection fell inside the city box. Computed once here so a
     #: console and a count cannot disagree about the same pixel.
     in_city: bool = False

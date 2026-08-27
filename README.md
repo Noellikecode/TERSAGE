@@ -292,7 +292,7 @@ should read a window count off a picture.
 
 ## Verification
 
-1,495 backend tests and 310 console tests. Strict mypy across 187 source files.
+1,505 backend tests and 330 console tests. Strict mypy across 187 source files.
 A contract suite that holds the in-memory and Firestore backends to one set of
 behaviours, an infrastructure suite that holds Terraform to the agent
 descriptors, and an observability suite that asserts telemetry carries no

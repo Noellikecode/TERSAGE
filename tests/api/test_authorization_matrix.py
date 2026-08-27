@@ -44,6 +44,15 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     # nothing, so it carries the same scope as the stats and queue it sits
     # beside on the same screen.
     Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/fire-activity", Role.VIEWER),
+    # The ground plane under that map is the same awareness at the same scope.
+    # It carries map imagery rather than department records, and the box it
+    # covers is read off the fire-activity answer rather than supplied by the
+    # caller, so there is nothing here a viewer may not already see.
+    Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/fire-activity/basemap", Role.VIEWER),
+    # One square of the terrain mesh. Same awareness, same scope: it carries
+    # public elevation and licensed map imagery, never department records, and
+    # the proxy refuses anything outside the district's own region.
+    Endpoint("GET", f"{PREFIX}/terrain/imagery/7/20/49", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/timeline", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/buildings/{ADDRESS}/narratives?q=stairwell", Role.VIEWER),

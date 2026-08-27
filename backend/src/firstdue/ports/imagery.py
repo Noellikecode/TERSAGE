@@ -33,6 +33,13 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from firstdue.errors import ValidationError
 
+# The box type is shared rather than redeclared. Two BoundingBox classes that
+# could disagree about corner order -- one on the detections, one on the ground
+# under them -- is exactly the class of quiet mismatch this codebase refuses
+# everywhere else, and a basemap placed against the wrong box puts every
+# detection on the wrong hillside.
+from firstdue.ports.fireactivity import BoundingBox
+
 #: Provider labels the console may receive. ``""`` accompanies a refusal --
 #: naming a provider that produced nothing would suggest one was reached.
 PROVIDER_STREET_VIEW: Final[str] = "street-view"
@@ -210,3 +217,98 @@ class ImageryClient(Protocol):
         worse served than one told there is no aerial.
         """
         ...
+
+    async def fetch_region(
+        self, *, bounds: BoundingBox, style: BasemapStyle = "terrain"
+    ) -> RegionBasemap:
+        """Return one image covering at least ``bounds``, and the ground it covers.
+
+        The regional counterpart of :meth:`fetch`, on the same port because it
+        is the same provider, the same key, the same rate limiter and the same
+        cache. A separate client would hold its own bucket and bill the
+        department twice.
+
+        One image, not a tile stream. A slippy basemap would put the browser on
+        a provider's host for every camera move and would need the key to get
+        there; a region that changes when somebody reconfigures it, and not
+        otherwise, is a single cached request.
+
+        Never raises, for the same reasons :meth:`fetch` does not.
+        """
+        ...
+
+
+#: Google's Terms require attribution on Static Maps imagery wherever it shows,
+#: and a basemap under a data layer is still the imagery being shown.
+STATIC_MAP_ATTRIBUTION: Final[str] = "Map data © Google"
+
+#: Provider label for the regional ground plane.
+PROVIDER_STATIC_MAP: Final[str] = "static-map"
+
+#: How the ground under the regional fire map is drawn.
+#:
+#: ``terrain`` is the default because the question the panel answers is *where
+#: is this burning relative to us* -- relief, the coastline and the valley floor
+#: are what place a cluster, and a satellite mosaic at this zoom is mostly a
+#: brown field with less legible edges. ``satellite`` is offered because a
+#: commander looking at a fire in the wildland-urban interface may want to see
+#: fuel rather than contour.
+BasemapStyle = Literal["terrain", "satellite"]
+
+
+class RegionBasemap(BaseModel):
+    """The ground under the regional fire map, or a stated refusal.
+
+    Bytes inline, exactly as :class:`BuildingImagery` carries them and for the
+    same reason: the server holds the key and the browser gets pixels.
+
+    **``bounds`` is not the box that was asked for.** A tile zoom is an integer,
+    so the smallest image that covers a requested region almost always covers
+    more than it, and the extra is not symmetric. What comes back is the ground
+    the returned pixels actually span, computed from the centre, the zoom and
+    the pixel size. A console that drew this image against the *requested* box
+    would stretch it, and every detection on top would sit a few kilometres from
+    where the satellite saw it -- an error that looks like nothing and is
+    impossible to notice by eye.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    available: bool
+    #: ``static-map``, ``synthetic``, or ``""`` on a refusal.
+    provider: str = Field(default="", max_length=40)
+    content_type: str = Field(default="", max_length=80)
+    #: ``data:image/png;base64,...``. Never a provider URL -- a signed Static
+    #: Maps URL is the key.
+    data_url: str = ""
+    #: The ground the returned pixels cover. See the class docstring.
+    bounds: BoundingBox | None = None
+    #: The Web Mercator zoom the image was rendered at. Carried so a console can
+    #: say how coarse the ground is, and so a bug in the bounds is reproducible
+    #: from the answer alone.
+    zoom: int = Field(default=0, ge=0, le=22)
+    style: str = Field(default="", max_length=20)
+    attribution: str = Field(default="", max_length=400)
+    unavailable_reason: str = Field(default="", max_length=400)
+
+    @model_validator(mode="after")
+    def _absence_says_why(self) -> RegionBasemap:
+        if not self.available:
+            if not self.unavailable_reason:
+                raise ValidationError("a basemap that is unavailable has to say why")
+            if self.data_url or self.bounds is not None:
+                raise ValidationError("a basemap that is unavailable cannot carry an image")
+            return self
+        if not self.data_url:
+            raise ValidationError("a basemap reported available has to carry an image")
+        if self.bounds is None:
+            # The image without its box is worse than no image: it would be
+            # drawn against something, and whatever that something was would be
+            # a guess nobody could see was wrong.
+            raise ValidationError("a basemap reported available has to carry the ground it covers")
+        return self
+
+    @classmethod
+    def refused(cls, refusal: ImageryUnavailable) -> RegionBasemap:
+        """The honest empty answer, with the reason attached."""
+        return cls(available=False, unavailable_reason=refusal.reason)

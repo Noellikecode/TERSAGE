@@ -47,7 +47,7 @@ import io
 import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from firstdue.adapters.nasa.power import ProviderDownError, provider_down
 from firstdue.errors import ConfigurationError
@@ -127,6 +127,9 @@ REQUIRED_COLUMNS: Final[frozenset[str]] = frozenset(
 
 #: VIIRS ships a letter. A letter in a console is a code an officer looks up.
 CONFIDENCE_CODES: Final[dict[str, Confidence]] = {"l": "low", "n": "nominal", "h": "high"}
+
+#: VIIRS ships one letter for the half of the orbit the pass was on.
+DAYNIGHT_CODES: Final[dict[str, Literal["day", "night", "unknown"]]] = {"D": "day", "N": "night"}
 
 
 class _FirmsRefusedError(Exception):
@@ -428,8 +431,18 @@ def _detection(row: dict[str, str | None], city: BoundingBox) -> FireDetection |
         frp_mw=max(0.0, frp) if frp is not None else 0.0,
         acquired_at=acquired_at,
         satellite=_platform(row),
+        # I4 is the fire channel. I5 is in the feed too and is not read: two
+        # brightness temperatures on one detection invite being differenced into
+        # an "anomaly", which is not what either of them means.
+        brightness_k=_positive(_number(row.get("bright_ti4"))),
+        daynight=DAYNIGHT_CODES.get((row.get("daynight") or "").strip().upper(), "unknown"),
         in_city=city.contains(latitude, longitude),
     )
+
+
+def _positive(value: float | None) -> float | None:
+    """A brightness temperature, or nothing. Kelvin cannot be negative."""
+    return value if value is not None and value > 0.0 else None
 
 
 def _number(raw: str | None) -> float | None:

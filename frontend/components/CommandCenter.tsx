@@ -94,8 +94,10 @@ import {
   normalizeFireActivity,
   type FireActivity,
 } from '@/components/standby/FireActivityMap';
+import { PanelCard } from '@/components/standby/PanelCard';
+import { RegionalHeatMap } from '@/components/standby/RegionalHeatMap';
 import { browserGet, browserPost } from '@/lib/api/client';
-import { useBriefStream } from '@/lib/api/stream';
+import { useBriefStream, useNarrativeStream } from '@/lib/api/stream';
 import type {
   AgentDescriptorView,
   AgentListResponse,
@@ -111,6 +113,7 @@ import type {
   QueueView,
   ReferralSummary,
   Readiness,
+  RegionBasemapView,
   ResolutionResponse,
   ResourceOutcomeView,
   SubscriptionListResponse,
@@ -352,8 +355,12 @@ export function CommandCenter({
   /** Street and aerial are photographs the backend fetches; `3d` is the tile
       renderer, which streams in the browser. One control, three viewpoints --
       the type is wider than `ImageryView` because only two of them are a
-      request the imagery port knows how to serve. */
-  const [imageryView, setImageryView] = useState<ImageryView | '3d'>('street');
+      request the imagery port knows how to serve.
+   *
+   * Opens on `3d`: it is the view that shows the building *and* what is packed
+   * around it, which is the first thing asked on arrival, and unlike the
+   * photographs it costs no metered request per address. */
+  const [imageryView, setImageryView] = useState<ImageryView | '3d'>('3d');
   const [agents] = useState<AgentDescriptorView[]>(initialAgents);
   const [subscriptions, setSubscriptions] = useState<SubscriptionView[]>(initialSubscriptions);
   const [events, setEvents] = useState<AuditEventView[]>(initialEvents);
@@ -401,6 +408,17 @@ export function CommandCenter({
   /** When the last fire-activity read went out, for the staleness check. */
   const fireActivityAtRef = useRef(0);
 
+  /**
+   * The ground plane under the regional heat map.
+   *
+   * Fetched once per district and deliberately *not* on the standby heartbeat:
+   * it is a half-megabyte image inline in a JSON body, it is cached for a week
+   * at the backend, and it changes only when somebody reconfigures the region.
+   * Putting it on a four-second poll would ship it fifteen times a minute to
+   * redraw an identical picture.
+   */
+  const [basemap, setBasemap] = useState<RegionBasemapView | null>(null);
+
   /** The hand-run slow-loop pass: idle, in flight, or finished with a word. */
   const [passRunning, setPassRunning] = useState(false);
   //: When the last pass finished, for the off-screen slow-loop line. Null until
@@ -426,6 +444,14 @@ export function CommandCenter({
   const [passNotice, setPassNotice] = useState<string | null>(null);
 
   const stream = useBriefStream(incident?.incident_id ?? null);
+  // Opening this stream is what *asks* for the prose -- it replaces the
+  // blocking POST the console used to fire and then wait on in silence. The
+  // persisted emission still arrives on the brief stream above; this carries
+  // only the provisional text, as it is written.
+  // Named `prose` rather than `narrative`: `narrative` above is the 911
+  // transcript this incident arrived with, which is a different thing entirely
+  // -- one is what a caller said, the other is what the model composed.
+  const prose = useNarrativeStream(incident?.incident_id ?? null);
   const announcedRef = useRef<number>(0);
 
   // The brief the officer is looking at: whatever arrived last on the stream,
@@ -450,6 +476,29 @@ export function CommandCenter({
    * Not a loop of its own: this is called once when standby opens and then only
    * from the standby poll, which is the console's single heartbeat.
    */
+  /**
+   * Read the ground plane once, when the district's region becomes known.
+   *
+   * Keyed on the district rather than the region box: the box comes from the
+   * fire-activity answer, and the backend derives the basemap from that same
+   * answer, so there is nothing here to pass and nothing that could disagree.
+   *
+   * A failure is silent on purpose. The heat map draws its rings, its bins and
+   * its key without a ground plane; what it loses is the coastline under them,
+   * and an error banner over a working map would misrepresent that.
+   */
+  useEffect(() => {
+    let live = true;
+    void browserGet<RegionBasemapView>(
+      `/api/v1/districts/${districtId}/fire-activity/basemap`,
+    ).then((result) => {
+      if (live && result.ok) setBasemap(result.data);
+    });
+    return () => {
+      live = false;
+    };
+  }, [districtId]);
+
   const refreshFireActivity = useCallback(
     async (signal?: AbortSignal) => {
       fireActivityAtRef.current = Date.now();
@@ -679,8 +728,10 @@ export function CommandCenter({
       setOutcomes([]);
       announcedRef.current = 0;
       await openProfile(result.data.address_id);
-      // Prose is asked for only after the instant brief is on screen.
-      void browserPost(`/api/v1/incidents/${result.data.incident_id}/brief/enrich`);
+      // Prose is no longer requested here. `useNarrativeStream` opens
+      // `/brief/stream-enriched` for this incident, which both asks for the
+      // composition and delivers it token by token -- the instant brief is
+      // already on screen before the first chunk lands, exactly as before.
       // And the drone goes up. Not awaited: the brief is what the first ninety
       // seconds are for, and the sweep paints onto it as each wall lands.
       void flyDroneSweep(result.data.incident_id, result.data.address_id);
@@ -1308,6 +1359,7 @@ export function CommandCenter({
         <IncidentBanner
           incidentId={incident.incident_id}
           addressId={incident.address_id}
+          addressDisplay={incident.address_display}
           alarmLevel={2}
           dispatchedAt={incident.dispatched_at}
           coldStart={incident.cold_start}
@@ -1380,13 +1432,17 @@ export function CommandCenter({
         </div>
 
         {!incident && (
-          /* Standby: the same two columns an incident uses, so the screen does
-             not change shape under an officer at the moment a fire starts. The
-             slow loop holds the left, wide; the rest carries the region --
-             what is burning out there and what the weather is doing -- then
-             the structures whose records disagree, then whichever one is open.
-             Stacks below `lg`, where two columns is one unreadable column. */
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:gap-x-4 lg:bg-ground lg:p-2 lg:grid-cols-[clamp(320px,24vw,420px)_minmax(0,1fr)] lg:overflow-hidden">
+          /* Standby: the same three columns an incident uses, so the screen
+             does not change shape under an officer at the moment a fire
+             starts. The slow loop holds the left. The middle is the subject --
+             in standby that is the region, drawn; on dispatch it becomes the
+             building. The right holds the findings: what is burning out there,
+             and which structures' records disagree, one card each.
+
+             Stacks below `lg`, where three columns is one unreadable column,
+             and the map keeps a floor height so it does not collapse to a
+             sliver above the cards. */
+          <div className="grid min-h-0 flex-1 grid-cols-1 gap-px bg-line lg:gap-x-4 lg:bg-ground lg:p-2 lg:grid-cols-[clamp(300px,21vw,380px)_minmax(0,1fr)_clamp(300px,23vw,400px)] lg:overflow-hidden">
             {fleetRegion({
               id: 'standby-fleet-heading',
               heading: 'Slow loop',
@@ -1399,18 +1455,26 @@ export function CommandCenter({
                 'flex min-w-0 flex-col bg-surface lg:min-h-0 lg:rounded-lg lg:border lg:border-line lg:overflow-hidden',
             })}
 
-            <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:overflow-y-auto">
-              <FireActivityMap activity={fireActivity} error={fireActivityError} />
-
-              <RecordsDisagree
-                entries={queue?.entries ?? []}
-                openConflicts={stats?.open_conflicts ?? null}
-                selectedAddressId={selected}
-                onSelect={openProfile}
-              />
+            {/* The middle: the region as a picture. The heat map holds the top
+                whether or not a structure is selected, because "what is
+                burning around us" does not stop being true when somebody opens
+                a building -- and the panel below it is the structure they
+                opened, which is what the middle column becomes on dispatch. */}
+            <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:gap-3 lg:bg-transparent lg:overflow-y-auto">
+              {/* Tall on purpose. The region is close to square and the column
+                  is wide, so a short frame makes `fitBounds` fit by height and
+                  leaves the map a stamp in the middle of empty space. This is
+                  the subject of the standby screen and it is sized like it. */}
+              <div className="flex min-h-[420px] flex-col bg-ground lg:min-h-[620px] lg:flex-1 lg:rounded-lg lg:border lg:border-line lg:overflow-hidden">
+                <RegionalHeatMap
+                  activity={fireActivity}
+                  error={fireActivityError}
+                  basemap={basemap}
+                />
+              </div>
 
               {profile && (
-                <>
+                <div className="flex flex-col gap-px bg-line lg:rounded-lg lg:border lg:border-line lg:overflow-hidden">
                   <div className="grid shrink-0 grid-cols-1 gap-px bg-line lg:grid-cols-[7fr_3fr]">
                     {structurePanel}
                     <div className="min-w-0 bg-ground p-4">
@@ -1422,8 +1486,46 @@ export function CommandCenter({
                     </div>
                   </div>
                   {profileSection}
-                </>
+                </div>
               )}
+            </div>
+
+            {/* The right: what the fleet found, one card per question. */}
+            <div className="flex min-w-0 flex-col gap-px bg-line lg:min-h-0 lg:gap-3 lg:bg-transparent lg:overflow-y-auto">
+              <PanelCard
+                id="standby-fire-activity-heading"
+                heading="Regional fire activity"
+                subheading="Satellite thermal detections and recent fire weather."
+                note={
+                  fireActivity?.regionalCount === null || fireActivity?.regionalCount === undefined
+                    ? undefined
+                    : `${fireActivity.regionalCount} detections`
+                }
+                className="shrink-0"
+              >
+                <FireActivityMap activity={fireActivity} error={fireActivityError} headless />
+              </PanelCard>
+
+              <PanelCard
+                id="standby-records-disagree-heading"
+                heading="Records disagree"
+                subheading="Structures whose paperwork and measurement do not match."
+                note={
+                  stats?.open_conflicts === null || stats?.open_conflicts === undefined
+                    ? undefined
+                    : `${stats.open_conflicts} open`
+                }
+                className="lg:min-h-0"
+                bodyClassName="lg:overflow-y-auto"
+              >
+                <RecordsDisagree
+                  entries={queue?.entries ?? []}
+                  openConflicts={stats?.open_conflicts ?? null}
+                  selectedAddressId={selected}
+                  onSelect={openProfile}
+                  headless
+                />
+              </PanelCard>
             </div>
 
           </div>
@@ -1467,7 +1569,19 @@ export function CommandCenter({
                 <h2 id="brief-heading" className="sr-only">
                   Incident brief
                 </h2>
-                <BriefPanel emission={latest} />
+                <BriefPanel
+                  emission={latest}
+                  emissions={stream.emissions}
+                  // Provisional prose is shown only while it belongs to a
+                  // version the panel has not yet received persisted. Once the
+                  // record has it, the record's copy is what is on screen.
+                  draftNarrative={
+                    prose.forVersion > (latest?.version ?? 0) || prose.writing
+                      ? prose.text
+                      : ''
+                  }
+                  writing={prose.writing}
+                />
                 {incident.intake && (
                   <div className="mt-4">
                     <IntakePanel intake={incident.intake} narrative={narrative} />

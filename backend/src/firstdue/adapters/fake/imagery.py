@@ -25,13 +25,18 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
 from typing import Final
 
+from firstdue.adapters.mercator import covering_image
 from firstdue.ports.city import CityAdapter
+from firstdue.ports.fireactivity import BoundingBox
 from firstdue.ports.imagery import (
     PROVIDER_SYNTHETIC,
+    BasemapStyle,
     BuildingImagery,
     ImageryView,
+    RegionBasemap,
     unavailable,
 )
 
@@ -39,6 +44,12 @@ from firstdue.ports.imagery import (
 #: console's imagery pane has one aspect ratio to lay out rather than two.
 _WIDTH: Final[int] = 640
 _HEIGHT: Final[int] = 480
+
+#: The synthetic ground plane. Square, and the same pixel count the live
+#: adapter asks Static Maps for, so the placement arithmetic the console runs is
+#: identical in both modes -- which is the point of having a second
+#: implementation rather than a stub.
+_BASEMAP_PX: Final[int] = 640
 
 #: Deliberately not photographic. Muted, obviously flat, and far from the
 #: colours a real facade photograph lands in.
@@ -100,6 +111,38 @@ class FakeImageryClient:
             # fake mode the line itself says what it is looking at.
             attribution="TERSAGE synthetic placeholder - no imagery provider was contacted",
             captured_hint="generated deterministically from the address; nothing was captured",
+        )
+
+    async def fetch_region(
+        self, *, bounds: BoundingBox, style: BasemapStyle = "terrain"
+    ) -> RegionBasemap:
+        """A graticule, drawn to the same box the live adapter would cover.
+
+        **The bounds are computed with the real Mercator arithmetic, not faked.**
+        That is the whole value of this method: the console's placement code --
+        the part that puts a fire on a hillside -- runs against the same numbers
+        in the demo as in production, so a projection bug shows up on a laptop
+        rather than only against a billed provider.
+
+        What is fake is the picture, and it says so across its face. There is no
+        coastline in it, because inventing one would draw a shoreline a
+        commander could mistake for the real one.
+        """
+        if not self._available:
+            return RegionBasemap.refused(unavailable("simulated_absence"))
+
+        _, _, zoom, covered = covering_image(bounds, width_px=_BASEMAP_PX, height_px=_BASEMAP_PX)
+        svg = _render_region(covered, zoom=zoom, style=style)
+        encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+        return RegionBasemap(
+            available=True,
+            provider=PROVIDER_SYNTHETIC,
+            content_type="image/svg+xml",
+            data_url=f"data:image/svg+xml;base64,{encoded}",
+            bounds=covered,
+            zoom=zoom,
+            style=style,
+            attribution="TERSAGE synthetic ground plane - no map provider was contacted",
         )
 
 
@@ -200,4 +243,69 @@ def _render_aerial(digest: bytes, *, display: str) -> str:
         f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" '
         f'fill="#8b97a8">{_escape(_SYNTHETIC_CAPTION)}</text>'
         f"</svg>"
+    )
+
+
+def _render_region(bounds: BoundingBox, *, zoom: int, style: BasemapStyle) -> str:
+    """The synthetic ground plane: a graticule, and an admission.
+
+    Whole-degree lines only. A finer grid would suggest the drawing knows
+    something about the ground between them, and it knows nothing at all -- it
+    is a coordinate reference and a statement that no map provider was reached.
+
+    Latitude lines are placed by *Mercator* fraction rather than by linear
+    interpolation, for the same reason the centre is projected before it is
+    averaged: at five degrees of height the two differ visibly, and a grid drawn
+    the wrong way would make the projection look broken when the detections on
+    top of it are placed correctly.
+    """
+    from firstdue.adapters.mercator import project_y
+
+    top = project_y(bounds.north)
+    bottom = project_y(bounds.south)
+    span_y = bottom - top or 1.0
+    span_x = (bounds.east - bounds.west) or 1.0
+
+    lines: list[str] = []
+    labels: list[str] = []
+
+    first_lat = math.ceil(bounds.south)
+    for latitude in range(first_lat, int(math.floor(bounds.north)) + 1):
+        y = (project_y(float(latitude)) - top) / span_y * _BASEMAP_PX
+        lines.append(
+            f'<line x1="0" y1="{y:.1f}" x2="{_BASEMAP_PX}" y2="{y:.1f}" '
+            'stroke="#2a323d" stroke-width="1"/>'
+        )
+        labels.append(
+            f'<text x="6" y="{y - 4:.1f}" fill="#5b6478" font-size="11" '
+            f'font-family="monospace">{latitude}°N</text>'
+        )
+
+    first_lon = math.ceil(bounds.west)
+    for longitude in range(first_lon, int(math.floor(bounds.east)) + 1):
+        x = (longitude - bounds.west) / span_x * _BASEMAP_PX
+        lines.append(
+            f'<line x1="{x:.1f}" y1="0" x2="{x:.1f}" y2="{_BASEMAP_PX}" '
+            'stroke="#2a323d" stroke-width="1"/>'
+        )
+        labels.append(
+            f'<text x="{x + 4:.1f}" y="{_BASEMAP_PX - 8}" fill="#5b6478" font-size="11" '
+            f'font-family="monospace">{abs(longitude)}°W</text>'
+        )
+
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{_BASEMAP_PX}" '
+        f'height="{_BASEMAP_PX}" viewBox="0 0 {_BASEMAP_PX} {_BASEMAP_PX}" role="img" '
+        f'aria-label="Synthetic {style} ground plane at zoom {zoom}. '
+        'No map provider was contacted; there is no coastline in this drawing.">'
+        f'<rect width="{_BASEMAP_PX}" height="{_BASEMAP_PX}" fill="#0f141a"/>'
+        f"{''.join(lines)}"
+        f"{''.join(labels)}"
+        f'<text x="{_BASEMAP_PX / 2:.0f}" y="{_BASEMAP_PX / 2:.0f}" fill="#242c37" '
+        'font-size="46" font-family="monospace" text-anchor="middle" '
+        'letter-spacing="10">SYNTHETIC</text>'
+        f'<text x="{_BASEMAP_PX / 2:.0f}" y="{_BASEMAP_PX / 2 + 26:.0f}" fill="#242c37" '
+        'font-size="13" font-family="monospace" text-anchor="middle">'
+        "no map provider was contacted</text>"
+        "</svg>"
     )

@@ -20,7 +20,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from firstdue.agents.actions import ActionFlow
@@ -46,7 +46,14 @@ from firstdue.domain.work import SurveyRecord
 from firstdue.errors import NotFoundError, ValidationError
 from firstdue.observability.metrics import METRICS
 from firstdue.ports.fireactivity import FireActivity, FireActivityClient
-from firstdue.ports.imagery import BuildingImagery, ImageryClient, ImageryView
+from firstdue.ports.imagery import (
+    BasemapStyle,
+    BuildingImagery,
+    ImageryClient,
+    ImageryView,
+    RegionBasemap,
+)
+from firstdue.ports.tiles import TileLayer
 from firstdue.services.surveys import SurveyService
 
 router = APIRouter(tags=["console"])
@@ -473,6 +480,121 @@ async def district_fire_activity(
     the browser.
     """
     return await _fire_activity_client(container).fetch(district_id=district_id)
+
+
+@router.get(
+    "/districts/{district_id}/fire-activity/basemap",
+    response_model=RegionBasemap,
+    summary="The ground plane under the regional fire map",
+)
+async def district_fire_activity_basemap(
+    district_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+    style: BasemapStyle = "terrain",
+) -> RegionBasemap:
+    """One image of the ground the detections were counted over.
+
+    **The box is not a parameter.** It is read back off the fire-activity answer
+    for this same district, so the picture and the pixels drawn on top of it are
+    guaranteed to describe the same region. A caller-supplied box would let a
+    console request a basemap for one area and detections for another, and the
+    result would look entirely reasonable while placing every fire wrong.
+
+    The response carries the box the returned image *actually* covers, which is
+    wider than the region -- a tile zoom is an integer. The console must draw the
+    image against that box and not against the region. See
+    :mod:`firstdue.adapters.mercator`.
+
+    One image rather than a tile stream, so the browser never talks to a map
+    provider and the key never leaves the server. It is cached for a week: this
+    changes when somebody reconfigures the region and at no other time.
+
+    **Always 200.** No Maps key, no fire-activity region, a dead provider or a
+    blown deadline all come back ``available=false`` with a sentence. The fire
+    map draws its graticule, its range rings and its detections regardless --
+    what it loses is the coastline under them.
+    """
+    activity = await _fire_activity_client(container).fetch(district_id=district_id)
+    if activity.region is None:
+        # No region means no fire-activity answer to place, so the honest reply
+        # is the one fire activity itself gave rather than a second guess at a
+        # box. Reusing the upstream sentence keeps the two panels agreeing about
+        # why the screen is empty.
+        return RegionBasemap(
+            available=False,
+            unavailable_reason=(
+                activity.unavailable_reason
+                or "no region was reported for this district, so there is no ground to draw"
+            ),
+        )
+    return await container.imagery.fetch_region(bounds=activity.region, style=style)
+
+
+@router.get(
+    "/terrain/{layer}/{z}/{x}/{y}",
+    summary="One map tile for the regional terrain mesh",
+    response_class=Response,
+    responses={200: {"content": {"image/png": {}, "image/jpeg": {}}}},
+)
+async def terrain_tile(
+    layer: TileLayer,
+    z: int,
+    x: int,
+    y: int,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> Response:
+    """Height, or the skin drawn over it, for one square of the region.
+
+    **Not under ``/districts``, because it is not per-district.** The tile client
+    is built once from ``FIRE_ACTIVITY_REGION``, which is a property of the
+    process rather than of a district -- this municipality's two districts share
+    one region and would share every tile. A district id in the path would have
+    been decorative, and a decorative path parameter is a claim that something
+    varies with it.
+
+    **Bytes, not JSON.** Every other read on this API answers with a document;
+    a tile answers with an image, because the console asks for hundreds of them
+    as a camera moves and base64 inside an envelope would cost a third more
+    bandwidth for nothing. It is the same authorization and the same scope as
+    the fire-activity read it belongs to.
+
+    **This is a proxy, and a narrow one.** The upstreams are AWS's public
+    ``terrarium`` grid for height and Google's Map Tiles API for imagery; the
+    Maps key and the tile session live in this process and neither reaches a
+    client. A tile outside the configured fire-activity region, or outside the
+    zoom range the terrain view uses, is refused before any upstream request is
+    made -- without that this endpoint is an open relay onto somebody else's
+    metered quota, reachable by anyone who can reach the console.
+
+    **Elevation bytes are data.** A terrarium pixel encodes metres in its RGB
+    channels, so the payload is passed through untouched: re-encoding it would
+    change the terrain rather than the file size, and would do it invisibly.
+
+    **404, not 200, for a refused tile.** This is the one read on this API that
+    does not answer a refusal with a document, because its caller is a tile
+    loader rather than a person: deck.gl reads a non-200 as "no tile here" and
+    draws the mesh with a gap, which is the correct rendering of a square that
+    is missing. A 200 carrying an explanation would be decoded as terrain.
+    """
+    tile = await container.tiles.fetch(layer=layer, z=z, x=x, y=y)
+    if not tile.available:
+        raise NotFoundError(
+            "no tile for this square",
+            details={
+                "layer": layer,
+                "z": z,
+                "x": x,
+                "y": y,
+                "reason": tile.unavailable_reason,
+            },
+        )
+    return Response(
+        content=tile.payload,
+        media_type=tile.content_type,
+        headers={"Cache-Control": f"private, max-age={tile.max_age_s}"},
+    )
 
 
 # --------------------------------------------------------------- buildings

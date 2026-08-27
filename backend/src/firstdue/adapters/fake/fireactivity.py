@@ -185,6 +185,12 @@ class FakeFireActivityClient:
             frp_mw=round(0.5 + (raw[5] / 255.0) * 40.0, 2),
             acquired_at=self._clock.now() - timedelta(minutes=minutes_back),
             satellite=SYNTHETIC_PLATFORM,
+            # The range the live feed actually spans over this region: measured
+            # at 295-367 K against NASA FIRMS, so a synthetic detection lands
+            # somewhere a real one could and the console's formatting is
+            # exercised on plausible numbers rather than on round ones.
+            brightness_k=round(295.0 + (raw[6] / 255.0) * 72.0, 2),
+            daynight="day" if raw[7] % 3 == 0 else "night",
             in_city=in_city,
         )
 

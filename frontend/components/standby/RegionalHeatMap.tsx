@@ -1,0 +1,1184 @@
+/**
+ * Regional fire activity in three dimensions: what is burning around us.
+ *
+ * **The question this answers is "how far from us, and how big".** VIIRS pixels
+ * are roughly 375 m across and the instrument is built for wildfire, so a
+ * room-and-contents fire on Hayes Street never reaches the detection threshold.
+ * The normal reading is an empty city inside a busy region, and that is not an
+ * alarm and not a fault -- it is what drives mutual-aid demand, pulls strike
+ * teams out of the city, puts smoke over the district and moves the red-flag
+ * posture. So the map is regional on purpose, the city's own count travels
+ * beside it, and the resolution note ships with every answer.
+ *
+ * **The ground is a mesh, not a plate.** A flat picture answers "where"; it does
+ * not answer "which side of the ridge", and at a five-degree box that is most of
+ * what terrain is for. Ridgelines are what wind follows, what a fire runs up,
+ * and what a crew has to drive around. `TerrainLayer` builds the mesh from two
+ * tiled grids -- public terrarium elevation and licensed satellite imagery --
+ * both proxied through this system, so the browser talks to one origin and the
+ * Maps key never leaves the server.
+ *
+ * **Vertical exaggeration is real and is declared.** Northern California's
+ * relief is about half a percent of the region's width; drawn true to scale it
+ * is a flat sheet. The mesh is exaggerated so the shape reads, the factor is a
+ * constant, and the key prints it -- an unlabelled exaggeration is a lie about
+ * how steep the country is.
+ *
+ * **What is drawn over it.**
+ *
+ * 1. A continuous heat field over the detections, weighted by fire radiative
+ *    power. Continuous rather than binned columns because that is what thermal
+ *    energy over a landscape looks like, and because a column at this scale
+ *    obscures the ground it is standing on.
+ * 2. The district, and range rings at 25, 50 and 100 km. This is the "how far"
+ *    half of the question, and a ring an officer can read a distance off beats
+ *    any amount of prose about it.
+ * 3. The strongest clusters, ranked and numbered, each openable for what the
+ *    instrument actually reported there.
+ *
+ * Everything above the mesh draws with `depthTest: false`. A heat field buried
+ * inside a hillside is not a subtler rendering of the same fact, it is a fire
+ * you cannot see.
+ *
+ * **A detection is not a fire.** VIIRS reports a pixel that ran hotter than its
+ * neighbours during one satellite pass, and the panel says "detections"
+ * throughout for that reason. Everything in the hotspot card is read off the
+ * feed -- radiative power, brightness temperature, the confidence flag, the pass
+ * time -- and nothing in it is modelled.
+ *
+ * **The district marker is not a detection.** It is a hollow ring in the live
+ * blue, never the fire ramp, and it is labelled. The panel this replaces
+ * refused to draw a city marker at all, on the grounds that a marker in an
+ * empty city makes the map look alive when it is not -- that objection is about
+ * inventing *activity*, and it stands. Drawing where the department is, in a
+ * colour the data never uses, answers "how far from us" without asserting
+ * anything about fire.
+ *
+ * **Nothing is inferred.** Every count, every box and every reading is read off
+ * the response. Where the response carries none, the panel says so and draws
+ * nothing.
+ */
+
+'use client';
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+
+import type { FireActivity, FireBBox, FireDetection } from '@/components/standby/FireActivityMap';
+import { gatewayPath } from '@/lib/api/client';
+import type { RegionBasemapView } from '@/lib/api/types';
+
+// ------------------------------------------------------------------ constants
+
+/**
+ * The console's thermal ramp, shared with the structure model's heat map.
+ *
+ * One hue, monotone lightness, validated against the `surface` token with the
+ * dataviz palette checker: a sequential ramp is the right family for a
+ * magnitude, and a rainbow would turn "how much energy" into a hue comparison
+ * nobody can rank.
+ *
+ * It is the same ramp the building's face temperatures use, which is a real
+ * risk worth naming: those are degrees and these are megawatts. They never
+ * appear on screen together -- the structure model is the incident view, this
+ * is standby -- and each carries its own key with its own units. Inventing a
+ * second hue for the second quantity would have cost more than it bought.
+ */
+const THERMAL_RAMP: ReadonlyArray<readonly [number, number, number]> = [
+  [138, 68, 16],
+  [178, 90, 16],
+  [217, 116, 16],
+  [245, 160, 42],
+  [255, 206, 104],
+];
+
+/**
+ * The same ramp, as the heat field reads it.
+ *
+ * `HeatmapLayer` maps density across this range and fades the low end out
+ * against `threshold`, so the darkest step is where the field begins rather
+ * than a floor colour painted over quiet ground. Deliberately not extended with
+ * a cool end: VIIRS does not report "cold", it reports nothing, and a blue
+ * periphery would be data where there is none.
+ */
+const HEAT_RANGE: ReadonlyArray<readonly [number, number, number]> = THERMAL_RAMP;
+
+/** The `live` token. Used for the district and its rings, and never for data. */
+const LIVE_BLUE: readonly [number, number, number] = [56, 189, 248];
+
+/**
+ * How far the mesh is stretched vertically.
+ *
+ * Northern California runs from sea level to about 2,700 m inside this box,
+ * across roughly 550 km of ground -- half a percent of the width. Drawn true to
+ * scale the terrain is a flat sheet, and the whole reason for a mesh is gone.
+ *
+ * Eight is the smallest factor at which the Coast Ranges, the Central Valley and
+ * the Sierra front read as three different things at a glance. **The key prints
+ * it**, because an unlabelled exaggeration is a claim about how steep the
+ * country is, and this one is eight times too steep.
+ */
+const VERTICAL_EXAGGERATION = 8;
+
+/**
+ * Terrarium's encoding, times the exaggeration.
+ *
+ * A terrarium pixel is `(r * 256 + g + b / 256) - 32768` metres. Scaling all
+ * four terms together stretches height uniformly, which is what an exaggeration
+ * has to be: scaling the scalers and forgetting the offset would raise sea level
+ * by 32 km.
+ */
+const TERRARIUM_DECODER = {
+  rScaler: 256 * VERTICAL_EXAGGERATION,
+  gScaler: 1 * VERTICAL_EXAGGERATION,
+  bScaler: (1 / 256) * VERTICAL_EXAGGERATION,
+  offset: -32768 * VERTICAL_EXAGGERATION,
+};
+
+/**
+ * Zooms the mesh is built at.
+ *
+ * The floor keeps the whole region on one screenful of tiles. The ceiling is the
+ * proxy's, and is deeper than this camera goes -- past it the squares are a
+ * street map, which is a different product and somebody else's quota.
+ */
+const TERRAIN_MIN_ZOOM = 5;
+const TERRAIN_MAX_ZOOM = 11;
+
+/**
+ * How far the heat field spreads from a detection, pixels.
+ *
+ * Screen-space, because that is how `HeatmapLayer` works: the field is a
+ * gaussian over the projected points, so a bin does not change size as the
+ * camera moves the way a ground-radius one would. Wide enough that two
+ * detections a few kilometres apart read as one area of activity, which is what
+ * they are.
+ */
+const HEAT_RADIUS_PX = 62;
+
+/**
+ * How many clusters get a number.
+ *
+ * Enough to rank what matters, few enough that the labels do not collide over a
+ * busy week. Everything else is still in the field and still in the totals --
+ * the numbering is a reading order, not a filter.
+ */
+const HOTSPOT_COUNT = 6;
+
+/**
+ * How close two detections have to be to count as one hotspot, kilometres.
+ *
+ * A VIIRS pass lays detections down in a line along the scan, so a single fire
+ * arrives as a scatter rather than a point. 25 km gathers one fire's worth of
+ * pixels without merging two valleys.
+ */
+const HOTSPOT_RADIUS_KM = 25;
+
+/** Range rings, kilometres. Mutual aid, then the drive that costs a shift. */
+const RING_KM: readonly number[] = [25, 50, 100];
+
+/**
+ * Zoom added after fitting, to pay for the tilt.
+ *
+ * `fitBounds` solves for a top-down camera; tilting one back widens the ground
+ * it sees and shrinks the subject into the middle of the frame. Empirical
+ * rather than derived -- the factor depends on the frame's aspect as well as
+ * the pitch -- and checked against a rendered frame rather than reasoned about.
+ */
+const PITCH_ZOOM_COMPENSATION = 0.78;
+
+/** Degrees of latitude per kilometre. Constant enough at any latitude. */
+const KM_PER_DEG_LAT = 110.574;
+
+// ------------------------------------------------------------------ geometry
+
+function ringPolygon(
+  centre: readonly [number, number],
+  km: number,
+  steps = 128,
+): [number, number][] {
+  const [longitude, latitude] = centre;
+  const degLat = km / KM_PER_DEG_LAT;
+  // Longitude degrees shrink towards the poles, so a circle on the ground is an
+  // ellipse in degrees. Using one radius for both axes draws a ring that is
+  // right north-south and 20% wrong east-west at this latitude, which an
+  // officer would read a distance off.
+  const degLon = km / (111.32 * Math.cos((latitude * Math.PI) / 180));
+  return Array.from({ length: steps + 1 }, (_, index) => {
+    const angle = (index / steps) * Math.PI * 2;
+    return [longitude + degLon * Math.cos(angle), latitude + degLat * Math.sin(angle)] as [
+      number,
+      number,
+    ];
+  });
+}
+
+function centreOf(box: FireBBox): [number, number] {
+  return [(box.west + box.east) / 2, (box.south + box.north) / 2];
+}
+
+/** Great-circle distance in kilometres. Used for the "nearest detection" line. */
+export function distanceKm(
+  from: readonly [number, number],
+  to: readonly [number, number],
+): number {
+  const [lon1, lat1] = from;
+  const [lon2, lat2] = to;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * The closest detection to the district, and how far.
+ *
+ * `null` when there are no detections or no district to measure from -- never
+ * a zero, which would read as "a fire at the station".
+ */
+export function nearestDetection(
+  detections: readonly FireDetection[],
+  centre: readonly [number, number] | null,
+): { detection: FireDetection; km: number } | null {
+  if (!centre || detections.length === 0) return null;
+  let best: { detection: FireDetection; km: number } | null = null;
+  for (const detection of detections) {
+    const km = distanceKm(centre, [detection.longitude, detection.latitude]);
+    if (best === null || km < best.km) best = { detection, km };
+  }
+  return best;
+}
+
+/**
+ * One cluster of detections, ranked, with only what the feed actually said.
+ *
+ * Every field here is read or summed from the payload. There is no risk score,
+ * no spread model and no "concern level": those would be a forecast, and this
+ * system does not make one from a five-day detection table.
+ */
+export interface Hotspot {
+  /** Rank by summed radiative power, 1 is the strongest. Not an id. */
+  rank: number;
+  longitude: number;
+  latitude: number;
+  detections: FireDetection[];
+  /** Megawatts, summed. The closest thing the feed has to "how big". */
+  totalFrp: number;
+  /** The single hottest pixel's radiative power. */
+  peakFrp: number;
+  /** Hottest brightness temperature in the cluster, kelvin, or null. */
+  peakBrightnessK: number | null;
+  /** The most recent satellite pass that saw any of it. */
+  lastSeen: string | null;
+  /** How many pixels carried each confidence flag. */
+  confidence: { high: number; nominal: number; low: number; unknown: number };
+  /** Passes by daylight and by night. */
+  daynight: { day: number; night: number; unknown: number };
+  /** Kilometres from the district, or null with no district to measure from. */
+  km: number | null;
+}
+
+function confidenceBucket(raw: string | number | null): keyof Hotspot['confidence'] {
+  if (typeof raw === 'number') {
+    // MODIS reports 0-100. The bands are the product's own.
+    if (raw >= 80) return 'high';
+    if (raw >= 30) return 'nominal';
+    return 'low';
+  }
+  const value = (raw ?? '').toString().trim().toLowerCase();
+  if (value === 'h' || value === 'high') return 'high';
+  if (value === 'n' || value === 'nominal') return 'nominal';
+  if (value === 'l' || value === 'low') return 'low';
+  return 'unknown';
+}
+
+/**
+ * Gather detections into ranked hotspots.
+ *
+ * Greedy and single-pass: strongest pixel first, each subsequent detection
+ * joining the nearest existing cluster within `HOTSPOT_RADIUS_KM` or starting
+ * its own. Not k-means, deliberately -- k-means needs a k nobody can justify and
+ * moves cluster centres between renders, so a hotspot numbered 3 could become 4
+ * because a pixel arrived on the far side of the region.
+ *
+ * The centre is **radiative-power weighted**, so a cluster's marker sits on the
+ * energy rather than on the middle of the scatter's bounding box.
+ */
+export function hotspotsFrom(
+  detections: readonly FireDetection[],
+  centre: readonly [number, number] | null,
+  { limit = HOTSPOT_COUNT, radiusKm = HOTSPOT_RADIUS_KM } = {},
+): Hotspot[] {
+  const ordered = [...detections].sort((a, b) => (b.frp ?? 0) - (a.frp ?? 0));
+  const groups: FireDetection[][] = [];
+  const seeds: [number, number][] = [];
+
+  for (const detection of ordered) {
+    const here: [number, number] = [detection.longitude, detection.latitude];
+    let best = -1;
+    let bestKm = Infinity;
+    for (let index = 0; index < seeds.length; index += 1) {
+      const seed = seeds[index];
+      if (!seed) continue;
+      const km = distanceKm(seed, here);
+      if (km < bestKm) {
+        bestKm = km;
+        best = index;
+      }
+    }
+    if (best >= 0 && bestKm <= radiusKm) {
+      groups[best]?.push(detection);
+    } else {
+      groups.push([detection]);
+      seeds.push(here);
+    }
+  }
+
+  const summarised = groups.map((group) => {
+    const weights = group.map((d) => d.frp ?? 0);
+    const total = weights.reduce((sum, frp) => sum + frp, 0);
+    // Falls back to an unweighted mean when nothing in the cluster reported a
+    // power, rather than dividing by zero and putting the marker at the origin.
+    const denominator = total > 0 ? total : group.length;
+    const longitude =
+      group.reduce((sum, d, i) => sum + d.longitude * (total > 0 ? (weights[i] ?? 0) : 1), 0) /
+      denominator;
+    const latitude =
+      group.reduce((sum, d, i) => sum + d.latitude * (total > 0 ? (weights[i] ?? 0) : 1), 0) /
+      denominator;
+
+    const brightnesses = group
+      .map((d) => d.brightness_k)
+      .filter((k): k is number => typeof k === 'number');
+    const times = group
+      .map((d) => d.acquired_at)
+      .filter((t): t is string => typeof t === 'string' && t !== '');
+
+    const confidence = { high: 0, nominal: 0, low: 0, unknown: 0 };
+    const daynight = { day: 0, night: 0, unknown: 0 };
+    for (const d of group) {
+      confidence[confidenceBucket(d.confidence)] += 1;
+      daynight[d.daynight] += 1;
+    }
+
+    return {
+      rank: 0,
+      longitude,
+      latitude,
+      detections: group,
+      totalFrp: total,
+      peakFrp: weights.length ? Math.max(...weights) : 0,
+      peakBrightnessK: brightnesses.length ? Math.max(...brightnesses) : null,
+      lastSeen: times.length ? times.sort().at(-1) ?? null : null,
+      confidence,
+      daynight,
+      km: centre ? distanceKm(centre, [longitude, latitude]) : null,
+    } satisfies Hotspot;
+  });
+
+  return summarised
+    .sort((a, b) => b.totalFrp - a.totalFrp)
+    .slice(0, limit)
+    .map((hotspot, index) => ({ ...hotspot, rank: index + 1 }));
+}
+
+/** Total fire radiative power across every detection, megawatts. */
+export function totalFrp(detections: readonly FireDetection[]): number | null {
+  const known = detections.map((d) => d.frp).filter((f): f is number => typeof f === 'number');
+  if (known.length === 0) return null;
+  return known.reduce((sum, frp) => sum + frp, 0);
+}
+
+// ------------------------------------------------------------------- WebGL
+
+/**
+ * Whether this browser can draw the map at all.
+ *
+ * Checked before deck.gl is mounted rather than left to throw inside it. Two
+ * real cases: a station tablet old enough to lack WebGL2, and jsdom, where the
+ * test suite renders this component and must get the panel's chrome rather than
+ * an exception. Either way the honest answer is the counts and a sentence
+ * saying the map could not be drawn -- not a blank rectangle.
+ */
+export function hasWebGL2(): boolean {
+  if (typeof document === 'undefined') return false;
+  try {
+    const canvas = document.createElement('canvas');
+    return canvas.getContext('webgl2') !== null;
+  } catch {
+    return false;
+  }
+}
+
+// --------------------------------------------------------------------- props
+
+export interface RegionalHeatMapProps {
+  activity: FireActivity | null;
+  /** A failed *request*, as distinct from an answered one carrying a refusal. */
+  error?: string | null;
+  basemap: RegionBasemapView | null;
+  /** Forced off for tests and for a browser with no WebGL2. */
+  webgl?: boolean;
+}
+
+/** The slice of deck.gl's picking info this panel reads. */
+interface HexPickingInfo {
+  picked?: boolean;
+  x?: number;
+  y?: number;
+  object?: { points?: unknown; elevationValue?: unknown } | null;
+}
+
+interface HoveredBin {
+  count: number;
+  frp: number;
+  x: number;
+  y: number;
+}
+
+// ---------------------------------------------------------------- the panel
+
+export function RegionalHeatMap({
+  activity,
+  error = null,
+  basemap,
+  webgl,
+}: RegionalHeatMapProps) {
+  const [deck, setDeck] = useState<DeckModules | null>(null);
+  /**
+   * Why the renderer is not on screen, when it is not.
+   *
+   * A panel that says "Drawing the region…" forever is the failure this
+   * codebase refuses everywhere else: it reads as "working" and it is not.
+   * The import can genuinely fail -- a chunk that 404s behind a stale service
+   * worker, a browser that rejects the module -- and when it does, this says
+   * so and the counts and key below still stand.
+   */
+  const [loadFailed, setLoadFailed] = useState<string | null>(null);
+  const [hovered, setHovered] = useState<HoveredBin | null>(null);
+  /** Which hotspot's card is open, by rank. Null is none, which is the default. */
+  const [selected, setSelected] = useState<number | null>(null);
+  const [size, setSize] = useState<{ width: number; height: number } | null>(null);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  /**
+   * A **callback** ref, not `useRef` plus a mount effect.
+   *
+   * The frame only exists in this component's success branch: before the first
+   * fire-activity answer arrives the panel renders a refusal instead, and that
+   * branch has no frame in it. A `useEffect(..., [])` therefore ran once, on a
+   * render where the node did not exist, found `null`, and never ran again --
+   * so the map sat on "Drawing the region…" permanently while every other part
+   * of the panel worked.
+   *
+   * `PhotorealisticModel` was bitten by the same shape and solved it by keeping
+   * its mount node in the tree in every state. A callback ref is the other
+   * solution and the better one here, because it also survives the frame being
+   * unmounted and remounted when the panel switches between refusal and data.
+   */
+  const frameRef = useCallback((node: HTMLDivElement | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (width > 0 && height > 0) setSize({ width, height });
+    });
+    observer.observe(node);
+    observerRef.current = observer;
+  }, []);
+
+  useEffect(() => () => observerRef.current?.disconnect(), []);
+
+  const drawable = webgl ?? hasWebGL2();
+
+  // deck.gl is imported only where it can run. A static import would pull
+  // luma.gl into the server bundle and into jsdom, where constructing a device
+  // throws before any of this component's own error handling can report it.
+  useEffect(() => {
+    if (!drawable) return;
+    let live = true;
+    loadDeck().then(
+      (modules) => {
+        if (live) setDeck(modules);
+      },
+      (cause: unknown) => {
+        if (!live) return;
+        // Named, not swallowed. Without this the panel waits for a promise
+        // that already rejected.
+        setLoadFailed(cause instanceof Error ? cause.message : 'the renderer could not be loaded');
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [drawable]);
+
+  // Memoised because `?? []` mints a new array every render, which would make
+  // every downstream memo and every deck.gl layer rebuild on each frame.
+  const detections = useMemo(() => activity?.detections ?? [], [activity]);
+  const districtCentre = activity?.cityBBox ? centreOf(activity.cityBBox) : null;
+  const nearest = useMemo(
+    () => nearestDetection(detections, districtCentre),
+    [detections, districtCentre],
+  );
+  const summedFrp = useMemo(() => totalFrp(detections), [detections]);
+  const hotspots = useMemo(
+    () => hotspotsFrom(detections, districtCentre),
+    [detections, districtCentre],
+  );
+  const openHotspot = hotspots.find((h) => h.rank === selected) ?? null;
+
+  /**
+   * Where the mesh's tiles come from, or null when there is no mesh.
+   *
+   * Inferred from the basemap rather than probed. Both are chosen by the same
+   * `IMAGERY_PROVIDER` switch in the container -- `_build_tiles` and
+   * `_build_imagery` read it identically -- so a basemap that answered means
+   * tiles will, and one that refused means they will not. Probing a tile to
+   * find out would spend a metered request to learn something the answer in
+   * hand already implies.
+   */
+  const tileBase =
+    basemap?.available === true
+      ? gatewayPath('/api/v1/terrain')
+      : null;
+
+  const heading = (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <h2 id="regional-heat-heading" className="text-label uppercase tracking-widest text-muted">
+        Regional heat map
+      </h2>
+      {activity?.source && (
+        <span className="font-mono text-micro text-muted">{activity.source}</span>
+      )}
+    </div>
+  );
+
+  if (error) {
+    return (
+      <Shell heading={heading}>
+        <p className="border border-dashed border-alarm px-3 py-2 text-micro text-alarm">
+          Fire-activity request failed: {error}
+        </p>
+      </Shell>
+    );
+  }
+
+  if (!activity || !activity.available) {
+    return (
+      <Shell heading={heading}>
+        <p className="border border-dashed border-line px-3 py-2 text-micro text-muted">
+          Fire activity UNAVAILABLE —{' '}
+          {activity?.unavailable_reason ?? 'the backend reported none. Nothing is inferred here.'}
+        </p>
+      </Shell>
+    );
+  }
+
+  /**
+   * What the camera frames -- the *region*, not the basemap.
+   *
+   * The basemap covers more ground than the region (integer zoom), so framing
+   * on it would leave a margin of ocean and Nevada on every side and shrink the
+   * subject. Framing on the region instead lets the ground plane bleed off the
+   * edges, which is what a map is supposed to do.
+   */
+  const bounds = activity.bbox ?? basemap?.bounds ?? null;
+
+  return (
+    <Shell heading={heading}>
+      {/* The counts live in the Regional fire activity card beside this one,
+          and are deliberately not repeated here: two panels printing the same
+          number is two places for it to drift. What this line carries is what
+          only the map can say -- how far the nearest anomaly is from the
+          district, which is the whole reason the rings are drawn. */}
+      <p className="mb-2 text-micro text-muted" data-testid="regional-heat-lede">
+        {nearest ? (
+          <>
+            Nearest detection{' '}
+            <span className="font-mono text-base text-ink">{nearest.km.toFixed(0)} km</span> from{' '}
+            {activity.cityLabel}
+          </>
+        ) : detections.length > 0 ? (
+          <>
+            {detections.length} {detections.length === 1 ? 'detection' : 'detections'} across{' '}
+            {activity.regionLabel} — no city box reported, so no distance is claimed
+          </>
+        ) : (
+          <>No detections in {activity.regionLabel} over the reported window</>
+        )}
+      </p>
+
+      <div
+        ref={frameRef}
+        className="relative min-h-[300px] flex-1 overflow-hidden rounded-md border border-line bg-ground lg:min-h-[440px]"
+        data-testid="regional-heat-canvas"
+      >
+        {drawable && deck && bounds && size ? (
+          <DeckScene
+            deck={deck}
+            bounds={bounds}
+            size={size}
+            basemap={basemap}
+            detections={detections}
+            districtCentre={districtCentre}
+            hotspots={hotspots}
+            selected={selected}
+            tileBase={tileBase}
+            onSelect={setSelected}
+            onHover={setHovered}
+          />
+        ) : (
+          <p className="absolute inset-0 flex items-center justify-center px-6 text-center text-micro text-muted">
+            {!drawable
+              ? 'This display cannot draw the map: no WebGL2. The counts above and the key below still apply.'
+              : loadFailed
+                ? `The map renderer could not be loaded: ${loadFailed}. The counts above and the key below still apply.`
+                : !bounds
+                  ? 'No bounding box reported, so there is nothing to project the detections onto.'
+                  : 'Drawing the region…'}
+          </p>
+        )}
+
+        {openHotspot && (
+          <HotspotCard
+            hotspot={openHotspot}
+            cityLabel={activity.cityLabel}
+            onClose={() => setSelected(null)}
+          />
+        )}
+
+        {hovered && !openHotspot && (
+          <div
+            className="pointer-events-none absolute z-10 rounded border border-line bg-surface/95 px-2 py-1 font-mono text-micro text-ink shadow-lg"
+            style={{ left: hovered.x + 12, top: hovered.y + 12 }}
+            role="status"
+          >
+            {hovered.count} {hovered.count === 1 ? 'detection' : 'detections'} ·{' '}
+            {hovered.frp.toFixed(1)} MW
+          </div>
+        )}
+      </div>
+
+      <MapKey
+        activity={activity}
+        detections={detections}
+        summedFrp={summedFrp}
+        basemap={basemap}
+      />
+    </Shell>
+  );
+}
+
+
+/**
+ * What the instrument actually reported at one hotspot.
+ *
+ * Every row is read or summed from the detection table. There is deliberately
+ * no risk score, no spread projection and no "concern level": a five-day
+ * detection table does not support one, and a number with a label like that
+ * would be acted on as though it did.
+ *
+ * **Brightness is a temperature, not an anomaly.** VIIRS says how hot the pixel
+ * radiated; it ships no background to subtract, so "+8 °C above normal" would be
+ * inventing the normal. It is printed as what it is, in °C, with the kelvin the
+ * feed sent it in.
+ *
+ * Fire weather is deliberately absent. It exists -- NASA POWER reanalysis, in
+ * the card beside this panel -- but it is regional and days old, and putting it
+ * inside a per-hotspot card would read as conditions measured *there, now*.
+ */
+function HotspotCard({
+  hotspot,
+  cityLabel,
+  onClose,
+}: {
+  hotspot: Hotspot;
+  cityLabel: string;
+  onClose: () => void;
+}) {
+  const celsius =
+    hotspot.peakBrightnessK === null ? null : hotspot.peakBrightnessK - 273.15;
+  const dominant =
+    hotspot.confidence.high >= hotspot.confidence.nominal &&
+    hotspot.confidence.high >= hotspot.confidence.low
+      ? 'high'
+      : hotspot.confidence.nominal >= hotspot.confidence.low
+        ? 'nominal'
+        : 'low';
+
+  return (
+    <div
+      className="absolute right-3 top-3 z-20 w-64 rounded-md border border-line bg-surface/95 p-3 shadow-lg"
+      role="dialog"
+      aria-label={`Hotspot ${hotspot.rank}`}
+      data-testid="hotspot-card"
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <h3 className="text-micro uppercase tracking-widest text-ink">
+          Hotspot {hotspot.rank}
+        </h3>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-micro text-muted underline underline-offset-2 hover:text-ink"
+        >
+          close
+        </button>
+      </div>
+
+      <dl className="mt-2 space-y-1">
+        <Row label="Radiative power" value={`${hotspot.totalFrp.toFixed(1)} MW`} accent />
+        <Row label="Hottest pixel" value={`${hotspot.peakFrp.toFixed(1)} MW`} />
+        <Row
+          label="Brightness"
+          value={
+            celsius === null
+              ? 'not reported'
+              : `${celsius.toFixed(0)} °C · ${hotspot.peakBrightnessK?.toFixed(0)} K`
+          }
+        />
+        <Row
+          label="Detections"
+          value={`${hotspot.detections.length} · ${dominant} confidence`}
+        />
+        <Row
+          label="Passes"
+          value={`${hotspot.daynight.day} day · ${hotspot.daynight.night} night`}
+        />
+        <Row
+          label={`From ${cityLabel}`}
+          value={hotspot.km === null ? 'not measurable' : `${hotspot.km.toFixed(0)} km`}
+        />
+        <Row
+          label="Last seen"
+          value={
+            hotspot.lastSeen
+              ? new Date(hotspot.lastSeen).toISOString().replace('T', ' ').slice(0, 16) + 'Z'
+              : 'not reported'
+          }
+        />
+      </dl>
+
+      <p className="mt-2 text-micro leading-4 text-muted">
+        A satellite pass, not a fire report. Nothing here is modelled.
+      </p>
+    </div>
+  );
+}
+
+function Row({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-micro text-muted">{label}</dt>
+      <dd className={`font-mono text-micro ${accent ? 'text-disputed' : 'text-ink'}`}>{value}</dd>
+    </div>
+  );
+}
+
+function Shell({ heading, children }: { heading: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section
+      aria-labelledby="regional-heat-heading"
+      className="flex min-h-0 flex-col bg-ground px-4 py-3"
+      data-testid="regional-heat"
+    >
+      {heading}
+      <div className="mt-2 flex min-h-0 flex-1 flex-col">{children}</div>
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------- the key
+
+/**
+ * The key. Not decoration: a height and a colour with no units is a picture of
+ * nothing, and this is the only place the bin radius and the window appear.
+ */
+function MapKey({
+  activity,
+  detections,
+  summedFrp,
+  basemap,
+}: {
+  activity: FireActivity;
+  detections: readonly FireDetection[];
+  summedFrp: number | null;
+  basemap: RegionBasemapView | null;
+}) {
+  const peak = useMemo(() => {
+    const frps = detections.map((d) => d.frp).filter((f): f is number => typeof f === 'number');
+    return frps.length ? Math.max(...frps) : null;
+  }, [detections]);
+
+  return (
+    <div className="mt-2 shrink-0 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span className="text-micro uppercase tracking-widest text-muted">Fire radiative power</span>
+        <span className="flex items-center gap-1" aria-hidden="true">
+          {THERMAL_RAMP.map((rgb) => (
+            <span
+              key={rgb.join(',')}
+              className="h-2.5 w-6 rounded-sm"
+              style={{ background: `rgb(${rgb.join(',')})` }}
+            />
+          ))}
+        </span>
+        <span className="font-mono text-micro text-muted">
+          low → high{peak !== null && <> · peak {peak.toFixed(0)} MW</>}
+        </span>
+      </div>
+
+      <p className="text-micro leading-5 text-muted">
+        The field is weighted by radiative power and{' '}
+        <strong className="text-ink">relative to the busiest area in this window</strong> — a quiet
+        week and a bad one fill the frame alike, so the absolute figures are the ones here. Numbered
+        pins are the {HOTSPOT_COUNT} strongest clusters; click one for what the instrument reported.
+        Rings mark {RING_KM.join(', ')} km from the district.
+        {summedFrp !== null && (
+          <>
+            {' '}
+            Region total <span className="font-mono text-ink">{summedFrp.toFixed(0)} MW</span> over{' '}
+            {detections.length} {detections.length === 1 ? 'detection' : 'detections'}.
+          </>
+        )}
+      </p>
+
+      <p className="text-micro leading-5 text-muted">
+        Terrain is drawn at{' '}
+        <strong className="text-ink">×{VERTICAL_EXAGGERATION} vertical exaggeration</strong>. The
+        region is 550 km across and its relief is under half a percent of that, so true scale is a
+        flat sheet — the shape is real, the steepness is not.
+      </p>
+
+      {activity.resolution_note ? (
+        <p className="text-micro leading-5 text-muted">{activity.resolution_note}</p>
+      ) : (
+        <details>
+          <summary className="cursor-pointer text-micro text-muted hover:text-ink">
+            Why the city is always empty
+          </summary>
+          <p className="mt-1 text-micro leading-5 text-muted">
+            VIIRS pixels are ~375 m and built for wildfire, so a structure fire never registers
+            here. An empty city inside a busy region is the instrument working, not a fault.
+          </p>
+        </details>
+      )}
+
+      {/* Google's Terms require attribution wherever Maps imagery shows, and a
+          basemap under a data layer is still the imagery being shown. */}
+      {basemap?.attribution && (
+        <p className="font-mono text-micro text-muted">{basemap.attribution}</p>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------ deck.gl
+
+interface DeckModules {
+  DeckGL: typeof import('@deck.gl/react').default;
+  BitmapLayer: typeof import('@deck.gl/layers').BitmapLayer;
+  PathLayer: typeof import('@deck.gl/layers').PathLayer;
+  ScatterplotLayer: typeof import('@deck.gl/layers').ScatterplotLayer;
+  TextLayer: typeof import('@deck.gl/layers').TextLayer;
+  HeatmapLayer: typeof import('@deck.gl/aggregation-layers').HeatmapLayer;
+  TerrainLayer: typeof import('@deck.gl/geo-layers').TerrainLayer;
+  WebMercatorViewport: typeof import('@deck.gl/core').WebMercatorViewport;
+}
+
+async function loadDeck(): Promise<DeckModules> {
+  const [react, layers, aggregation, geo, core] = await Promise.all([
+    import('@deck.gl/react'),
+    import('@deck.gl/layers'),
+    import('@deck.gl/aggregation-layers'),
+    import('@deck.gl/geo-layers'),
+    import('@deck.gl/core'),
+  ]);
+  return {
+    DeckGL: react.default,
+    BitmapLayer: layers.BitmapLayer,
+    PathLayer: layers.PathLayer,
+    ScatterplotLayer: layers.ScatterplotLayer,
+    TextLayer: layers.TextLayer,
+    HeatmapLayer: aggregation.HeatmapLayer,
+    TerrainLayer: geo.TerrainLayer,
+    WebMercatorViewport: core.WebMercatorViewport,
+  };
+}
+
+/** Draw over the mesh rather than inside it. See the module docstring. */
+const OVER_TERRAIN = { depthTest: false } as const;
+
+function DeckScene({
+  deck,
+  bounds,
+  size,
+  basemap,
+  detections,
+  districtCentre,
+  hotspots,
+  selected,
+  tileBase,
+  onSelect,
+  onHover,
+}: {
+  deck: DeckModules;
+  bounds: FireBBox;
+  size: { width: number; height: number };
+  basemap: RegionBasemapView | null;
+  detections: readonly FireDetection[];
+  districtCentre: readonly [number, number] | null;
+  hotspots: readonly Hotspot[];
+  selected: number | null;
+  /** Tile template root, or null when the mesh cannot be built. */
+  tileBase: string | null;
+  onSelect: (rank: number | null) => void;
+  onHover: (bin: HoveredBin | null) => void;
+}) {
+  const {
+    DeckGL,
+    BitmapLayer,
+    PathLayer,
+    ScatterplotLayer,
+    TextLayer,
+    HeatmapLayer,
+    TerrainLayer,
+    WebMercatorViewport,
+  } = deck;
+
+  const initialViewState = useMemo(() => {
+    const viewport = new WebMercatorViewport({ width: size.width, height: size.height });
+    const fitted = viewport.fitBounds(
+      [
+        [bounds.west, bounds.south],
+        [bounds.east, bounds.north],
+      ],
+      { padding: 24 },
+    );
+    return {
+      longitude: fitted.longitude,
+      latitude: fitted.latitude,
+      // `fitBounds` solves for a top-down camera. Tilting one back widens the
+      // ground it can see, so the region it just fitted shrinks into the middle
+      // of the frame with a margin all round. This is the compensation, and it
+      // is a constant because the pitch is.
+      zoom: fitted.zoom + PITCH_ZOOM_COMPENSATION,
+      // Steep enough that the relief reads as relief. Past about 55 the far
+      // edge of the region compresses into a band and the ridges stack.
+      pitch: 50,
+      bearing: 0,
+    };
+    // The camera is *initial* state: recomputing it as the user orbits would
+    // yank the view back. It is keyed on the region and the frame instead.
+  }, [WebMercatorViewport, bounds, size.width, size.height]);
+
+  const layers = useMemo(() => {
+    const built: unknown[] = [];
+
+    if (tileBase) {
+      built.push(
+        new TerrainLayer({
+          id: 'region-terrain',
+          minZoom: TERRAIN_MIN_ZOOM,
+          maxZoom: TERRAIN_MAX_ZOOM,
+          elevationDecoder: TERRARIUM_DECODER,
+          elevationData: `${tileBase}/elevation/{z}/{x}/{y}`,
+          texture: `${tileBase}/imagery/{z}/{x}/{y}`,
+          // Coarser than the default, on purpose: the mesh is regional scenery
+          // under a data layer, not a survey, and a tighter tolerance spends
+          // frame time triangulating ground nobody is measuring.
+          meshMaxError: 12,
+          // Flat-lit rather than shaded by a light this scene does not have.
+          // A specular hillside under an orange heat field reads as more fire.
+          material: false,
+          // A square that 404s is a hole, not a failure: the heat field, the
+          // rings and the key are all drawn regardless.
+          onTileError: () => {},
+        }),
+      );
+    } else if (basemap?.available && basemap.data_url && basemap.bounds) {
+      // No mesh: fall back to the one flat image, drawn against the box it
+      // actually covers. Strictly worse and strictly honest -- it is the same
+      // ground, without the shape.
+      built.push(
+        new BitmapLayer({
+          id: 'region-ground',
+          image: basemap.data_url,
+          bounds: [
+            basemap.bounds.west,
+            basemap.bounds.south,
+            basemap.bounds.east,
+            basemap.bounds.north,
+          ],
+          opacity: 1,
+        }),
+      );
+    }
+
+    if (detections.length > 0) {
+      built.push(
+        new HeatmapLayer({
+          id: 'heat-field',
+          data: detections as FireDetection[],
+          getPosition: (d: FireDetection) => [d.longitude, d.latitude],
+          // Weighted by radiative power, not by count: ten smouldering pixels
+          // and one campaign fire are not the same event.
+          getWeight: (d: FireDetection) => d.frp ?? 0,
+          radiusPixels: HEAT_RADIUS_PX,
+          intensity: 1,
+          // The field fades out rather than resolving into a cool colour. VIIRS
+          // does not report "cool" -- it reports nothing there -- and painting
+          // the quiet ground blue would be data where there is none.
+          threshold: 0.05,
+          colorRange: HEAT_RANGE.map((rgb) => [...rgb]) as [number, number, number][],
+          opacity: 0.75,
+          parameters: OVER_TERRAIN,
+        }),
+      );
+    }
+
+    if (districtCentre) {
+      built.push(
+        new PathLayer({
+          id: 'range-rings',
+          data: RING_KM.map((km) => ({ km, path: ringPolygon(districtCentre, km) })),
+          getPath: (d: { path: [number, number][] }) => d.path,
+          getColor: [...LIVE_BLUE, 90] as [number, number, number, number],
+          getWidth: 1.5,
+          widthUnits: 'pixels',
+          widthMinPixels: 1,
+          parameters: OVER_TERRAIN,
+        }),
+        new TextLayer({
+          id: 'range-ring-labels',
+          data: RING_KM.map((km) => ({
+            km,
+            position: [districtCentre[0], districtCentre[1] + km / KM_PER_DEG_LAT],
+          })),
+          getPosition: (d: { position: [number, number] }) => d.position,
+          getText: (d: { km: number }) => `${d.km} km`,
+          getSize: 10,
+          getColor: [...LIVE_BLUE, 170] as [number, number, number, number],
+          fontFamily: 'ui-monospace, Menlo, monospace',
+          getTextAnchor: 'middle',
+          getAlignmentBaseline: 'bottom',
+          parameters: OVER_TERRAIN,
+        }),
+        // The district itself: hollow, in a colour no data uses, so it can
+        // never be read as a detection.
+        new ScatterplotLayer({
+          id: 'district-marker',
+          data: [{ position: districtCentre }],
+          getPosition: (d: { position: [number, number] }) => d.position,
+          stroked: true,
+          filled: false,
+          getLineColor: [...LIVE_BLUE, 230] as [number, number, number, number],
+          getRadius: 5,
+          radiusUnits: 'pixels',
+          lineWidthMinPixels: 2,
+          parameters: OVER_TERRAIN,
+        }),
+      );
+    }
+
+    if (hotspots.length > 0) {
+      built.push(
+        new ScatterplotLayer({
+          id: 'hotspot-pins',
+          data: hotspots as Hotspot[],
+          getPosition: (d: Hotspot) => [d.longitude, d.latitude],
+          stroked: true,
+          filled: true,
+          getFillColor: (d: Hotspot) =>
+            (d.rank === selected ? [255, 206, 104, 235] : [24, 18, 14, 205]) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+          getLineColor: [255, 206, 104, 240] as [number, number, number, number],
+          getRadius: (d: Hotspot) => (d.rank === selected ? 15 : 12),
+          radiusUnits: 'pixels',
+          lineWidthMinPixels: 2,
+          pickable: true,
+          onClick: (info: HexPickingInfo) => {
+            const hotspot = info.object as Hotspot | null | undefined;
+            // Clicking the open one closes it, so the card is dismissable
+            // without hunting for an X.
+            onSelect(hotspot && hotspot.rank !== selected ? hotspot.rank : null);
+            return true;
+          },
+          onHover: (info: HexPickingInfo): boolean => {
+            const hotspot = info.object as Hotspot | null | undefined;
+            if (!info.picked || !hotspot) {
+              onHover(null);
+              return false;
+            }
+            onHover({
+              count: hotspot.detections.length,
+              frp: hotspot.totalFrp,
+              x: info.x ?? 0,
+              y: info.y ?? 0,
+            });
+            return false;
+          },
+          parameters: OVER_TERRAIN,
+        }),
+        new TextLayer({
+          id: 'hotspot-ranks',
+          data: hotspots as Hotspot[],
+          getPosition: (d: Hotspot) => [d.longitude, d.latitude],
+          getText: (d: Hotspot) => String(d.rank),
+          getSize: 13,
+          getColor: (d: Hotspot) =>
+            (d.rank === selected ? [24, 18, 14, 255] : [255, 206, 104, 255]) as [
+              number,
+              number,
+              number,
+              number,
+            ],
+          fontFamily: 'ui-monospace, Menlo, monospace',
+          fontWeight: 700,
+          getTextAnchor: 'middle',
+          getAlignmentBaseline: 'center',
+          parameters: OVER_TERRAIN,
+        }),
+      );
+    }
+
+    return built;
+  }, [
+    BitmapLayer,
+    PathLayer,
+    ScatterplotLayer,
+    TextLayer,
+    HeatmapLayer,
+    TerrainLayer,
+    basemap,
+    detections,
+    districtCentre,
+    hotspots,
+    onHover,
+    onSelect,
+    selected,
+    tileBase,
+  ]);
+
+  return (
+    <DeckGL
+      initialViewState={initialViewState}
+      controller={{ dragRotate: true }}
+      layers={layers as never}
+      style={{ position: 'absolute', inset: '0px' }}
+      getCursor={({ isDragging }: { isDragging: boolean }) =>
+        isDragging ? 'grabbing' : 'crosshair'
+      }
+    />
+  );
+}

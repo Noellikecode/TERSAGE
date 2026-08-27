@@ -35,20 +35,27 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final
 
+from firstdue.adapters.mercator import covering_image
 from firstdue.errors import ConfigurationError
 from firstdue.observability.logging import get_logger
 from firstdue.ports.city import CityAdapter
 from firstdue.ports.clock import Clock
+from firstdue.ports.fireactivity import BoundingBox
 from firstdue.ports.imagery import (
     GOOGLE_ATTRIBUTION,
     PROVIDER_SATELLITE,
+    PROVIDER_STATIC_MAP,
     PROVIDER_STREET_VIEW,
+    STATIC_MAP_ATTRIBUTION,
+    BasemapStyle,
     BuildingImagery,
     ImageryView,
+    RegionBasemap,
     unavailable,
 )
 from firstdue.sources.framework import RateLimiter
@@ -80,6 +87,50 @@ DEFAULT_SATELLITE_ZOOM: Final[int] = 20
 #: this is not a building photograph, it is a problem.
 MAX_IMAGE_BYTES: Final[int] = 4 * 1024 * 1024
 
+#: The ground plane under the regional fire map. Square, because the region it
+#: covers is roughly square and a mismatched aspect wastes the shorter axis on
+#: ocean. 640 is the Static Maps ceiling per side; ``scale=2`` doubles the
+#: pixels over the same ground, which is what makes a coastline legible when
+#: the map is tilted away from the camera.
+DEFAULT_BASEMAP_SIZE_PX: Final[int] = 640
+DEFAULT_BASEMAP_SCALE: Final[int] = 2
+
+#: A regional basemap changes when somebody reconfigures the region and at no
+#: other time, so this is deliberately far longer than the imagery TTL. The
+#: detections on top of it refresh on their own cadence.
+DEFAULT_BASEMAP_CACHE_TTL: Final[timedelta] = timedelta(days=7)
+
+#: The ground plane, restyled to the console's own palette at the provider.
+#:
+#: Static Maps' default terrain is a bright green-and-cream cartographic map. On
+#: this console it would be the brightest thing on a dark screen, and the fire
+#: detections drawn over it are a warm sequential ramp whose dark end would
+#: disappear into the tan. Dimming it in the browser is the obvious fix and the
+#: worse one: it costs a full-resolution image's worth of bandwidth to throw
+#: most of it away, and a desaturated bright map is grey mush rather than
+#: legible relief.
+#:
+#: Styling at the provider instead returns a map that is already dark, keeps
+#: terrain shading as the strongest signal in it, and drops the features that
+#: are noise at this zoom -- road labels and points of interest, which at a
+#: five-degree box are unreadable anyway.
+#:
+#: Colours are the console's tokens: ``ground`` #0a0c0f behind label strokes,
+#: ``muted`` #8b97a8 for label fills, ``line`` #2a323d for administrative
+#: borders. What survives is exactly what places a fire: coastline, relief,
+#: county lines, and the name of the nearest town.
+DARK_BASEMAP_STYLE: Final[tuple[str, ...]] = (
+    "element:geometry|color:0x141a22",
+    "element:labels.text.stroke|color:0x0a0c0f",
+    "element:labels.text.fill|color:0x8b97a8",
+    "feature:water|element:geometry|color:0x070a0e",
+    "feature:landscape.natural.terrain|element:geometry|color:0x1a222c",
+    "feature:poi|element:labels|visibility:off",
+    "feature:road|element:geometry|color:0x232c38",
+    "feature:road|element:labels|visibility:off",
+    "feature:administrative|element:geometry.stroke|color:0x2a323d",
+)
+
 
 class _ProviderDownError(Exception):
     """The provider could not be reached or answered an error.
@@ -108,6 +159,12 @@ class _CacheEntry:
     expires_at: datetime
 
 
+@dataclass(slots=True)
+class _BasemapCacheEntry:
+    basemap: RegionBasemap
+    expires_at: datetime
+
+
 class UnconfiguredImageryClient:
     """Live mode with no Maps key: the documented state, not an error.
 
@@ -124,6 +181,14 @@ class UnconfiguredImageryClient:
     async def fetch(self, *, address_id: str, view: ImageryView = "street") -> BuildingImagery:
         # Every view is equally unconfigured without a key.
         return BuildingImagery.refused(address_id, unavailable("unconfigured"))
+
+    async def fetch_region(
+        self, *, bounds: BoundingBox, style: BasemapStyle = "terrain"
+    ) -> RegionBasemap:
+        # The fire map draws its graticule, its range rings and its detections
+        # regardless; what it loses without a key is the coastline under them,
+        # and it says so rather than showing an unexplained void.
+        return RegionBasemap.refused(unavailable("unconfigured"))
 
 
 class GoogleImageryClient:
@@ -147,6 +212,9 @@ class GoogleImageryClient:
         max_concurrency: int = 4,
         size: str = DEFAULT_SIZE,
         satellite_zoom: int = DEFAULT_SATELLITE_ZOOM,
+        basemap_size_px: int = DEFAULT_BASEMAP_SIZE_PX,
+        basemap_scale: int = DEFAULT_BASEMAP_SCALE,
+        basemap_cache_ttl: timedelta = DEFAULT_BASEMAP_CACHE_TTL,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not api_key:
@@ -170,6 +238,10 @@ class GoogleImageryClient:
         self._gate = asyncio.Semaphore(max_concurrency)
         self._transport = transport
         self._cache: dict[str, _CacheEntry] = {}
+        self._basemap_size_px = basemap_size_px
+        self._basemap_scale = basemap_scale
+        self._basemap_cache_ttl = basemap_cache_ttl
+        self._basemap_cache: dict[str, _BasemapCacheEntry] = {}
         self.cache_hits = 0
         self.upstream_calls = 0
 
@@ -211,6 +283,83 @@ class GoogleImageryClient:
 
         return self._remember(cache_key, imagery, now)
 
+    async def fetch_region(
+        self, *, bounds: BoundingBox, style: BasemapStyle = "terrain"
+    ) -> RegionBasemap:
+        """One Static Maps image covering ``bounds``, plus the ground it covers.
+
+        The zoom is chosen rather than configured, because the box is the input
+        and an integer zoom is the only thing a tile server will render at. The
+        box that comes back is therefore wider than the one asked for, and it is
+        computed from the same centre, zoom and pixel size the request used --
+        see :mod:`firstdue.adapters.mercator` for why placing the image against
+        the *requested* box instead would misplace every detection drawn on it.
+
+        ``scale`` is on the request and deliberately not in the bounds
+        arithmetic: it buys pixels, not ground.
+        """
+        now = self._clock.now()
+        cache_key = f"{style}#{bounds.as_query()}#{self._basemap_size_px}x{self._basemap_scale}"
+        cached = self._basemap_cache.get(cache_key)
+        if cached is not None and now < cached.expires_at:
+            self.cache_hits += 1
+            return cached.basemap
+
+        if self._limiter.take(now) > 0.0:
+            logger.warning("basemap_rate_limited", extra={"box": bounds.as_query()})
+            return RegionBasemap.refused(unavailable("rate_limited"))
+
+        latitude, longitude, zoom, covered = covering_image(
+            bounds, width_px=self._basemap_size_px, height_px=self._basemap_size_px
+        )
+
+        async with self._gate:
+            try:
+                async with asyncio.timeout(self._deadline_s):
+                    import httpx
+
+                    async with httpx.AsyncClient(
+                        timeout=self._deadline_s, transport=self._transport
+                    ) as client:
+                        found = await self._image(
+                            client,
+                            STATIC_MAP_URL,
+                            [
+                                ("center", f"{latitude:.6f},{longitude:.6f}"),
+                                ("zoom", str(zoom)),
+                                ("size", f"{self._basemap_size_px}x{self._basemap_size_px}"),
+                                ("scale", str(self._basemap_scale)),
+                                ("maptype", style),
+                                *(("style", rule) for rule in DARK_BASEMAP_STYLE),
+                            ],
+                        )
+            except TimeoutError:
+                logger.warning("basemap_deadline_exceeded", extra={"box": bounds.as_query()})
+                return RegionBasemap.refused(unavailable("deadline"))
+            except _ProviderDownError as exc:
+                logger.warning("basemap_provider_down", extra={"error_type": exc.error_type})
+                code = "deadline" if exc.timed_out else "provider_unreachable"
+                return RegionBasemap.refused(unavailable(code))
+
+        if found is None:
+            return RegionBasemap.refused(unavailable("no_coverage"))
+
+        payload, content_type = found
+        basemap = RegionBasemap(
+            available=True,
+            provider=PROVIDER_STATIC_MAP,
+            content_type=content_type,
+            data_url=_data_url(payload, content_type),
+            bounds=covered,
+            zoom=zoom,
+            style=style,
+            attribution=STATIC_MAP_ATTRIBUTION,
+        )
+        self._basemap_cache[cache_key] = _BasemapCacheEntry(
+            basemap=basemap, expires_at=now + self._basemap_cache_ttl
+        )
+        return basemap
+
     # ------------------------------------------------------------ internals
 
     def _remember(
@@ -246,15 +395,15 @@ class GoogleImageryClient:
                 found = await self._image(
                     client,
                     STREET_VIEW_URL,
-                    {
-                        "size": self._size,
+                    [
+                        ("size", self._size),
                         # Pin the exact panorama the metadata described, so the
                         # picture is the one whose capture date we are about to
                         # print beside it.
-                        "pano": str(metadata.get("pano_id") or ""),
-                        "location": location,
-                        "return_error_code": "true",
-                    },
+                        ("pano", str(metadata.get("pano_id") or "")),
+                        ("location", location),
+                        ("return_error_code", "true"),
+                    ],
                 )
                 if found is not None:
                     payload, content_type = found
@@ -272,12 +421,12 @@ class GoogleImageryClient:
             found = await self._image(
                 client,
                 STATIC_MAP_URL,
-                {
-                    "center": location,
-                    "zoom": str(self._satellite_zoom),
-                    "size": self._size,
-                    "maptype": "satellite",
-                },
+                [
+                    ("center", location),
+                    ("zoom", str(self._satellite_zoom)),
+                    ("size", self._size),
+                    ("maptype", "satellite"),
+                ],
             )
 
         if found is None:
@@ -302,7 +451,7 @@ class GoogleImageryClient:
         self.upstream_calls += 1
         try:
             response = await client.get(
-                STREET_VIEW_METADATA_URL, params=self._params({"location": location})
+                STREET_VIEW_METADATA_URL, params=self._params([("location", location)])
             )
             response.raise_for_status()
             payload = response.json()
@@ -321,7 +470,7 @@ class GoogleImageryClient:
         return typed
 
     async def _image(
-        self, client: httpx.AsyncClient, url: str, params: dict[str, str]
+        self, client: httpx.AsyncClient, url: str, params: Sequence[tuple[str, str]]
     ) -> tuple[bytes, str] | None:
         """Fetch image bytes, or ``None`` when the answer was not an image."""
         self.upstream_calls += 1
@@ -341,9 +490,21 @@ class GoogleImageryClient:
             return None
         return payload, content_type
 
-    def _params(self, params: dict[str, str]) -> dict[str, str]:
-        """The only place ``key=`` is ever attached to anything."""
-        return {**params, "key": self._api_key}
+    def _params(
+        self, params: Sequence[tuple[str, str]]
+    ) -> list[tuple[str, str | int | float | bool | None]]:
+        """The only place ``key=`` is ever attached to anything.
+
+        A list of pairs rather than a mapping because Static Maps takes
+        ``style`` **repeated** -- one occurrence per rule -- and a dict would
+        silently keep the last one, which renders a map styled by a single rule
+        and looks like the styling simply did not work.
+        """
+        # Widened to httpx's own parameter type rather than `list[tuple[str,
+        # str]]`: a list is invariant, so the narrower type will not pass.
+        widened: list[tuple[str, str | int | float | bool | None]] = list(params)
+        widened.append(("key", self._api_key))
+        return widened
 
 
 def _data_url(payload: bytes, content_type: str) -> str:

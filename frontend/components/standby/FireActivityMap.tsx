@@ -48,6 +48,18 @@ export interface FireDetection {
   frp: number | null;
   acquired_at: string | null;
   satellite: string | null;
+  /**
+   * Channel-I4 brightness temperature, kelvin.
+   *
+   * A temperature, **not an anomaly**: VIIRS reports how hot the pixel
+   * radiated and ships no background to subtract, so anything phrased as
+   * "above normal" would be inventing the normal. `null` where the feed
+   * omitted it -- never zero, which is 273 degrees of claim.
+   */
+  brightness_k: number | null;
+  /** Which half of the orbit the pass was on. A night detection is a thermal
+      source rather than a sunlit surface. */
+  daynight: 'day' | 'night' | 'unknown';
 }
 
 /** The fire-weather block: recent reanalysis, never a current observation. */
@@ -78,6 +90,15 @@ export interface FireActivity {
   regionalCount: number | null;
   inCityCount: number | null;
   source: string | null;
+  /**
+   * The instrument's own caveat, as the backend wrote it.
+   *
+   * Read rather than hardcoded here, because it is the sentence that makes
+   * `inCityCount: 0` legible as the ordinary fact it is rather than as a dead
+   * feed or an all-clear. A console that shipped its own wording could drift
+   * from what the port actually claims about the product.
+   */
+  resolution_note: string | null;
   weather: FireWeather | null;
 }
 
@@ -132,6 +153,14 @@ function readBBox(value: unknown): FireBBox | null {
   return { west, south, east, north };
 }
 
+/** The two values that mean something, and `unknown` for everything else. */
+function readDayNight(value: unknown): 'day' | 'night' | 'unknown' {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (raw === 'day' || raw === 'd') return 'day';
+  if (raw === 'night' || raw === 'n') return 'night';
+  return 'unknown';
+}
+
 function readDetections(value: unknown): FireDetection[] {
   if (!Array.isArray(value)) return [];
   const out: FireDetection[] = [];
@@ -153,6 +182,8 @@ function readDetections(value: unknown): FireDetection[] {
       frp: num(pick(row, ['frp', 'fire_radiative_power', 'frp_mw'])),
       acquired_at: str(pick(row, ['acquired_at', 'acquired', 'observed_at'])),
       satellite: str(pick(row, ['satellite', 'instrument', 'source'])),
+      brightness_k: num(pick(row, ['brightness_k', 'bright_ti4', 'brightness'])),
+      daynight: readDayNight(pick(row, ['daynight', 'day_night'])),
     });
   }
   return out;
@@ -247,6 +278,7 @@ export function normalizeFireActivity(raw: unknown): FireActivity | null {
     regionalCount,
     inCityCount,
     source: str(pick(raw, ['source', 'product', 'dataset'])),
+    resolution_note: str(pick(raw, ['resolution_note', 'resolution', 'note'])),
     weather: readWeather(pick(raw, ['fire_weather', 'weather'])),
   };
 }
@@ -328,13 +360,29 @@ function Reading({
 }
 
 export interface FireActivityMapProps {
+  /**
+   * Drop this panel's own landmark and heading, because something outside it
+   * already carries both.
+   *
+   * The console puts this inside a `PanelCard` that is the labelled region.
+   * Rendering the section here too produced two nested regions called
+   * "Regional fire activity" -- ambiguous to anyone navigating by landmark.
+   * Standalone it keeps its own, which is how the tests render it.
+   */
+  headless?: boolean;
   activity: FireActivity | null;
   /** A failed request, as distinct from an answered one carrying a refusal. */
   error?: string | null;
 }
 
-export function FireActivityMap({ activity, error = null }: FireActivityMapProps) {
-  const heading = (
+export function FireActivityMap({
+  activity,
+  error = null,
+  headless = false,
+}: FireActivityMapProps) {
+  const Frame = headless ? 'div' : 'section';
+  const frameProps = headless ? {} : { 'aria-labelledby': 'fire-activity-heading' };
+  const heading = headless ? null : (
     <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
       <h2 id="fire-activity-heading" className="text-micro uppercase tracking-widest text-muted">
         Regional fire activity
@@ -347,8 +395,8 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
 
   if (error) {
     return (
-      <section
-        aria-labelledby="fire-activity-heading"
+      <Frame
+        {...frameProps}
         className="shrink-0 bg-ground px-4 py-3"
         data-testid="fire-activity"
       >
@@ -356,14 +404,14 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
         <p className="mt-2 border border-dashed border-alarm px-3 py-2 text-micro text-alarm">
           Fire-activity request failed: {error}
         </p>
-      </section>
+      </Frame>
     );
   }
 
   if (!activity || !activity.available) {
     return (
-      <section
-        aria-labelledby="fire-activity-heading"
+      <Frame
+        {...frameProps}
         className="shrink-0 bg-ground px-4 py-3"
         data-testid="fire-activity"
       >
@@ -372,7 +420,7 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
           Fire activity UNAVAILABLE —{' '}
           {activity?.unavailable_reason ?? 'the backend reported none. Nothing is inferred here.'}
         </p>
-      </section>
+      </Frame>
     );
   }
 
@@ -392,8 +440,8 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
   const regionCount = activity.regionalCount;
 
   return (
-    <section
-      aria-labelledby="fire-activity-heading"
+    <Frame
+      {...frameProps}
       className="shrink-0 bg-ground px-4 py-3"
       data-testid="fire-activity"
     >
@@ -490,6 +538,6 @@ export function FireActivityMap({ activity, error = null }: FireActivityMapProps
           </p>
         )}
       </div>
-    </section>
+    </Frame>
   );
 }

@@ -152,6 +152,21 @@ export async function GET(request: NextRequest, context: { params: { path: strin
       });
     }
 
+    if (contentType.startsWith('image/')) {
+      // Bytes, not text. `upstream.text()` decodes as UTF-8, which corrupts a
+      // PNG silently -- and an elevation tile's RGB *is* the height data, so a
+      // corrupted one is not a broken picture but a wrong mountain. Piped for
+      // the same reason the event stream is: there is nothing to inspect.
+      //
+      // The upstream's cache header is carried through. Terrain does not move,
+      // and re-fetching a square on every camera nudge would spend a metered
+      // quota to redraw an identical hillside.
+      const headers: Record<string, string> = { 'Content-Type': contentType };
+      const cacheControl = upstream.headers.get('cache-control');
+      if (cacheControl) headers['Cache-Control'] = cacheControl;
+      return new Response(upstream.body, { status: upstream.status, headers });
+    }
+
     return new Response(await upstream.text(), {
       status: upstream.status,
       headers: { 'Content-Type': contentType || 'application/json' },

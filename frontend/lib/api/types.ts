@@ -373,6 +373,14 @@ export interface BriefEmissionView {
 export interface OpenIncidentResponse {
   incident_id: string;
   address_id: string;
+  /**
+   * The street address a dispatcher would read aloud. Reference data from the
+   * city adapter, not a fact -- nothing derives or merges it.
+   *
+   * Empty when the city cannot place the id. The banner falls back to the id
+   * rather than printing a slug as though it were a street address.
+   */
+  address_display: string;
   profile_snapshot_id: string;
   grant_id: string;
   cold_start: boolean;
@@ -563,4 +571,36 @@ export interface IncidentReplayView {
   profile_snapshot_id: string;
   snapshot_available: boolean;
   sealed_at: string | null;
+}
+
+
+/**
+ * The ground plane under the regional fire map.
+ *
+ * **`bounds` is not the region that was asked for.** A tile zoom is an integer,
+ * so the smallest image covering a region almost always covers more, and the
+ * excess is not symmetric. This is the ground the returned pixels actually
+ * span, computed by the backend from the centre, zoom and pixel size it
+ * requested. Draw the image against *this* box. Drawing it against the region
+ * stretches it, and every detection on top lands a few kilometres from where
+ * the satellite saw it -- an error with no visible symptom.
+ *
+ * `data_url` carries the bytes inline. The server holds the Maps key and the
+ * browser is handed pixels: a signed Static Maps URL reaching a client is the
+ * key reaching a client.
+ */
+export interface RegionBasemapView {
+  available: boolean;
+  /** "static-map", "synthetic", or "" on a refusal. */
+  provider: string;
+  content_type: string;
+  data_url: string;
+  bounds: { west: number; south: number; east: number; north: number } | null;
+  /** The Web Mercator zoom the image was rendered at. */
+  zoom: number;
+  style: string;
+  /** Required on screen wherever it is non-empty: Google's Terms, and a
+      synthetic ground plane says in this line that it is one. */
+  attribution: string;
+  unavailable_reason: string;
 }

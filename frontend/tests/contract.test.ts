@@ -40,6 +40,9 @@ const CALLED: Array<[string, string]> = [
   ['/api/v1/internal/audit/decisions', 'get'],
   ['/api/v1/incidents', 'post'],
   ['/api/v1/incidents/{incident_id}/brief/enrich', 'post'],
+  // The console asks for prose through this one now: opening it both requests
+  // the composition and streams it token by token.
+  ['/api/v1/incidents/{incident_id}/brief/stream-enriched', 'get'],
   ['/api/v1/incidents/{incident_id}/stream', 'get'],
   ['/api/v1/incidents/{incident_id}/log', 'get'],
   ['/api/v1/incidents/{incident_id}/resolutions', 'post'],

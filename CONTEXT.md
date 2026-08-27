@@ -3,6 +3,18 @@
 Municipal structural intelligence for a fire department, built as an
 institutional agent fleet.
 
+**Status, 2026-08-26.** `main` at `55e3e53`, in sync with origin, plus one
+uncommitted change described under [In flight](#in-flight). 1,536 backend and
+356 console tests pass; mypy, Ruff, the console build, Terraform validation, the
+seed hash and the secret scan are all clean — see
+[Verification](#verification). Staging **is deployed** and healthy in project
+`firstdue-dev`: 377 Terraform resources, 12 Cloud Run services, a public console
+— running images built from a commit 17 behind `main`, against an empty district,
+with the slow loop's scheduler paused. See
+[What is actually deployed](#what-is-actually-deployed). Three known gaps are
+open and one has been fixed; each was re-checked against the code for this
+revision rather than carried forward — see [Known gaps](#known-gaps).
+
 ---
 
 ## The problem
@@ -215,16 +227,30 @@ cannot be replayed one model call at a time.
 
 ## Architecture
 
-Ports and adapters. Sixteen ports, one per seam:
+Ports and adapters. Eighteen ports, one per seam:
 
 ```
-audit  bus  city  clock  fireactivity  grounding  imagery  memory
-model  office  repositories  runtime  sources  vectors  vision  writes
+audit  bus  city  clock  fireactivity  grounding  imagery  memory  model
+office  repositories  runtime  sources  threads  tiles  vectors  vision
+writes
 ```
 
-Nine adapter packages — `memory`, `fake`, `firestore`, `pubsub`, `google`,
-`vertex`, `resend`, `nasa`, `clock`. Nearly every port has two implementations,
-and one contract suite holds both to the same behaviour.
+`threads` is semantic recall over open question threads, separate from `memory`
+because it answers a different question — *has anyone asked something like this*
+rather than *what is this district carrying*.
+
+`tiles` is the newest. It is separate from `imagery` because a tile is not a
+picture: `imagery` answers *what does this thing look like* and returns one
+finished image with the box it covers, while a tile is one addressed square of
+an infinite grid, meaningless without its neighbours, requested in hundreds as a
+camera moves. Different cache lifetimes, different failure granularity — one
+tile missing is a hole, not an outage — and a different shape on the wire.
+
+Eight adapter packages — `fake`, `firestore`, `google`, `memory`, `nasa`,
+`pubsub`, `resend`, `vertex` — plus `adapters/clock.py`, which is a module
+rather than a package because a clock has no second seam to hide. Nearly every
+port has two implementations, and one contract suite holds both to the same
+behaviour.
 
 ```
 backend/src/firstdue/
@@ -257,25 +283,82 @@ seed rebuilds to the same content hash every time.
 
 ## Deployment
 
-Thirteen Terraform modules across staging and production. Eleven Cloud Run
-services: the slow loop, the incident loop, and nine per-agent workers, each on
-its own service account. Pub/Sub carries dispatch fan-out and agent completion,
-with a dead-letter topic per subject. Firestore holds incident state, building
-profiles, the audit log, policy decisions, the agent registry and the memory
-bank. Secrets are containers in Secret Manager; values are added out of band and
-never appear in Terraform.
+Fourteen Terraform modules across staging and production. Twelve Cloud Run
+services: the slow loop, the incident loop, nine per-agent workers — each on its
+own service account — and the console. Pub/Sub carries dispatch fan-out and
+agent completion, with a dead-letter topic per subject. Firestore holds incident
+state, building profiles, the audit log, policy decisions, the agent registry
+and the memory bank. Secrets are containers in Secret Manager; values are added
+out of band and never appear in Terraform.
 
 Each service verifies a stable Cloud Run custom audience rather than a generated
 URL, so an identity survives a service being recreated. The Firestore index and
 IAM policy are derived from the code, and the conformance suite fails if they
 drift.
 
+### What is actually deployed
+
+Verified 2026-08-26 against the account, not read off this file. Earlier
+revisions of this document, and of `docs/build-notes.md`, said nothing had ever
+been deployed. That stopped being true on 2026-08-24.
+
+**Staging is applied and healthy, in project `firstdue-dev`.** The env is named
+`staging`; the project it targets is `firstdue-dev`, and those two names do not
+match on purpose — `firstdue-test` exists only for the contract suite and has
+Cloud Run disabled. State lives in `gs://firstdue-dev-firstdue-tfstate` under
+prefix `firstdue/staging`, and holds **377 resources**.
+
+| What | State |
+|---|---|
+| Cloud Run services | 12, all `Ready=True`, created 2026-08-24T23:47–2026-08-25T00:00 |
+| Console | `https://firstdue-console-kaw7xwxu7a-uc.a.run.app`, public, 200 |
+| Incident service | private; invokers are the console, `pubsub-push` and `ci-smoke` only |
+| Firestore | `(default)`, native mode, `nam5`, 33 composite indexes |
+| Pub/Sub | 17 topics, 17 dead-letter topics, 17 push subscriptions, 24 per-agent subscriptions |
+| Service accounts | 9 agent, plus console, incident, slow, pubsub-push, scheduler, ci-smoke |
+| Secrets | 5 containers (`callback-secret`, `google-maps-api-key`, `nrel-api-key`, `resend-api-key`, `socrata-app-token`); `live_source_keys = ["google-maps-api-key", "nrel-api-key"]`, and `callback-secret` is mounted by every service. Cloud Run refuses to start a container whose secret reference has no version, so the services being `Ready` is itself the evidence those versions exist |
+| Model Armor | `projects/firstdue-dev/locations/us-central1/templates/firstdue-ingest` |
+| Memory Bank | Agent Engine `4054090136877531136`, enabled |
+| Vector Search | **off** (`vector_search_enabled = false`) — a running index endpoint is hundreds of USD a month; recall uses the lexical index |
+| Grounding search | **off** (`grounding_search_enabled = false`), for per-pass cost |
+| Budget | 50 USD with an email alert channel |
+
+`/api/v1/system/status` through the deployed console returns `mode: live`,
+`storage_backend: firestore`, `event_backend: pubsub`, `workspace_writes: fake`,
+`published_agents: 13`.
+
+**Three things are true about that deployment that a demo script must not gloss.**
+
+1. **It is running code 17 commits behind `main`.** Both backend services and
+   the console run images tagged `11165da`, built 2026-08-24T17:23. That commit
+   predates the live-geometry fixes, the imagery provider, the fleet rows-and-pane
+   console, the Three.js structure model and the conflict de-duplication. A newer
+   backend image tagged `5644369` sits in Artifact Registry unused; the tfvars
+   digests still point at the older pair.
+2. **The deployed district is empty.** `seeded_profiles: 0`, and
+   `/districts/sffd-district-03/stats` returns 0 profiles, 0 facts, 0 conflicts.
+   Sources report `LIVE` with closed circuits. The seed is a local artefact and
+   the deployed Firestore holds no profiles, so the console at that URL has
+   nothing to show.
+3. **The slow loop is not on a schedule.** `firstdue-staging-slow-loop` exists
+   in Cloud Scheduler at `0 3 * * *` and is **PAUSED**, with no last-attempt
+   time — it has never fired.
+
+Also deployed-but-unconfigured: `FIRMS_MAP_KEY` is unset, so
+`/districts/{id}/fire-activity` answers `available: false` with
+*"NASA FIRMS needs a map key this process was not given; no fire detection
+provider was contacted"*. That is the panel reporting a missing credential, not
+an outage and not an absence of fire.
+
 ## Stack
 
 Python 3.12, FastAPI, Pydantic v2, uv. LangGraph and LangChain on
 `langchain-google-vertexai`. The Google Gen AI SDK for direct model calls.
-OpenTelemetry, pytest, Ruff, strict mypy. Next.js 14 App Router with TypeScript
-and three.js for the massing model. Terraform, Docker, Cloud Run.
+OpenTelemetry, pytest, Ruff, strict mypy. Next.js 14 App Router with TypeScript,
+three.js for the massing model and deck.gl for the regional heat map. Both are
+loaded on demand rather than statically imported, so neither reaches the server
+bundle and a browser that cannot run them gets a stated refusal instead of a
+crash. Terraform, Docker, Cloud Run.
 
 ## External integrations
 
@@ -289,6 +372,9 @@ and three.js for the massing model. Terraform, Docker, Cloud Run.
 | Firestore, Pub/Sub, Cloud Run, Secret Manager, Cloud Storage | State, events, execution, credentials, artifacts |
 | Google Solar API | Roof geometry, pitch, plane height, array detection |
 | Street View Static, Maps Static | Building imagery beside the massing model, street and aerial |
+| Maps Static, dark-styled | The flat fallback ground plane, when the terrain mesh cannot be built. One cached image per region, fetched server-side and served as a data URI |
+| Google Map Tiles API | The satellite skin on the terrain mesh. Session token and key both stay in the process; the console addresses tiles at this system's own origin |
+| AWS terrarium (public domain) | RGB-encoded elevation for the terrain mesh. No credential, and proxied anyway so the console has one origin to talk to and one place where caching, rate limiting and the region check live |
 
 Two settings decide where real data enters, independently of `USE_FAKE_AGENTS`,
 because Maps Platform authenticates with an API key while Vertex uses
@@ -318,10 +404,26 @@ than an empty panel.
 One screen, two arrangements.
 
 In standby it leads with **what was found**, not with what found it. The
-district's vital signs across the top, then `Records disagree` — one card per
-structure whose paperwork and measurement do not match, in the sentence the
-rule wrote: *the permit records 2 storeys; lidar DSM measures 3*. Down the left,
-across roughly a third of the width, the fleet.
+district's vital signs run across the top in both arrangements, above the mode
+switch, because they are true in both. Under that, **three columns**, the same
+skeleton an incident uses, so the screen does not change shape under an officer
+at the moment a fire starts:
+
+* **Left** — the slow-loop fleet.
+* **Middle** — the subject. In standby that is the region, drawn; on dispatch it
+  becomes the building. The selected structure opens *here*, under the map, and
+  therefore never changes column when a call comes in.
+* **Right** — what the fleet found, one card per question: `Regional fire
+  activity` (counts, fire weather, the instrument's caveat) and `Records
+  disagree` (one card per structure whose paperwork and measurement do not
+  match, in the sentence the rule wrote: *the permit records 2 storeys; lidar
+  DSM measures 3*).
+
+All three are the same kind of object — a rounded, hairlined card on `surface`
+with a ruled header carrying a name, a count and a line of plain English.
+`components/standby/PanelCard.tsx` is that chrome, extracted so the fleet column
+and the two findings cards cannot drift apart. Below `lg` it stacks, because
+three columns at that width is one unreadable column.
 
 **The survey ranking is not on this screen.** `structure-watch` still scores
 every structure on every pass and the queue endpoint still answers — the ranking
@@ -361,10 +463,99 @@ officer should not have to guess.
 louder. One step on the existing three-tone scale, no new colour, and the eye
 lands on the building instead of counting three identical panels.
 
-**No regional map.** It drew detections on a black rectangle with no coastline,
-no grid and no coordinates, stretched to fill the column, and always showed an
-empty city — VIIRS pixels are ~375 m and cannot see a structure fire. The counts
-and the sentence carry that argument; the canvas never did.
+### The regional heat map
+
+**The SVG scatter came out; a 3D terrain map went in.** `e830390` deleted the
+`Scatter` component — inline SVG over a linear lon/lat projection, detections as
+circles sized by FRP — because with no coastline, no graticule and no
+coordinates it was a rectangle nobody could place. `FireActivityMap` survived as
+text and now lives in the right rail. The middle column carries
+`RegionalHeatMap`, which answers the question the counts cannot: **how far from
+us, and how big.**
+
+**The ground is a mesh, not a plate.** A flat picture answers "where"; it does
+not answer "which side of the ridge", and at a five-degree box that is most of
+what terrain is for — ridgelines are what wind follows, what a fire runs up, and
+what a crew has to drive around. deck.gl's `TerrainLayer` builds the mesh from
+two tiled grids: public-domain terrarium elevation, and Google Map Tiles
+satellite imagery draped over it. Both are proxied through
+`/api/v1/terrain/{layer}/{z}/{x}/{y}`, so the browser talks to one origin and
+the Maps key and tile session never leave the process. The proxy refuses any
+square outside the configured region or outside its zoom range — without that it
+is an open relay onto somebody else's metered quota, reachable by anyone who can
+reach the console.
+
+That route is deliberately **not** under `/districts`: the tile client is built
+once from `FIRE_ACTIVITY_REGION`, which is a property of the process, and this
+municipality's two districts share it. A district id there would have varied
+nothing, and a decorative path parameter is a claim.
+
+**Vertical exaggeration is ×8, and the key prints it.** The region is 550 km
+across and its relief is under half a percent of that; true to scale the terrain
+is a flat sheet and the mesh is pointless. The shape is real, the steepness is
+not, and an unlabelled exaggeration is a claim about how steep the country is.
+
+**What is drawn over it.**
+
+1. **A continuous heat field**, weighted by radiative power — not a count, since
+   ten smouldering pixels and one campaign fire are not the same event. It fades
+   out rather than resolving to a cool colour: VIIRS does not report "cold", it
+   reports nothing, and a blue periphery would be data where there is none.
+2. **The district, and range rings at 25, 50 and 100 km.** The district marker
+   is a hollow ring in the `live` blue, never the fire ramp, so it cannot read
+   as a detection; the old panel's refusal to invent a *city marker* was about
+   inventing activity, and that still holds.
+3. **The six strongest clusters, ranked and numbered**, each openable for what
+   the instrument reported there.
+
+Everything above the mesh draws with `depthTest: false`. A heat field buried
+inside a hillside is not a subtler rendering of the same fact — it is a fire you
+cannot see.
+
+**Clustering is greedy and power-weighted, not k-means.** A VIIRS pass lays a
+fire down as a line of pixels along the scan, so a single fire arrives as a
+scatter and six pins on it would read as six fires. k-means needs a *k* nobody
+can justify and moves centres between renders, so a hotspot numbered 3 could
+become 4 because a pixel arrived on the far side of the region. The cluster
+centre is weighted by radiative power, so the marker sits on the energy rather
+than on the middle of the scatter's bounding box. The cap on numbered pins is a
+reading order, not a filter — everything else stays in the field and in the
+totals.
+
+**The hotspot card carries only what the feed said**: summed and peak radiative
+power, peak brightness temperature, the detection count and its confidence mix,
+day and night passes, distance from the district, and the last pass that saw it.
+There is no risk score, no spread projection and no concern level, because a
+five-day detection table does not support one and a number labelled that way
+would be acted on as though it did.
+
+**Brightness is a temperature, not an anomaly.** VIIRS reports how hot the pixel
+radiated and ships no background to subtract, so anything phrased as "+8 °C above
+normal" would be inventing the normal. `bright_ti4` is carried through as
+`brightness_k` and printed as °C beside the kelvin it arrived in. `bright_ti5` is
+in the feed and deliberately not read: two brightness temperatures on one
+detection invite being differenced into an "anomaly", which is not what either
+of them means.
+
+Fire weather stays out of the card. It exists — NASA POWER reanalysis, in the
+card beside this panel — but it is regional and days old, and inside a
+per-hotspot card it would read as conditions measured *there, now*.
+
+**Everything the picture claims is in the key**: the weighting, the relativity,
+the exaggeration, the region total, the peak, the instrument's resolution note
+read verbatim from the payload, and the Google attribution the licence requires.
+
+Three failure states, none of them a blank rectangle: a browser with no WebGL2
+says so; a renderer that fails to load says that instead of waiting forever on a
+promise that already rejected; and with no Maps key there is no mesh, so it falls
+back to the single flat basemap image — strictly worse and strictly honest, the
+same ground without the shape.
+
+In the deployment none of this draws, because no `FIRMS_MAP_KEY` is configured
+and the panel says which credential is missing.
+
+The `FireActivityMap` header docstring still describes the SVG projection it no
+longer has -- stale since `e830390`, and worth fixing in the file.
 
 ## Fixed on 2026-08-25
 
@@ -404,8 +595,9 @@ independently and now read one property. District count went 4 → 2.
 
 **The fire-activity map never rendered.** It printed *"No bounding box
 reported"* while holding one: the component read `bbox`/`region_bbox`/
-`query_bbox` and the backend sends `region` and `city`. Fixed, then the map was
-removed anyway — see [The console](#the-console).
+`query_bbox` and the backend sends `region` and `city`. Fixed in `e830390`,
+which then deleted the drawing anyway. The *panel* stays and is still on the
+standby screen — see [The console](#the-console).
 
 **`preincident-plan-store` still names the wrong owner.** Unchanged from the
 2026-08-24 audit and still open — see below.
@@ -414,14 +606,18 @@ removed anyway — see [The console](#the-console).
 
 ## Known gaps
 
-Found by auditing the running build on 2026-08-24. All survive the current
-commit; none is a doc error.
+Found by auditing the running build on 2026-08-24, and **each one re-checked
+against the code on 2026-08-26** rather than carried forward on trust. Three
+survive; one is fixed and is recorded as fixed below.
 
-**The demo seed pre-bakes a `GeometrySpec`,** and `geometry_is_stale` is false
-for a profile that already has one — so `geometry-watcher` skips every address
-and the model on screen is seed output, not agent output. The two fixes above
-are reachable only once the seed stops fabricating geometry, which changes what
-the console shows before the first pass completes.
+**FIXED — the demo seed no longer pre-bakes a live `GeometrySpec`.** The gap was
+real: `geometry_is_stale` is false for a profile that already has one, and the
+seed dated its spec five days *after* the newest geometry-invalidating fact, so
+`geometry-watcher` skipped every address and the model on screen was seed output.
+`8d292b0` moved the seeded `generated_at` to `epoch - 420 days`, which puts it
+before the 2025-07 permit that disputes it — the exact sequence the staleness
+rule exists for. The demo still opens with a model; the first pass now replaces
+it with a measured one.
 
 **Nothing runs concurrently.** `asyncio.gather`, `TaskGroup`, `create_task` and
 `as_completed` return zero hits across `backend/src`, graphs included. Both
@@ -462,14 +658,96 @@ declared targets to *configured* targets and passes. The missing invariant is
 the other one: every target a handler writes must be declared by the agent whose
 id that handler runs under.
 
+**The deployment has drifted from `main`, and nothing detects that.** The
+running images are tagged `11165da`; `main` is 17 commits past it. Nothing in
+`make verify`, in CI or in the smoke suite compares the digest a service runs to
+the commit that is checked out, so the console at the staging URL can disagree
+with the console on a laptop indefinitely and neither will say so. See
+[What is actually deployed](#what-is-actually-deployed).
+
+**Documentation drift is its own gap, and this file was part of it.** Corrected
+here on 2026-08-26: the port count (16 → 17, `threads` was missing), the adapter
+count, the Terraform module count (13 → 14), the Cloud Run service count
+(11 → 12, the console was not counted), the claim that nothing had been deployed,
+what "no regional map" meant (the SVG drawing went; the panel is still
+rendered), and the strict mypy file count (187 → 193). `backend/src/firstdue/sources/catalog.py:3` still
+opens "Eleven sources" where the catalog holds thirteen — left alone here
+because it is a code docstring, not this document, and should be fixed in the
+file it lives in.
+
 ---
 
 ## Verification
 
-1,516 backend tests and 318 console tests. Strict mypy across 187 source files.
-Ten architecture decision records. A contract suite that holds the in-memory
-and Firestore backends to one set of behaviours, an infrastructure suite that
-holds Terraform to the agent descriptors, and an observability suite that
-asserts telemetry carries no document content.
+Every row below was run on 2026-08-26 at commit `55e3e53`, with the working tree
+as described under [In flight](#in-flight). Numbers in this section are outputs,
+not estimates.
+
+| Check | Command | Result |
+|---|---|---|
+| Backend tests | `uv run pytest` | **1,536 passed, 47 skipped**, 23s |
+| Console tests | `npx vitest run` | **356 passed**, 21 files |
+| Strict mypy | `make typecheck` | clean across **197 source files** |
+| Ruff | `make lint` | clean; 271 files already formatted |
+| Console lint / types / build | `npm run lint`, `typecheck`, `build` | clean; production build succeeds |
+| Terraform | `make infra-check` | `fmt` clean, staging and prod both validate, 38 infra tests pass |
+| Seed determinism | `make verify-seed` | 385 profiles, hash `38f25004df7956d8…c68da0`, reproduced |
+| Secret scan | `make secret-scan` | gitleaks over 43 commits, **no leaks found** |
+
+The 47 skips are the contract suite, which needs `GCP_TEST_PROJECT_ID` and a
+real Firestore and Pub/Sub — it is not skipped for being broken. `make
+test-cloud GCP_TEST_PROJECT_ID=firstdue-test` is the way to run it.
+
+Ten architecture decision records. A contract suite that holds the in-memory and
+Firestore backends to one set of behaviours, an infrastructure suite that holds
+Terraform to the agent descriptors, and an observability suite that asserts
+telemetry carries no document content.
+
+The catalogue and fleet counts, also read from the code rather than from prose:
+**13 published agents, 9 scheduled** (`brief-reconciler`, `conflict-detector`,
+`incident-controller` and `survey-ranker` are the superseded four); **13
+catalogued sources, 10 with live endpoints**, the other three carrying the
+reason they have none.
+
+## In flight
+
+Uncommitted on `main` as of 2026-08-26, and passing: **token-by-token streaming
+of the enriched brief in the console.**
+
+The backend has streamed it since the reconciler was built — `GET
+/api/v1/incidents/{id}/brief/stream-enriched` yields provisional `narrative`
+frames as the model composes and a final persisted `brief` frame. The console
+was asking for prose with a blocking POST and rendering the finished paragraph
+in one go, so the one part of the brief that genuinely is written over time was
+being waited for in silence. `useNarrativeStream` in `frontend/lib/api/stream.ts`
+now consumes the SSE endpoint, drops a chunk whose `for_version` is behind the
+current emission, and holds provisional prose separately from emissions so it is
+never merged into the record.
+
+`BriefPanel` changes with it: it accumulates rather than replaces, keying each
+line on `section + label + value_render` and marking the version it first
+appeared in. A label whose *value* changed is a new line — a face that was
+`UNSCANNED` and is now 166 °C is the drone sweep having flown it, and treating
+that as the same line would let exactly the change a commander is waiting for
+arrive silently.
+
+`OpenIncidentResponse` gains `address_display`, resolved from the city adapter
+and sent *alongside* `address_id` rather than replacing it: the id is what every
+event, grant and log entry is keyed by. It is empty rather than a placeholder
+when the city cannot place the id, and the banner falls back to the id.
+
+Two new test files, `frontend/tests/brief-streaming.test.tsx` and
+`frontend/tests/incident-banner.test.tsx`, 11 tests, green.
+
+Also uncommitted: **the three-column standby and the regional terrain map** — see
+[The console](#the-console) and phases 18–19 in `docs/build-notes.md`. Backend: a
+`RegionBasemap` model and a `fetch_region` verb on the imagery port; the new
+`ports/tiles.py` seam with Google Map Tiles and terrarium behind it, a fake that
+generates a landscape from coordinates, and
+`GET /api/v1/terrain/{layer}/{z}/{x}/{y}`; `adapters/mercator.py` with 25 tests;
+and `brightness_k`/`daynight` carried through from the FIRMS feed. Console:
+`RegionalHeatMap` on deck.gl `TerrainLayer` and `HeatmapLayer`, ranked hotspot
+clustering with a detail card, `PanelCard`, a `headless` prop on the two panels
+that now sit inside one, and a binary passthrough branch in the gateway.
 
 Apache-2.0. No real person's records appear anywhere in this project.

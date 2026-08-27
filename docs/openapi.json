@@ -1274,6 +1274,18 @@
             "title": "Acquired At",
             "type": "string"
           },
+          "brightness_k": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brightness K"
+          },
           "confidence": {
             "enum": [
               "low",
@@ -1282,6 +1294,16 @@
               "unknown"
             ],
             "title": "Confidence",
+            "type": "string"
+          },
+          "daynight": {
+            "default": "unknown",
+            "enum": [
+              "day",
+              "night",
+              "unknown"
+            ],
+            "title": "Daynight",
             "type": "string"
           },
           "frp_mw": {
@@ -2197,6 +2219,11 @@
       "OpenIncidentResponse": {
         "additionalProperties": false,
         "properties": {
+          "address_display": {
+            "default": "",
+            "title": "Address Display",
+            "type": "string"
+          },
           "address_id": {
             "title": "Address Id",
             "type": "string"
@@ -2630,6 +2657,73 @@
           "same_building"
         ],
         "title": "RecalledNarrativeView",
+        "type": "object"
+      },
+      "RegionBasemap": {
+        "additionalProperties": false,
+        "description": "The ground under the regional fire map, or a stated refusal.\n\nBytes inline, exactly as :class:`BuildingImagery` carries them and for the\nsame reason: the server holds the key and the browser gets pixels.\n\n**``bounds`` is not the box that was asked for.** A tile zoom is an integer,\nso the smallest image that covers a requested region almost always covers\nmore than it, and the extra is not symmetric. What comes back is the ground\nthe returned pixels actually span, computed from the centre, the zoom and\nthe pixel size. A console that drew this image against the *requested* box\nwould stretch it, and every detection on top would sit a few kilometres from\nwhere the satellite saw it -- an error that looks like nothing and is\nimpossible to notice by eye.",
+        "properties": {
+          "attribution": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Attribution",
+            "type": "string"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "bounds": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BoundingBox"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "content_type": {
+            "default": "",
+            "maxLength": 80,
+            "title": "Content Type",
+            "type": "string"
+          },
+          "data_url": {
+            "default": "",
+            "title": "Data Url",
+            "type": "string"
+          },
+          "provider": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Provider",
+            "type": "string"
+          },
+          "style": {
+            "default": "",
+            "maxLength": 20,
+            "title": "Style",
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Unavailable Reason",
+            "type": "string"
+          },
+          "zoom": {
+            "default": 0,
+            "maximum": 22.0,
+            "minimum": 0.0,
+            "title": "Zoom",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "available"
+        ],
+        "title": "RegionBasemap",
         "type": "object"
       },
       "ReplayedEntryView": {
@@ -4207,6 +4301,63 @@
           }
         },
         "summary": "Regional fire activity and recent fire weather",
+        "tags": [
+          "console"
+        ]
+      }
+    },
+    "/api/v1/districts/{district_id}/fire-activity/basemap": {
+      "get": {
+        "description": "One image of the ground the detections were counted over.\n\n**The box is not a parameter.** It is read back off the fire-activity answer\nfor this same district, so the picture and the pixels drawn on top of it are\nguaranteed to describe the same region. A caller-supplied box would let a\nconsole request a basemap for one area and detections for another, and the\nresult would look entirely reasonable while placing every fire wrong.\n\nThe response carries the box the returned image *actually* covers, which is\nwider than the region -- a tile zoom is an integer. The console must draw the\nimage against that box and not against the region. See\n:mod:`firstdue.adapters.mercator`.\n\nOne image rather than a tile stream, so the browser never talks to a map\nprovider and the key never leaves the server. It is cached for a week: this\nchanges when somebody reconfigures the region and at no other time.\n\n**Always 200.** No Maps key, no fire-activity region, a dead provider or a\nblown deadline all come back ``available=false`` with a sentence. The fire\nmap draws its graticule, its range rings and its detections regardless --\nwhat it loses is the coastline under them.",
+        "operationId": "district_fire_activity_basemap_api_v1_districts__district_id__fire_activity_basemap_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "district_id",
+            "required": true,
+            "schema": {
+              "title": "District Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "style",
+            "required": false,
+            "schema": {
+              "default": "terrain",
+              "enum": [
+                "terrain",
+                "satellite"
+              ],
+              "title": "Style",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionBasemap"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "The ground plane under the regional fire map",
         "tags": [
           "console"
         ]
@@ -6045,6 +6196,77 @@
         "summary": "Build and mode status",
         "tags": [
           "system"
+        ]
+      }
+    },
+    "/api/v1/terrain/{layer}/{z}/{x}/{y}": {
+      "get": {
+        "description": "Height, or the skin drawn over it, for one square of the region.\n\n**Not under ``/districts``, because it is not per-district.** The tile client\nis built once from ``FIRE_ACTIVITY_REGION``, which is a property of the\nprocess rather than of a district -- this municipality's two districts share\none region and would share every tile. A district id in the path would have\nbeen decorative, and a decorative path parameter is a claim that something\nvaries with it.\n\n**Bytes, not JSON.** Every other read on this API answers with a document;\na tile answers with an image, because the console asks for hundreds of them\nas a camera moves and base64 inside an envelope would cost a third more\nbandwidth for nothing. It is the same authorization and the same scope as\nthe fire-activity read it belongs to.\n\n**This is a proxy, and a narrow one.** The upstreams are AWS's public\n``terrarium`` grid for height and Google's Map Tiles API for imagery; the\nMaps key and the tile session live in this process and neither reaches a\nclient. A tile outside the configured fire-activity region, or outside the\nzoom range the terrain view uses, is refused before any upstream request is\nmade -- without that this endpoint is an open relay onto somebody else's\nmetered quota, reachable by anyone who can reach the console.\n\n**Elevation bytes are data.** A terrarium pixel encodes metres in its RGB\nchannels, so the payload is passed through untouched: re-encoding it would\nchange the terrain rather than the file size, and would do it invisibly.\n\n**404, not 200, for a refused tile.** This is the one read on this API that\ndoes not answer a refusal with a document, because its caller is a tile\nloader rather than a person: deck.gl reads a non-200 as \"no tile here\" and\ndraws the mesh with a gap, which is the correct rendering of a square that\nis missing. A 200 carrying an explanation would be decoded as terrain.",
+        "operationId": "terrain_tile_api_v1_terrain__layer___z___x___y__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "layer",
+            "required": true,
+            "schema": {
+              "enum": [
+                "elevation",
+                "imagery"
+              ],
+              "title": "Layer",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "z",
+            "required": true,
+            "schema": {
+              "title": "Z",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "x",
+            "required": true,
+            "schema": {
+              "title": "X",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "y",
+            "required": true,
+            "schema": {
+              "title": "Y",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "image/jpeg": {},
+              "image/png": {}
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "One map tile for the regional terrain mesh",
+        "tags": [
+          "console"
         ]
       }
     },

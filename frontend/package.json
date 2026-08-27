@@ -13,6 +13,11 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@deck.gl/aggregation-layers": "^9.3.10",
+    "@deck.gl/core": "^9.3.10",
+    "@deck.gl/geo-layers": "^9.3.10",
+    "@deck.gl/layers": "^9.3.10",
+    "@deck.gl/react": "^9.3.10",
     "3d-tiles-renderer": "^0.5.2",
     "next": "14.2.15",
     "react": "18.3.1",

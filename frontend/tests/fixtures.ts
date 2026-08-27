@@ -428,6 +428,7 @@ export function emission(overrides: Partial<BriefEmissionView> = {}): BriefEmiss
 export const INCIDENT: OpenIncidentResponse = {
   incident_id: 'inc-1',
   address_id: ADDRESS,
+  address_display: '450 Hayes St, San Francisco, CA 94102',
   profile_snapshot_id: 'snap_abc',
   grant_id: 'grant-1',
   cold_start: false,

@@ -108,3 +108,103 @@ export function useBriefStream(incidentId: string | null): BriefStream {
     rejected,
   };
 }
+
+/**
+ * The prose being written, token by token.
+ *
+ * The backend has streamed this since the reconciler was built -- `GET
+ * /brief/stream-enriched` yields provisional `narrative` frames as Gemini
+ * composes and a final persisted `brief` frame at the end. The console asked
+ * for prose with a blocking POST instead and rendered the finished paragraph in
+ * one go, which is why the brief read as arriving in slabs: the one part of it
+ * that genuinely is written over time was being waited for in silence.
+ *
+ * Two rules, both from the frame contract:
+ *
+ * - **Narrative frames are provisional.** They carry no version, no content
+ *   hash and nothing the incident log stores, so they are held separately from
+ *   emissions and are never merged into one. The panel renders them as prose in
+ *   progress and the persisted emission replaces them when it lands.
+ * - **A chunk for a version we have moved past is dropped.** `for_version` says
+ *   which emission the prose belongs to; a late chunk from an earlier
+ *   composition must not append itself to a newer one.
+ *
+ * Chunks are deltas, not snapshots -- the backend accumulates and joins them --
+ * so they are appended here in arrival order.
+ */
+export interface NarrativeStream {
+  /** Prose composed so far. Empty before the first chunk. */
+  text: string;
+  /** The emission version this prose is being written for. */
+  forVersion: number;
+  /** True while chunks are still arriving. */
+  writing: boolean;
+}
+
+export function useNarrativeStream(incidentId: string | null): NarrativeStream {
+  const [text, setText] = useState('');
+  const [forVersion, setForVersion] = useState(0);
+  const [writing, setWriting] = useState(false);
+
+  useEffect(() => {
+    setText('');
+    setForVersion(0);
+    setWriting(false);
+    // Same guard as the brief stream above: no incident, no window, or a
+    // runtime with no `EventSource` (jsdom, and any server render) simply gets
+    // no prose. The deterministic brief does not depend on it.
+    if (!incidentId || typeof window === 'undefined' || typeof window.EventSource !== 'function') {
+      return;
+    }
+
+    const source = new EventSource(
+      gatewayPath(`/api/v1/incidents/${incidentId}/brief/stream-enriched`),
+    );
+    let done = false;
+    setWriting(true);
+
+    source.addEventListener('narrative', (event) => {
+      if (done) return;
+      try {
+        const chunk = JSON.parse((event as MessageEvent).data) as {
+          text?: string;
+          for_version?: number;
+        };
+        const version = chunk.for_version ?? 0;
+        setForVersion((current) => {
+          // A chunk for an older composition is dropped rather than appended.
+          if (version < current) return current;
+          if (version > current) setText('');
+          return version;
+        });
+        setText((current) => current + (chunk.text ?? ''));
+      } catch {
+        // A malformed frame is dropped. Provisional prose is not the record,
+        // and half a sentence is not worth failing the panel over.
+      }
+    });
+
+    // The composition finished. The persisted emission arrives on the brief
+    // stream; this only stops the cursor.
+    source.addEventListener('brief', () => {
+      done = true;
+      setWriting(false);
+      source.close();
+    });
+
+    source.onerror = () => {
+      // Enrichment is one pass, and the endpoint closes when it ends. An error
+      // after `done` is that ordinary close; before it, the prose is simply
+      // unavailable and the deterministic brief is unaffected.
+      setWriting(false);
+      source.close();
+    };
+
+    return () => {
+      done = true;
+      source.close();
+    };
+  }, [incidentId]);
+
+  return { text, forVersion, writing };
+}

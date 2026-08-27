@@ -158,6 +158,15 @@ class OpenIncidentResponse(BaseModel):
 
     incident_id: str
     address_id: str
+    #: The street address a dispatcher would read aloud, from the city adapter.
+    #: Reference data, not a fact: the municipality publishes it, nothing
+    #: derives or merges it, and it never disagrees with itself.
+    #:
+    #: Sent alongside `address_id` rather than replacing it. The id is what
+    #: every event, grant and log entry is keyed by, so a console that showed
+    #: only the prose address could not be matched against the record it
+    #: produced.
+    address_display: str = ""
     profile_snapshot_id: str
     grant_id: str
     cold_start: bool
@@ -369,9 +378,14 @@ async def open_incident(
             container=container,
         )
 
+    resolved = container.city.get_address(opened.incident.address_id)
     return OpenIncidentResponse(
         incident_id=opened.incident.incident_id,
         address_id=opened.incident.address_id,
+        # Empty rather than a placeholder when the city cannot place the id: a
+        # console that printed the id as if it were a street address would be
+        # inventing a location, and the banner falls back to the id itself.
+        address_display=resolved.display if resolved is not None else "",
         profile_snapshot_id=opened.snapshot_id,
         grant_id=opened.grant.grant_id,
         cold_start=opened.cold_start,

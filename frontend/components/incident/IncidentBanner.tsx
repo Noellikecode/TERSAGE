@@ -3,6 +3,14 @@
 /**
  * The incident banner and elapsed clock.
  *
+ * **The street address is the largest thing on it.** It used to be the
+ * `address_id` -- `sf-0450-hayes` -- which is the right key for every event,
+ * grant and log entry this incident produces and the wrong thing to put in
+ * front of a commander at the moment a call lands. Nobody rolls to a slug.
+ * The prose address leads at display size; the id follows in parentheses,
+ * quieter but still on screen, so what is said aloud and what the record is
+ * keyed by are both readable and visibly the same place.
+ *
  * The clock counts from CAD dispatch, not from when this tab loaded -- the
  * difference is queue time the commander already spent, and it is the number
  * they are actually tracking.
@@ -32,9 +40,24 @@ export function useElapsed(dispatchedAt: string, reducedMotion = false): number 
   return Number.isNaN(started) ? 0 : (now - started) / 1000;
 }
 
+/**
+ * The street part of a postal address.
+ *
+ * The city adapter publishes `450 Hayes St, San Francisco, CA 94102`. The city
+ * and the ZIP are constant across a district and cost the line its size, so the
+ * banner shows the part that identifies the building and nothing else. Split on
+ * the first comma only, so an address that happens to contain no comma is
+ * returned whole rather than truncated to nothing.
+ */
+export function streetPart(display: string): string {
+  const [street] = display.split(',');
+  return (street ?? display).trim() || display;
+}
+
 export function IncidentBanner({
   incidentId,
   addressId,
+  addressDisplay = '',
   alarmLevel,
   dispatchedAt,
   coldStart,
@@ -44,6 +67,9 @@ export function IncidentBanner({
 }: {
   incidentId: string;
   addressId: string;
+  /** Empty when the city could not place the id; the banner then shows the id
+      at display size rather than printing nothing. */
+  addressDisplay?: string;
   alarmLevel: number;
   dispatchedAt: string;
   coldStart: boolean;
@@ -60,7 +86,14 @@ export function IncidentBanner({
       aria-label="Active incident"
     >
       <StatusPill tone="alarm" label={`alarm ${alarmLevel}`} />
-      <span className="font-mono text-lg text-ink">{addressId}</span>
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+        <span className="font-mono text-hero leading-tight text-ink">
+          {addressDisplay ? streetPart(addressDisplay) : addressId}
+        </span>
+        {addressDisplay && (
+          <span className="font-mono text-body text-muted">({addressId})</span>
+        )}
+      </span>
       <span className="font-mono text-micro text-muted">{incidentId}</span>
 
       <span className="ml-auto flex items-baseline gap-2">

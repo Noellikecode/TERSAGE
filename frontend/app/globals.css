@@ -58,6 +58,31 @@ body {
   animation: tersage-pulse 2s ease-in-out infinite;
 }
 
+/* The caret on prose still being composed. Decoration over a state that is
+   already stated in words underneath -- "Composing, provisional" -- so it is
+   safe for the reduced-motion block below to stop it. */
+.brief-caret {
+  animation: tersage-pulse 1.1s steps(2, start) infinite;
+}
+
+/* A brief line the fleet produced during this incident, landing.
+   The line is already marked with a live-coloured rule and a "New in vN" note,
+   so this only softens its arrival; nothing is carried by the motion alone. */
+@keyframes tersage-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.brief-line-arrived {
+  animation: tersage-line-in 240ms ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -103,7 +103,22 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     // Maps key never leaves the backend -- the response carries a data:
     // URI, so the browser never talks to the provider.
     new RegExp(`^/api/v1/buildings/${ID}/imagery$`),
+    // The ground plane under the regional fire map. One cached image, proxied
+    // so the browser never talks to the map provider and the Maps key stays on
+    // the server -- the same reason building imagery arrives as a data URI.
+    new RegExp(`^/api/v1/districts/${ID}/fire-activity/basemap(\\?style=(terrain|satellite))?$`),
+    // One square of the terrain mesh. Bounded here as well as at the backend:
+    // the path shape admits only the two grids the mesh is built from and only
+    // integer tile coordinates, so this cannot be widened into a general proxy
+    // by a query string. Not under `/districts` because the region is a
+    // property of the process, not of a district -- and a nine-segment path
+    // would not fit `MAX_PATH_SEGMENTS` anyway.
+    new RegExp(`^/api/v1/terrain/(elevation|imagery)/\\d{1,2}/\\d{1,7}/\\d{1,7}$`),
     new RegExp(`^/api/v1/incidents/${ID}/stream$`),
+    // The prose being composed, token by token. Read-only, and provisional:
+    // every frame it carries says so, and the persisted emission still arrives
+    // on the brief stream above.
+    new RegExp(`^/api/v1/incidents/${ID}/brief/stream-enriched$`),
     new RegExp(`^/api/v1/incidents/${ID}/log$`),
     new RegExp(`^/api/v1/internal/audit/incidents/${ID}/replay$`),
   ],
