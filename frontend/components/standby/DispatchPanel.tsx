@@ -28,6 +28,15 @@ export interface SampleCall {
   label: string;
   channel: IntakeChannel;
   text: string;
+  /**
+   * A recording of this call, under `public/`. Optional, and optional on
+   * purpose: the transcript is what the model reads, so a sample with no audio
+   * behaves exactly like one with it.
+   *
+   * Swapping the placeholder for a real recording is this one string plus the
+   * file. See `public/audio/README.md`.
+   */
+  audioSrc?: string;
 }
 
 export const SAMPLE_CALLS: SampleCall[] = [
@@ -35,10 +44,20 @@ export const SAMPLE_CALLS: SampleCall[] = [
     id: 'trapped',
     label: 'Occupants reported inside',
     channel: 'CALL_911',
+    // A recorded read of this transcript. Synthetic: no real call, no real
+    // caller, and the player says so beside it on screen.
+    audioSrc: '/audio/911-call-trapped.wav',
+    // Verbatim what the recording says. Not a tidy summary of it: the console
+    // highlights the exact phrases the model pulled each fact from, so a
+    // transcript that paraphrased the audio would point highlights at words
+    // nobody spoke -- in a system whose whole claim is traceability.
     text:
-      'Caller reports heavy smoke on the third floor of the apartment building. ' +
-      'Two people are still inside. The driveway is blocked by a delivery truck ' +
-      'and there are propane cylinders by the back door.',
+      'I need the fire department at 450 Hayes Street. ' +
+      "The third floor is full of smoke. It's coming out the windows. " +
+      'There are people still inside. The couple on the third floor never came out. ' +
+      "There's a delivery truck blocking the driveway. You can't get in that way. " +
+      'And there are propane tanks by the back door. Four of them. ' +
+      'How fast can you get here?',
   },
   {
     id: 'access',
@@ -72,16 +91,27 @@ export const SAMPLE_CALLS: SampleCall[] = [
 export interface DispatchPanelProps {
   addressId: string;
   busy: boolean;
-  onDispatch: (addressId: string, narrative: string, channel: IntakeChannel) => void;
+  onDispatch: (
+    addressId: string,
+    narrative: string,
+    channel: IntakeChannel,
+    /** The recording that goes with the transcript, when a sample supplied one.
+     *  Absent for text somebody typed, which has no audio by definition. */
+    audioSrc?: string,
+  ) => void;
 }
 
 export function DispatchPanel({ addressId, busy, onDispatch }: DispatchPanelProps) {
   const [narrative, setNarrative] = useState('');
   const [channel, setChannel] = useState<IntakeChannel>('CALL_911');
+  // Cleared whenever the text is edited: a recording that no longer matches the
+  // transcript is worse than none, because the two would disagree on screen.
+  const [audioSrc, setAudioSrc] = useState<string | undefined>(undefined);
 
   function pick(sample: SampleCall) {
     setNarrative(sample.text);
     setChannel(sample.channel);
+    setAudioSrc(sample.audioSrc);
   }
 
   return (
@@ -100,7 +130,10 @@ export function DispatchPanel({ addressId, busy, onDispatch }: DispatchPanelProp
       <textarea
         id="intake-narrative"
         value={narrative}
-        onChange={(event) => setNarrative(event.target.value)}
+        onChange={(event) => {
+          setNarrative(event.target.value);
+          setAudioSrc(undefined);
+        }}
         rows={4}
         placeholder="What the caller said. Leave empty to dispatch on the address alone."
         className="mt-1 w-full border border-line bg-base p-2 font-mono text-micro text-ink"
@@ -145,7 +178,7 @@ export function DispatchPanel({ addressId, busy, onDispatch }: DispatchPanelProp
       <button
         type="button"
         disabled={busy}
-        onClick={() => onDispatch(addressId, narrative.trim(), channel)}
+        onClick={() => onDispatch(addressId, narrative.trim(), channel, audioSrc)}
         className="mt-3 w-full border border-line bg-base px-3 py-2 text-micro uppercase tracking-widest text-ink disabled:opacity-50"
         data-testid="dispatch-button"
       >

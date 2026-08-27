@@ -107,7 +107,13 @@ _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     (
         IntakeKeys.ACCESS_NOTE,
         re.compile(
-            r"\b(driveway is blocked|street is blocked|gate is locked|locked gate|"
+            # Both voices a caller uses: the obstruction as subject ("a truck
+            # blocking the driveway") and the access as subject ("the driveway
+            # is blocked"). The recorded 911 call says the first, and matching
+            # only the second let a real obstruction go unreported in fake
+            # mode -- which is the whole point of the fixture.
+            r"\b((?:\w+\s+){0,3}blocking the (?:driveway|street|entrance|access)|"
+            r"driveway is blocked|street is blocked|gate is locked|locked gate|"
             r"narrow alley|hydrant is blocked|no rear access)\b",
             re.IGNORECASE,
         ),

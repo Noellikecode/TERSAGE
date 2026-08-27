@@ -8,6 +8,9 @@
  * these tests hold that shape rather than the behaviour it happens to produce.
  */
 
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
 import { render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -113,5 +116,29 @@ describe('standby does real work on its own', () => {
     renderAt('live');
     await vi.advanceTimersByTimeAsync(60_000);
     expect(postedPaths().filter((p) => p.includes('/poll')).length).toBeGreaterThan(0);
+  });
+});
+
+describe('the call the demo dispatches can actually be heard', () => {
+  it('hands the recording to dispatch rather than setting it alongside', () => {
+    // The defect this catches was an ordering one, and every unit test passed
+    // through it: the timer set the recording, then called `dispatch` with
+    // three arguments. `dispatch` owns that state and cleared it back to null a
+    // line later, so the arriving-call panel rendered with no player on it and
+    // there was nothing on screen to press.
+    //
+    // A structural check, deliberately. The behaviour needs a fifty-second
+    // timer, a mocked dispatch round trip and an overlay that only mounts once
+    // the incident lands; asserting on the call site is the honest version of
+    // what can actually be pinned here, and it is exactly the line that broke.
+    const source = readFileSync(
+      resolve(__dirname, '../components/CommandCenter.tsx'),
+      'utf8',
+    );
+    expect(source).toContain(
+      'dispatch(top, sample.text, sample.channel, sample.audioSrc)',
+    );
+    // And nothing sets it beside the call, which is what went wrong.
+    expect(source).not.toContain('setCallAudioSrc(sample.audioSrc');
   });
 });

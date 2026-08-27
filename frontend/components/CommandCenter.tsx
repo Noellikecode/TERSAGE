@@ -78,6 +78,8 @@ import { StructureModel, type ViewAngle } from '@/components/StructureModel';
 import { PhotorealisticModel, type GeometryState } from '@/components/PhotorealisticModel';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
 import { BuildingImagery, type ImageryView } from '@/components/incident/BuildingImagery';
+import { CallAudio } from '@/components/incident/CallAudio';
+import { IncomingCall } from '@/components/incident/IncomingCall';
 import { IntakePanel } from '@/components/incident/IntakePanel';
 import { IncidentBanner } from '@/components/incident/IncidentBanner';
 import { ResourcePanel } from '@/components/incident/ResourcePanel';
@@ -426,6 +428,22 @@ export function CommandCenter({
   const [passAt, setPassAt] = useState<number | null>(null);
   //: Seconds until the demo dispatches, or null when nothing is scheduled.
   const [callIn, setCallIn] = useState<number | null>(null);
+  /**
+   * The sample the incident was opened from, when it was opened from one.
+   *
+   * Only the recording depends on this. The transcript already travelled to the
+   * backend and is what the model read; this is how the console finds the audio
+   * that goes with it, and `null` simply means no recording to play.
+   */
+  const [callAudioSrc, setCallAudioSrc] = useState<string | null>(null);
+  /**
+   * Whether the arriving-call overlay is up.
+   *
+   * Presentational only. The dispatch has already fired when this goes true --
+   * the instant brief is rendering underneath and the fleet is already awake --
+   * so dismissing it changes what is on screen and nothing else.
+   */
+  const [callOnScreen, setCallOnScreen] = useState(false);
   //: Set once a call has been placed, by anyone, so the demo never fires a
   //: second one on top of a live incident.
   const dispatchedRef = useRef(false);
@@ -439,7 +457,15 @@ export function CommandCenter({
     passRunning: false,
     busy: false,
     runPass: async () => {},
-    dispatch: async (_a: string, _n: string, _c: IntakeChannel) => {},
+    // Four parameters, and the fourth is why: the recording travels with the
+    // transcript. A three-argument type here silently dropped it and the
+    // arriving-call panel came up with no player on it.
+    dispatch: async (
+      _a: string,
+      _n: string,
+      _c: IntakeChannel,
+      _audioSrc?: string,
+    ) => {},
   });
   const [passNotice, setPassNotice] = useState<string | null>(null);
 
@@ -705,9 +731,16 @@ export function CommandCenter({
 
 
   const dispatch = useCallback(
-    async (addressId: string, narrative = '', channel: IntakeChannel = 'CALL_911') => {
+    async (
+      addressId: string,
+      narrative = '',
+      channel: IntakeChannel = 'CALL_911',
+      audioSrc?: string,
+    ) => {
       dispatchedRef.current = true;
       setCallIn(null);
+      setCallAudioSrc(audioSrc ?? null);
+      if (audioSrc) setCallOnScreen(true);
       setBusy(true);
       setNotice(null);
       // The narrative is kept so the intake panel can check a quote against
@@ -800,7 +833,16 @@ export function CommandCenter({
       setCallIn(null);
       const sample = SAMPLE_CALLS[0];
       if (!sample) return;
-      void demoRef.current.dispatch(top, sample.text, sample.channel);
+      // The recording travels *through* `dispatch`, not around it.
+      //
+      // Setting it here as well and letting the call below run without it is
+      // how the overlay came up silent: `dispatch` owns this state and cleared
+      // it back to null a line later, so the panel rendered with no player at
+      // all and there was nothing on screen to press.
+      //
+      // Not awaited, deliberately: the overlay and the dispatch start together,
+      // and the brief lands while the recording plays.
+      void demoRef.current.dispatch(top, sample.text, sample.channel, sample.audioSrc);
     }, AUTO_CALL_MS);
 
     return () => {
@@ -978,6 +1020,7 @@ export function CommandCenter({
     );
     sweepRef.current.stop = true;
     setIncident(null);
+    setCallOnScreen(false);
     // Back to standby, updated: the resolution and the survey both landed.
     await refreshStandby();
     await openProfile(incident.address_id);
@@ -1398,6 +1441,20 @@ export function CommandCenter({
         </p>
       )}
 
+      {/* The call, over everything, while the console keeps working behind it.
+          Rendered here rather than inside a column so it covers the screen --
+          and it covers a screen that is already showing the brief. */}
+      {incident && (
+        <IncomingCall
+          open={callOnScreen}
+          addressId={incident.address_id}
+          transcript={narrative}
+          audioSrc={callAudioSrc}
+          channel={incident.intake?.channel === 'CAD_NARRATIVE' ? 'CAD_NARRATIVE' : 'CALL_911'}
+          onDismiss={() => setCallOnScreen(false)}
+        />
+      )}
+
       {callIn !== null && !incident && (
         /* A demo affordance, not a claim about data -- worded so nobody reads
            it as a real dispatch already in progress. Polite, not assertive: it
@@ -1569,6 +1626,23 @@ export function CommandCenter({
                 <h2 id="brief-heading" className="sr-only">
                   Incident brief
                 </h2>
+                {/* The call sits above the brief, not under it.
+                    It was below the whole three-stage brief and rendered some
+                    24,000px down a scrolling column -- playing to nobody, which
+                    is the same as not playing. The recording is the first thing
+                    that happens in an incident and it belongs where an officer
+                    is already looking. */}
+                {incident.intake && (
+                  <div className="mb-4">
+                    <CallAudio
+                      src={callAudioSrc}
+                      label={
+                        incident.intake.channel === 'CALL_911' ? '911 call' : 'CAD narrative'
+                      }
+                      autoPlay
+                    />
+                  </div>
+                )}
                 <BriefPanel
                   emission={latest}
                   emissions={stream.emissions}
@@ -1584,6 +1658,8 @@ export function CommandCenter({
                 />
                 {incident.intake && (
                   <div className="mt-4">
+                    {/* What was read out of the call, under the brief it
+                        amended. The audio is never an input to either. */}
                     <IntakePanel intake={incident.intake} narrative={narrative} />
                   </div>
                 )}

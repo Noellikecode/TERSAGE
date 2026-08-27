@@ -171,7 +171,14 @@ describe('dispatching with a narrative', () => {
     });
     fireEvent.click(screen.getByTestId('dispatch-button'));
 
-    expect(onDispatch).toHaveBeenCalledWith('sf-0450-hayes', 'Smoke on the third floor.', 'CALL_911');
+    // Typed text has no recording: the fourth argument is the audio that goes
+    // with a sample, and there is none for something somebody wrote.
+    expect(onDispatch).toHaveBeenCalledWith(
+      'sf-0450-hayes',
+      'Smoke on the third floor.',
+      'CALL_911',
+      undefined,
+    );
   });
 
   it('dispatches with no narrative at all', () => {
@@ -182,7 +189,7 @@ describe('dispatching with a narrative', () => {
 
     fireEvent.click(screen.getByTestId('dispatch-button'));
 
-    expect(onDispatch).toHaveBeenCalledWith('sf-0450-hayes', '', 'CALL_911');
+    expect(onDispatch).toHaveBeenCalledWith('sf-0450-hayes', '', 'CALL_911', undefined);
   });
 
   it('a sample call fills the box and carries its own channel', () => {
@@ -193,7 +200,12 @@ describe('dispatching with a narrative', () => {
     fireEvent.click(screen.getByRole('button', { name: cad.label }));
     fireEvent.click(screen.getByTestId('dispatch-button'));
 
-    expect(onDispatch).toHaveBeenCalledWith('sf-0450-hayes', cad.text, 'CAD_NARRATIVE');
+    expect(onDispatch).toHaveBeenCalledWith(
+      'sf-0450-hayes',
+      cad.text,
+      'CAD_NARRATIVE',
+      cad.audioSrc,
+    );
   });
 
   it('labels the sample calls as synthetic', () => {
