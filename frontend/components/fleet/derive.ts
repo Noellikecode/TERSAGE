@@ -40,6 +40,14 @@ export const EVENT_TONE: Record<string, { tone: PillTone; label: string }> = {
   circuit_closed: { tone: 'muted', label: 'circuit closed' },
   dead_lettered: { tone: 'alarm', label: 'dead lettered' },
   rms_flushed: { tone: 'muted', label: 'records flushed' },
+  // What an agent did on one pass. `confirmed` because a pass that ran is the
+  // ordinary good case -- the counts in its detail say whether it found
+  // anything, and an empty pass is not a fault.
+  agent_pass: { tone: 'confirmed', label: 'pass complete' },
+  // `muted` rather than `confirmed`: a step is the ordinary tick of work in
+  // progress, and a terminal where every one of a dozen lines is green reads as
+  // a wall of nothing. The pass that closes them out is the green one.
+  agent_step: { tone: 'muted', label: 'analyzed' },
 };
 
 export const ACTION_TONE: Record<string, PillTone> = {

@@ -208,3 +208,83 @@ export function useNarrativeStream(incidentId: string | null): NarrativeStream {
 
   return { text, forVersion, writing };
 }
+
+/**
+ * The incident log, as it is written.
+ *
+ * The brief stream above answers *what does the commander know*. This answers
+ * *what is the fleet doing* -- every entry the incident records, in order, as
+ * it lands: the intake being read, the focus the head composed, each agent it
+ * woke and under which rule, notifications, resolutions, benchmarks.
+ *
+ * **Resumed by sequence, which is the log's own guarantee.** Entries are
+ * monotonic and gapless, so `Last-Event-ID` cannot skip one and cannot replay
+ * one twice. That is the same property the brief stream gets from a version
+ * number, and it is why the log is the right thing to stream rather than a
+ * side-channel invented for the console.
+ *
+ * Entries accumulate and are never dropped. The log is append-only and the
+ * panel above it derives per-agent state from the whole run -- a card showing
+ * "what this agent last did" needs the entries before the last one to know it.
+ */
+export interface IncidentLogEntryFrame {
+  sequence: number;
+  entry_type: string;
+  occurred_at: string;
+  /** Agent id to pinned version. How an entry is attributed to an agent. */
+  agent_versions: Record<string, string>;
+  content_hash: string;
+  content: Record<string, unknown>;
+}
+
+export interface IncidentLogStream {
+  entries: IncidentLogEntryFrame[];
+  /** True once a frame has arrived, so an empty log is distinguishable. */
+  started: boolean;
+}
+
+export function useIncidentLogStream(incidentId: string | null): IncidentLogStream {
+  const [entries, setEntries] = useState<IncidentLogEntryFrame[]>([]);
+  const [started, setStarted] = useState(false);
+
+  useEffect(() => {
+    setEntries([]);
+    setStarted(false);
+    // Same guard as the streams above: no incident, no window, or a runtime
+    // with no `EventSource` simply gets no feed. Nothing else depends on it.
+    if (!incidentId || typeof window === 'undefined' || typeof window.EventSource !== 'function') {
+      return;
+    }
+
+    const source = new EventSource(gatewayPath(`/api/v1/incidents/${incidentId}/log/stream`));
+
+    source.addEventListener('entry', (event) => {
+      try {
+        const frame = JSON.parse((event as MessageEvent).data) as IncidentLogEntryFrame;
+        if (typeof frame.sequence !== 'number') return;
+        setStarted(true);
+        setEntries((current) => {
+          // The stream reconnects and replays from `Last-Event-ID`, and a
+          // reconnect that raced an append can deliver one twice. Sequence is
+          // the log's identity, so a duplicate is dropped rather than drawn as
+          // a second step the agent did not take.
+          if (current.some((e) => e.sequence === frame.sequence)) return current;
+          return [...current, frame].sort((a, b) => a.sequence - b.sequence);
+        });
+      } catch {
+        // A malformed frame is dropped. The log document endpoint remains the
+        // record; this is a view of it.
+      }
+    });
+
+    source.onerror = () => {
+      // The generator ends when it has sent everything it has, which the
+      // browser sees as a close and retries with `Last-Event-ID`. That is the
+      // polling loop, and it is not an error worth surfacing.
+    };
+
+    return () => source.close();
+  }, [incidentId]);
+
+  return { entries, started };
+}

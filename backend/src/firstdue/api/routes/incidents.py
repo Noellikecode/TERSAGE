@@ -574,6 +574,61 @@ async def stream_brief(
     return EventSourceResponse(frames())
 
 
+@router.get(
+    "/incidents/{incident_id}/log/stream",
+    summary="Stream incident log entries over SSE",
+)
+async def stream_incident_log(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+    last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
+    after_sequence: Annotated[int | None, Query(ge=0)] = None,
+) -> EventSourceResponse:
+    """Every entry the incident has recorded, in order, resumable.
+
+    **The same record, pushed rather than polled.** ``GET /log`` already returns
+    this; it is a document, fetched when somebody asks. A commander watching the
+    fleet work wants the entries as they land, and the log is the right thing to
+    stream because it is monotonic and gapless -- ``sequence`` is a resume point
+    that cannot skip and cannot repeat, which is exactly what ``Last-Event-ID``
+    needs and what a version number on a brief already gives the other stream.
+
+    ``agent_versions`` travels with each frame, which the document endpoint does
+    not send. It is how a console attributes an entry to the agent that produced
+    it: without it every card would have to be inferred from the entry type, and
+    two agents that write the same type would be indistinguishable.
+
+    Carries what the log carries and nothing else -- ids, keys, counts and
+    reasons. The intake entry names attributes and outcomes, never the caller's
+    words; the focus entry carries references, never values. A stream that
+    widened either would be a second, looser copy of the log.
+    """
+    resume_from = _resume_point(last_event_id, after_sequence)
+    log = await container.incident_log.get_log(incident_id)
+
+    async def frames() -> AsyncIterator[dict[str, str]]:
+        for entry in log.entries:
+            if entry.sequence <= resume_from:
+                continue
+            yield {
+                "event": "entry",
+                "id": str(entry.sequence),
+                "data": json.dumps(
+                    {
+                        "sequence": entry.sequence,
+                        "entry_type": str(entry.entry_type),
+                        "occurred_at": entry.occurred_at.isoformat(),
+                        "agent_versions": entry.agent_versions,
+                        "content_hash": entry.content_hash,
+                        "content": entry.content,
+                    }
+                ),
+            }
+
+    return EventSourceResponse(frames())
+
+
 def _resume_point(last_event_id: str | None, after_version: int | None) -> int:
     """Where to resume from. The header wins; the query is for testing."""
     if last_event_id:

@@ -17,7 +17,23 @@ import type {
 } from './types';
 
 export const DEFAULT_API_BASE_URL = 'http://localhost:8000';
-const DEFAULT_TIMEOUT_MS = 4000;
+
+/**
+ * How long a call waits when it does not say.
+ *
+ * This was 4000ms, which is a local-backend number: fine against fake adapters
+ * on the same machine, and wrong against Cloud Run, Firestore and Vertex, where
+ * an ordinary successful request routinely takes longer. Every call that did
+ * not override it was being aborted mid-flight and rendered as a failure --
+ * and because an `AbortController` gives no reason, the console showed
+ * `signal is aborted without reason` for work the backend went on to finish.
+ *
+ * 15 seconds is a ceiling for a request that is merely *slow*, not a target.
+ * Anything that waits on a model still sets its own: see the incident open,
+ * the intake, the drone sweep and the slow-loop pass, each of which names a
+ * budget matched to the work it is actually waiting for.
+ */
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
  * Where the backend is, for **server-side** calls only.

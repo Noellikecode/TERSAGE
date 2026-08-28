@@ -199,6 +199,14 @@ class IncidentSession:
         # Where a handler leaves its typed result for the caller. An
         # AgentOutcome carries identifiers; the route still wants the object.
         self._last_thermal: dict[str, dict[str, Any]] = {}
+        # Keyed by *correlation id*, not incident id.
+        #
+        # It was keyed by incident, which is correct only while one resource
+        # request is in flight at a time. Two concurrent requests on the same
+        # incident overwrote each other here, and each caller then popped
+        # whichever outcome landed last -- so a notification to one agency could
+        # be reported under another's name. Nothing in the runtime serialises
+        # these; the console merely happened to send them one at a time.
         self._last_resource: dict[str, ResourceOutcome] = {}
 
         # The incident loop runs through the same runtime the slow loop does.
@@ -294,7 +302,7 @@ class IncidentSession:
             return AgentOutcome()
         incident_id = _one(payload, "incident_id")
         outcome = await self.request_resource(incident_id, **request)
-        self._last_resource[incident_id] = outcome
+        self._last_resource[payload.correlation_id] = outcome
         return AgentOutcome(
             write_action_ids=tuple(ref for ref in (outcome.external_ref,) if ref),
             policy_decision_ids=(outcome.decision_id,),
@@ -529,7 +537,7 @@ class IncidentSession:
             )
         finally:
             self._pending_requests.pop(correlation_id, None)
-        outcome = self._last_resource.pop(incident_id, None)
+        outcome = self._last_resource.pop(correlation_id, None)
         if outcome is None:  # pragma: no cover - the handler always sets one
             raise NotFoundError("resource request produced no outcome", details={"id": incident_id})
         return outcome
@@ -930,6 +938,35 @@ class IncidentSession:
         now = self._container.clock.now()
         coverage = self.fusion.coverage(incident_id, now=now)
         voids = self.fusion.voids(incident_id, now=now)
+
+        # In `sensor-fusion`'s own name.
+        #
+        # The amendment below is emitted by whoever emits briefs, so before
+        # this the agent that actually read the frame and resolved it to a wall
+        # left no trace under its own id -- it registered four faces and read
+        # as idle. The face is the subject: which wall, how hot, and how much
+        # of the building is still unscanned.
+        unscanned = [str(c.face) for c in coverage if not c.scanned]
+        hottest = max(
+            (c.peak_c for c in coverage if c.scanned and c.peak_c is not None),
+            default=None,
+        )
+        await self.recorder.record_analysis(
+            incident_id,
+            agent_id="sensor-fusion",
+            headline=f"registered {frame.face} from the drone sweep",
+            detail=(
+                (f"peak {hottest:.0f} C across scanned faces; " if hottest is not None else "")
+                + (
+                    f"{len(unscanned)} face(s) still UNSCANNED"
+                    if unscanned
+                    else "every face scanned"
+                )
+                + (f"; {len(voids)} coverage void(s)" if voids else "")
+            ),
+            refs=[frame.frame_id, str(frame.face)],
+        )
+
         emission = await self.emit_amendment(incident_id, thermal=coverage, voids=voids)
         return {
             "frame_id": frame.frame_id,
@@ -1075,6 +1112,35 @@ class IncidentSession:
         coverage = self.fusion.coverage(incident_id, now=now)
         voids = self.fusion.voids(incident_id, now=now)
         painted = await self._paint_geometry(incident, analysis, spec, now=now)
+
+        # The autonomous path, in `sensor-fusion`'s own name.
+        #
+        # This is the branch the drone sweep takes -- raw imagery the agent
+        # reads itself -- and it is the one that was invisible: four walls
+        # flown, the massing model repainted, and nothing in the log carrying
+        # the agent's id. The face is the subject; the storey count and the
+        # obstructions are what it made of the frame.
+        face = str(analysis.frame.face) if analysis.frame else "an unresolved face"
+        unscanned = [str(c.face) for c in coverage if not c.scanned]
+        detail_parts: list[str] = []
+        if analysis.observed_storeys is not None:
+            detail_parts.append(f"{analysis.observed_storeys} storey bands observed")
+        if analysis.obstructions:
+            detail_parts.append(f"{len(analysis.obstructions)} obstruction(s)")
+        detail_parts.append(
+            f"{len(unscanned)} face(s) still UNSCANNED" if unscanned else "every face scanned"
+        )
+        if analysis.unknowns:
+            # What the model declined to answer travels with what it did.
+            detail_parts.append(f"{len(analysis.unknowns)} unknown(s)")
+        await self.recorder.record_analysis(
+            incident_id,
+            agent_id="sensor-fusion",
+            headline=f"read a drone frame and resolved it to {face}",
+            detail="; ".join(detail_parts),
+            refs=[r for r in (analysis.frame.frame_id if analysis.frame else None, face) if r],
+        )
+
         emission = await self.emit_amendment(incident_id, thermal=coverage, voids=voids)
         return {
             "registered": analysis.registered,

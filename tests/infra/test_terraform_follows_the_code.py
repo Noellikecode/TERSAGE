@@ -71,6 +71,36 @@ def test_every_topic_has_terraform() -> None:
     assert declared == {topic.value for topic in Topic}
 
 
+def test_terraform_names_topics_the_way_the_publisher_addresses_them() -> None:
+    """The names have to be the same string, not merely the same list.
+
+    They were not. Terraform names a topic ``replace(each.value, ".", "-")``
+    with no prefix; ``Settings.pubsub_topic_prefix`` defaulted to ``firstdue``,
+    so the app addressed ``firstdue-fact-written`` and the project contained
+    ``fact-written``. Every publish in live mode went to a topic that did not
+    exist -- and the publish future was never resolved, so each one logged
+    ``event_published`` and vanished.
+
+    Verified against the deployed project on 2026-08-27: **0** topics began
+    ``firstdue-``, and all 34 were bare. This pins the naming on both sides so a
+    prefix cannot be reintroduced on one of them alone.
+    """
+    from firstdue.eventing.pubsub_codec import topic_name
+
+    main = (TERRAFORM / "modules" / "pubsub" / "main.tf").read_text(encoding="utf-8")
+    assert 'name                       = replace(each.value, ".", "-")' in main, (
+        "the Pub/Sub module no longer names topics bare; if a prefix was added "
+        "there, PUBSUB_TOPIC_PREFIX has to be set to match it"
+    )
+
+    # The bare name is what an unprefixed deployment must produce.
+    for topic in Topic:
+        assert topic_name("", topic) == topic.value.replace(".", "-")
+
+    # And a prefix, when one is configured, is applied without a stray dash.
+    assert topic_name("firstdue", Topic.FACT_WRITTEN) == "firstdue-fact-written"
+
+
 # ---------------------------------------------------------------------- iam ---
 
 

@@ -19,6 +19,7 @@ from firstdue.demo.scenario import DISPUTED_ADDRESS_ID, run_slow_loop
 from firstdue.domain.conflicts import ConflictStatus
 from firstdue.domain.enums import SourceType
 from firstdue.domain.keys import Keys
+from firstdue.ports.audit import AuditEventKind
 from firstdue.settings import AppEnv, Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -284,3 +285,66 @@ async def test_the_watchers_report_the_fact_ids_they_wrote(container: Container)
     written = sum(run.facts_written for run in report.agent_runs)
     assert written > 0
     assert written <= report.facts_written
+
+
+async def test_every_slow_loop_agent_leaves_a_trace_of_its_own(container: Container) -> None:
+    """The console's only evidence is what an agent recorded.
+
+    `geometry-watcher` and `hazard-watcher` did all of their work through the
+    profile store and the fact log and wrote nothing to the audit log, so the
+    fleet panel -- which reads that log and nothing else -- drew both as idle
+    while they measured buildings and read federal registries. The test is not
+    that the agents work; the rest of this file covers that. It is that working
+    is *visible*.
+    """
+    await run_slow_loop(container, approve=False)
+    events = await container.audit.list_events(limit=500)
+    passes = {e.actor for e in events if e.kind is AuditEventKind.AGENT_PASS}
+    assert {"geometry-watcher", "hazard-watcher"} <= passes
+
+
+async def test_a_pass_is_recorded_step_by_step_not_only_at_the_end(
+    container: Container,
+) -> None:
+    """A pass runs for minutes; a single closing line is not work in progress.
+
+    Each step names one address and the sources that answered for it, which is
+    what makes the console's terminal fill while the pass is still running
+    rather than all at once when it finishes.
+    """
+    await run_slow_loop(container, approve=False)
+    events = await container.audit.list_events(limit=500)
+    steps = [e for e in events if e.kind is AuditEventKind.AGENT_STEP]
+
+    geometry = [e for e in steps if e.actor == "geometry-watcher"]
+    assert len(geometry) > 1
+    # The address, not the district: a step is one building.
+    assert all(e.target and e.target.startswith("sf-") for e in geometry)
+    assert all("sources" in e.detail and "facts_written" in e.detail for e in geometry)
+
+    # And the pass's own correlation id, so a step can be grouped under the pass
+    # that produced it rather than floating loose in the log.
+    assert len({e.correlation_id for e in geometry}) == 1
+
+
+async def test_an_audit_record_carries_no_text_out_of_a_document(
+    container: Container,
+) -> None:
+    """Counts, ids and canonical keys only.
+
+    These agents read filings and registry rows. A summary line quoting one
+    would put unattributed document text in the log, where it would read as the
+    agent's own finding and could not be traced back to a source.
+    """
+    await run_slow_loop(container, approve=False)
+    events = await container.audit.list_events(limit=500)
+    written = [
+        e for e in events if e.kind in (AuditEventKind.AGENT_PASS, AuditEventKind.AGENT_STEP)
+    ]
+    assert written
+    for event in written:
+        for key, value in event.detail.items():
+            assert isinstance(value, str), key
+            # Nothing prose-shaped: every value is a count, an id list, or a
+            # canonical key, and none of those carry a space.
+            assert " " not in value, (event.actor, key, value)

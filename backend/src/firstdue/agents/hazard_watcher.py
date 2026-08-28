@@ -75,7 +75,8 @@ from firstdue.domain.values import (
 from firstdue.errors import AppendOnlyViolationError, SourceUnavailableError, StaleVersionError
 from firstdue.extraction.recorded import request_digest
 from firstdue.observability.logging import get_logger
-from firstdue.ports.clock import Clock
+from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
+from firstdue.ports.clock import Clock, IdGenerator
 from firstdue.ports.grounding import GroundingService
 from firstdue.ports.repositories import FactRepository, ProfileRepository
 from firstdue.ports.sources import SourceAdapter, SourceRecord
@@ -172,6 +173,25 @@ def _values_for(source_id: str, record: SourceRecord) -> list[tuple[str, FactVal
     return []
 
 
+#: How many identity threads one pass may open.
+#:
+#: A person works these one at a time, so a pass that opened a hundred and
+#: eighty-seven of them in one go was not helping anybody -- and it cost the
+#: agent its whole budget doing it. Twelve is the same ceiling
+#: `geometry-watcher` uses, for the same reason: a district larger than one
+#: budget is the ordinary case, and the work carries over to the next pass.
+MAX_QUESTIONS_PER_PASS: Final[int] = 12
+
+#: How many addresses one pass applies hazard facts to and materialises.
+#:
+#: Three Firestore round-trips apiece -- read, write, materialise -- at about
+#: 1.8 seconds each against a real project. A city-wide EPA sweep names
+#: hundreds of buildings, and applying all of them serially spent this agent's
+#: whole 180-second budget and was killed before it finished. The rest carry
+#: over: they are still pending on the next pass.
+MAX_ADDRESSES_PER_PASS: Final[int] = 15
+
+
 class HazardWatcher:
     """Federal and confidential hazard registries, with classification intact."""
 
@@ -189,7 +209,14 @@ class HazardWatcher:
         use_langgraph: bool = True,
         max_graph_steps: int = DEFAULT_MAX_STEPS,
         agent_version: str = "1.0.0",
+        audit: AuditSink | None = None,
+        ids: IdGenerator | None = None,
     ) -> None:
+        #: Optional, so every existing caller constructs unchanged. Without it
+        #: this agent reads federal registries and leaves nothing in the log,
+        #: which on the console is indistinguishable from not having run.
+        self._audit = audit
+        self._ids = ids
         self._profiles = profiles
         self._facts = facts
         self._materializer = materializer
@@ -360,7 +387,30 @@ class HazardWatcher:
         this agent exists because those two are not the same statement.
         """
         opened: list[str] = []
-        for ambiguity in state.ambiguities:
+        # Bounded per pass.
+        #
+        # One thread per unsettled identity is right -- see above -- and
+        # unbounded it is not. Measured against the live district on
+        # 2026-08-27, with EPA FRS unreachable and PHMSA and Tier II having no
+        # public endpoint by statute, a single pass raised **187** ambiguities
+        # and parked every one of them. Each park opens a question and
+        # checkpoints it, each of those writes to the Memory Bank, and the
+        # bank's write quota answers 429 and is retried: 187 parks took 178
+        # seconds, the agent was killed at its 180-second budget, and one
+        # console poll ran for five minutes and fifty seconds.
+        #
+        # The ceiling does not lose anything. An ambiguity that is not parked
+        # this pass is still ambiguous next pass and is raised again; what the
+        # cap changes is how many threads one pass opens for identities it
+        # cannot settle anyway while its registries are down.
+        ordered = sorted(state.ambiguities, key=lambda a: a.key)
+        deferred = max(0, len(ordered) - MAX_QUESTIONS_PER_PASS)
+        if deferred:
+            logger.info(
+                "hazard_questions_deferred",
+                extra={"opened": MAX_QUESTIONS_PER_PASS, "deferred": deferred},
+            )
+        for ambiguity in ordered[:MAX_QUESTIONS_PER_PASS]:
             question_id = await park(
                 self._memory,
                 agent_id=AGENT_ID,
@@ -455,7 +505,29 @@ class HazardWatcher:
 
         written: list[str] = []
         touched: list[str] = []
-        for address_id in sorted(pending):
+        # Bounded per pass, and for the same reason the questions above are.
+        #
+        # Each address here costs a profile read, a fact write and a
+        # materialisation -- three Firestore round-trips, about 1.8 seconds
+        # against a real project. A city-wide registry sweep returns hundreds
+        # of rows, so an unbounded loop spent 160 seconds materialising a
+        # district and was killed at its budget with the tail unwritten.
+        #
+        # Deterministic order, so successive passes walk the same list and the
+        # ones deferred today are the ones taken next. Nothing is dropped: a
+        # hazard fact not applied this pass is still pending next pass.
+        addresses = sorted(pending)
+        deferred_addresses = max(0, len(addresses) - MAX_ADDRESSES_PER_PASS)
+        if deferred_addresses:
+            logger.info(
+                "hazard_addresses_deferred",
+                extra={
+                    "applied": MAX_ADDRESSES_PER_PASS,
+                    "deferred": deferred_addresses,
+                    "district_id": district_id,
+                },
+            )
+        for address_id in addresses[:MAX_ADDRESSES_PER_PASS]:
             # A registry row can name a building this district has no profile
             # for -- another district, or one nothing has filed on yet. Hazard
             # facts do not create profiles; the records watcher does that.
@@ -463,12 +535,30 @@ class HazardWatcher:
             if existing is None or existing.district_id != district_id:
                 continue
             touched.append(address_id)
-            written.extend(await self._apply(address_id, district_id, pending[address_id], now))
+            applied = await self._apply(address_id, district_id, pending[address_id], now)
+            written.extend(applied)
             await self._materializer.run(
                 address_id,
                 owner=f"{AGENT_ID}:{district_id}",
                 correlation_id=correlation_id,
             )
+            # Per address, as it is applied. The pass record below is the
+            # summary; this is the work, and it is what a console watching a
+            # multi-minute pass has to show while the pass is still running.
+            await self._record_step(
+                address_id,
+                correlation_id=correlation_id,
+                written=len(applied),
+                hazards=pending[address_id],
+            )
+
+        await self._record_pass(
+            district_id,
+            touched=len(touched),
+            written=len(written),
+            deferred_addresses=deferred_addresses,
+            unavailable=unavailable,
+        )
 
         return HazardWatchResult(
             district_id=district_id,
@@ -478,6 +568,79 @@ class HazardWatcher:
             unavailable_facts=unavailable_facts,
             unavailable_sources=tuple(unavailable),
             classifications=tuple(sorted(classifications)),
+        )
+
+    async def _record_pass(
+        self,
+        district_id: str,
+        *,
+        touched: int,
+        written: int,
+        deferred_addresses: int,
+        unavailable: Sequence[str],
+    ) -> None:
+        """One line in the log saying what this pass read and what it could not.
+
+        The unavailable registries are the point. A pass that found no hazards
+        because it read four registries and a pass that found none because
+        three of them refused are different statements, and this agent exists
+        to keep them apart -- so the log has to say which one happened.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        detail = {
+            "addresses": str(touched),
+            "facts_written": str(written),
+            "deferred": str(deferred_addresses),
+        }
+        if unavailable:
+            detail["unavailable"] = ",".join(unavailable)
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_PASS,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=district_id,
+                correlation_id=self._ids.new_id("corr"),
+                detail=detail,
+            )
+        )
+
+    async def _record_step(
+        self,
+        address_id: str,
+        *,
+        correlation_id: str,
+        written: int,
+        hazards: Sequence[StructuralFact],
+    ) -> None:
+        """One address, as its registry hits are applied.
+
+        Canonical keys and the registries they came from -- both are this
+        agent's own vocabulary, not text out of a filing, so neither can carry
+        a document's words into the log.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        keys = sorted({fact.canonical_key for fact in hazards})
+        registries = sorted({fact.source_type for fact in hazards})
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=address_id,
+                correlation_id=correlation_id,
+                detail={
+                    "facts_written": str(written),
+                    "hazards": ",".join(keys) if keys else "none",
+                    "registries": ",".join(registries) if registries else "none",
+                },
+            )
         )
 
     async def _apply(

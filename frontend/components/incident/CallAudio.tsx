@@ -47,10 +47,18 @@ export function CallAudio({ src, label, autoPlay = false }: CallAudioProps) {
     // `play()` rejects when the browser has no gesture to justify sound. That
     // is the ordinary case on a fresh load and is not an error worth showing
     // as one -- the controls below are the answer.
-    void el
-      .play()
-      .then(() => setStatus('playing'))
-      .catch(() => setStatus('blocked'));
+    //
+    // And it does not always return a promise to reject: it is specified to,
+    // and every browser this console runs in does, but jsdom returns
+    // `undefined`. Calling `.then` on that throws out of the effect and takes
+    // the panel down -- a hard failure over an autoplay nicety. Same guard as
+    // `IncomingCall`, for the same reason.
+    const started = el.play();
+    if (!started) {
+      setStatus('idle');
+      return;
+    }
+    void started.then(() => setStatus('playing')).catch(() => setStatus('blocked'));
   }, [src, autoPlay]);
 
   if (!src) {

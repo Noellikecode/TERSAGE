@@ -10,6 +10,7 @@ seals the log.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -571,3 +572,61 @@ async def test_an_incident_run_is_durable_and_names_its_version(
     stored = await container.runs.get(run.record.run_id)
     assert stored is not None
     assert stored.status is run.record.status
+
+
+async def test_concurrent_resource_requests_do_not_cross_their_outcomes(
+    container: Container, session: IncidentSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two agencies notified at once, each told about the right one.
+
+    The outcome a handler produces was parked under the *incident* id, which is
+    correct only while one request is in flight. The console sent them one at a
+    time, so it held -- until the console sent them together, at which point one
+    caller popped the other's outcome and a notification to one agency was
+    reported under another's name. Nothing in the runtime serialises these.
+
+    The yield is injected rather than waited for. Fake mode completes a request
+    without ever suspending, so the two tasks never interleave and the bug is
+    invisible; against real services every one of these is a network call. The
+    suspension goes on the run-record save -- a Firestore write in production,
+    and the last thing that happens between a handler filing its outcome and its
+    caller collecting it. That is exactly the window the outcome can be taken in.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    saved = container.runs.save
+
+    async def slow_save(record: object) -> object:
+        await asyncio.sleep(0)
+        return await saved(record)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(container.runs, "save", slow_save)
+
+    # The same seven the console sends on dispatch, together.
+    kinds = [
+        "water-supply",
+        "mutual-aid",
+        "county-oem",
+        "public-works",
+        "exposure",
+        "building-department",
+        "utility-conditions",
+    ]
+    outcomes = await asyncio.gather(
+        *(
+            session.run_resource_request(
+                incident_id,
+                correlation_id=f"corr_{kind}",
+                kind_id=kind,
+                detail="requested by the console",
+                approval_id=None,
+            )
+            for kind in kinds
+        )
+    )
+
+    # Each request got its own answer back, about the kind it asked for.
+    assert [o.kind_id for o in outcomes] == kinds

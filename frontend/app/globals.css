@@ -83,6 +83,29 @@ body {
   animation: tersage-line-in 240ms ease-out both;
 }
 
+/* One agent action arriving at the top of the activity stream.
+
+   Newest-first, so a new message pushes the rest down and the eye needs a
+   moment to know that happened -- the motion says "this one is new", which a
+   list that simply reordered itself would not. It is 200ms and it moves 6px:
+   long enough to notice, short enough that four landing at once do not read as
+   a cascade. Nothing is carried by the motion alone; every message states its
+   agent and its time in text. */
+@keyframes tersage-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.activity-message-arrived {
+  animation: tersage-message-in 200ms ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

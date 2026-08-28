@@ -39,6 +39,22 @@ class AuditEventKind(StrEnum):
     CIRCUIT_OPENED = "circuit_opened"
     CIRCUIT_CLOSED = "circuit_closed"
     RMS_FLUSHED = "rms_flushed"
+    #: One agent finished one pass, and what it did.
+    #:
+    #: Counts and ids, like every other kind here -- never a document, never a
+    #: value. It exists because two of the slow-loop agents wrote nothing to
+    #: this log at all: `geometry-watcher` measured buildings and
+    #: `hazard-watcher` read federal registries, and both read as idle on the
+    #: console because the only evidence the fleet panel has is what an agent
+    #: recorded. An agent that works and leaves no trace is indistinguishable
+    #: from one that did not run.
+    AGENT_PASS = "agent_pass"  # noqa: S105 - a pass over a district, not a passphrase
+    #: One address inside a pass. `AGENT_PASS` alone gave each of these agents a
+    #: single line per pass, which says an agent ran but not what it was doing
+    #: while it ran -- and a pass is minutes long. This is the per-address step,
+    #: so the console's terminal fills as the work happens rather than once at
+    #: the end. Counts and canonical keys only, same rule as the pass record.
+    AGENT_STEP = "agent_step"
     DEAD_LETTERED = "dead_lettered"
 
 

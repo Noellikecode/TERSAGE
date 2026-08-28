@@ -135,6 +135,73 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	@# which is the better part of a minute -- and a console started in parallel
 	@# spends that minute rendering 503s that look like a broken backend rather
 	@# than a slow one.
+	@#
+	@# ---- everything that has a real counterpart, actually used ----
+	@#
+	@# These override `.env.live` for this target only, so the demo runs on the
+	@# real services rather than on the cheaper local stand-ins:
+	@#
+	@#   PUBSUB_TOPIC_PREFIX=
+	@#     Empty, because that is what Terraform actually created. The module
+	@#     names topics `replace(each.value, ".", "-")` with no prefix, while the
+	@#     setting defaults to `firstdue` -- so the app addressed
+	@#     `firstdue-fact-written` and the project holds `fact-written`. Every
+	@#     publish went nowhere, silently, because the publish future was never
+	@#     resolved. Both halves are fixed; this sets the name to match.
+	@#
+	@#   EVENT_BACKEND=pubsub + PUBSUB_PULL_BRIDGE=true
+	@#     Real Pub/Sub. Production delivery is push to an authenticated Cloud
+	@#     Run endpoint and Google cannot push to localhost, so the bridge pulls
+	@#     from its own `local-demo-*` subscriptions and delivers through the
+	@#     same handler the push endpoint uses. It never touches the deployed
+	@#     push subscriptions. See `firstdue.adapters.pubsub.pull`.
+	@#
+	@#   CENTRAL_DATABASE_ENABLED=false
+	@#     Permits, the assessor's roll, inspections and violations come from
+	@#     DataSF over HTTP instead of the generated corpus in Firestore. Real
+	@#     rows, and thinner ones: the corpus exists because the narrative half
+	@#     of a municipal record is not published. Set it back to `true` for a
+	@#     demo that needs the inspector prose.
+	@#
+	@#   GROUNDING_SEARCH_ENABLED is deliberately NOT set.
+	@#     Measured against this project on 2026-08-27: every grounded call
+	@#     through the adapter fails. Given a 45-second deadline -- seven times
+	@#     the 6s the callers actually allow -- four calls took 33-45s and all
+	@#     four declined, and a slow-loop pass filled the log with
+	@#     `grounding_call_failed` and ran for a full minute doing nothing.
+	@#
+	@#     It is not a deadline problem. The same search, called directly over
+	@#     REST with `googleSearch` on the v1 endpoint, answers in 3.3s. The
+	@#     adapter goes through the Gen AI SDK against v1beta1 with automatic
+	@#     function calling enabled, and that is where it dies -- worth fixing,
+	@#     and not worth blocking a demo on.
+	@#
+	@#     Off, the grounding service returns its documented *unavailable*
+	@#     state: it declines every reference with a reason and returns no
+	@#     reports, which is the truthful answer to "what did the web say" when
+	@#     nobody successfully asked the web.
+	@#
+	@#   NEXT_PUBLIC_DEMO_DISPATCH=true (console)
+	@#     Runs the demo choreography against the live backend: slow-loop
+	@#     passes on an interval, then a simulated 911 call, then the drone
+	@#     sweep and the agency notifications. The console refuses to place a
+	@#     call on a live backend unless this says so -- software that invented
+	@#     a 911 call on a real deployment would be indefensible, so it is
+	@#     opt-in at launch rather than inferred from the mode. Every banner it
+	@#     produces still says the call is synthetic.
+	@#
+	@#   INTERNAL_PUSH_AUDIENCE / INTERNAL_PUSH_SERVICE_ACCOUNT
+	@#     The same identities the deployed incident service verifies. Pub/Sub
+	@#     mode refuses to start without them, and rightly: the push endpoint is
+	@#     mounted either way, and one that cannot check who called it is an open
+	@#     door into the fleet's event stream. Nothing pushes to a laptop -- the
+	@#     bridge pulls -- but the door is still shut the same way.
+	@#
+	@# Still not real, and not fixable from here: Workspace Calendar and Gmail
+	@# need domain-wide delegation a personal account cannot grant; Vertex
+	@# Vector Search needs a deployed index endpoint that bills monthly; and the
+	@# four inter-agency write targets have no real counterpart to write to,
+	@# which the console's own disclosure says.
 	@trap 'kill 0' EXIT INT TERM; \
 	 TOKEN=$$(gcloud auth print-identity-token \
 	   --impersonate-service-account=fd-ci-smoke@$(GCP_PROJECT).iam.gserviceaccount.com \
@@ -142,6 +209,10 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	 [ -n "$$TOKEN" ] || { echo "could not mint a token; see infra/smoke-staging.sh for the grant it needs"; exit 1; }; \
 	 lsof -ti:$(API_PORT) >/dev/null 2>&1 && { echo "port $(API_PORT) is already in use; stop it first"; exit 1; } || true; \
 	 ( set -a && . ./.env && . ./.env.live && set +a && \
+	   EVENT_BACKEND=pubsub PUBSUB_PULL_BRIDGE=true PUBSUB_TOPIC_PREFIX= \
+	   INTERNAL_PUSH_AUDIENCE=https://firstdue-incident \
+	   INTERNAL_PUSH_SERVICE_ACCOUNT=fd-pubsub-push@$(GCP_PROJECT).iam.gserviceaccount.com,fd-scheduler@$(GCP_PROJECT).iam.gserviceaccount.com \
+	   CENTRAL_DATABASE_ENABLED=false \
 	   PORT=$(API_PORT) $(UV) run firstdue serve ) & \
 	 echo "==> waiting for the API (it checks every seeded profile against Firestore)"; \
 	 for i in $$(seq 1 60); do \
@@ -153,6 +224,7 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	 echo "  console http://localhost:$(FRONT_PORT)"; \
 	 ( cd $(FRONT) && FIRSTDUE_CONSOLE_TOKEN=$$TOKEN \
 	   NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$(MAPS_BROWSER_KEY) \
+	   NEXT_PUBLIC_DEMO_DISPATCH=true \
 	   NEXT_PUBLIC_API_BASE_URL=http://localhost:$(API_PORT) $(NPM) run dev -- -p $(FRONT_PORT) ) & \
 	 wait
 

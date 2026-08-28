@@ -57,8 +57,18 @@ _ORDERING_ID_KEYS: Final[tuple[str, ...]] = (
 
 
 def topic_name(prefix: str, topic: Topic) -> str:
-    """The Pub/Sub topic id for a domain topic, e.g. ``firstdue-fact-written``."""
-    return f"{prefix}-{str(topic).replace('.', '-')}"
+    """The Pub/Sub topic id for a domain topic, e.g. ``firstdue-fact-written``.
+
+    An empty prefix yields the bare name -- ``fact-written``, not
+    ``-fact-written``. That is the shape Terraform actually creates: the module
+    names topics ``replace(each.value, ".", "-")`` with no prefix at all, while
+    this function's default prefix is ``firstdue``. The two disagreed, every
+    publish went to a topic that did not exist, and nothing noticed because the
+    publish future was never resolved. Supporting the empty prefix is what lets
+    a deployment name them the way its infrastructure already did.
+    """
+    name = str(topic).replace(".", "-")
+    return f"{prefix}-{name}" if prefix else name
 
 
 def subscription_name(prefix: str, topic: Topic, subscriber: str) -> str:

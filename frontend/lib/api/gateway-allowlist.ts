@@ -120,6 +120,9 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     // on the brief stream above.
     new RegExp(`^/api/v1/incidents/${ID}/brief/stream-enriched$`),
     new RegExp(`^/api/v1/incidents/${ID}/log$`),
+    // The log as it is written, one frame per entry. Read-only and resumable
+    // by sequence; it carries the same ids, keys and reasons the document does.
+    new RegExp(`^/api/v1/incidents/${ID}/log/stream$`),
     new RegExp(`^/api/v1/internal/audit/incidents/${ID}/replay$`),
   ],
   POST: [

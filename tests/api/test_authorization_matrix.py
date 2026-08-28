@@ -71,6 +71,9 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("GET", f"{PREFIX}/internal/metrics", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/brief", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/log", Role.VIEWER),
+    # The same record, pushed. Same scope as the document it streams -- a
+    # commander who may read the log may watch it arrive.
+    Endpoint("GET", f"{PREFIX}/incidents/inc-x/log/stream", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/stream", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/brief/stream-enriched", Role.VIEWER),
 )

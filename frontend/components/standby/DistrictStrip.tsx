@@ -148,7 +148,23 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
     );
   }
 
-  const unavailable = stats.sources.filter((s) => !s.available);
+  /**
+   * Sources that are unavailable **and were expected to answer**.
+   *
+   * Three of this catalogue's thirteen have no endpoint at all, and never
+   * will: PHMSA restricts programmatic access to pipeline centrelines, San
+   * Francisco publishes no hydrant feed, and Tier II filings are confidential
+   * under EPCRA. Listing them in red beside a genuine outage said "3
+   * UNAVAILABLE" on a district where nothing was wrong, every second of every
+   * demo -- and taught anyone reading the screen to ignore the one line that
+   * exists to tell them a feed has died.
+   *
+   * `UNCONFIGURED` is that permanent, documented state; the console renders
+   * each source's own reason on the source panel, which is where a policy
+   * belongs. What stays here is an outage: something that should have answered
+   * and did not.
+   */
+  const unavailable = stats.sources.filter((s) => !s.available && s.mode !== 'UNCONFIGURED');
   const fixtures = stats.sources.filter((s) => s.mode === 'FIXTURE');
   const sourceTone: Tone = unavailable.length > 0 ? 'alarm' : fixtures.length > 0 ? 'disputed' : 'ink';
 
@@ -198,7 +214,7 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
         )}
         {unavailable.length > 0 && (
           <span className="text-alarm">
-            {unavailable.length} UNAVAILABLE: {unavailable.map((s) => s.source_id).join(', ')}
+            {unavailable.length} unreachable: {unavailable.map((s) => s.source_id).join(', ')}
           </span>
         )}
       </p>

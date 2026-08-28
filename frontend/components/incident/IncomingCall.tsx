@@ -69,8 +69,18 @@ export function IncomingCall({
     }
     const el = audio.current;
     if (!el) return;
-    void el
-      .play()
+    // `play()` does not always return a promise.
+    //
+    // It is specified to, and every browser this console runs in does -- but
+    // jsdom returns `undefined`, and so do browsers old enough to predate the
+    // promise form. Calling `.then` on that throws out of an effect and takes
+    // the overlay down, which is a hard failure over an autoplay nicety.
+    const started = el.play();
+    if (!started) {
+      setBlocked(false);
+      return;
+    }
+    void started
       .then(() => setBlocked(false))
       .catch(() => {
         // No gesture yet, so the browser refuses sound. The words still need

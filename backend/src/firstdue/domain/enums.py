@@ -247,6 +247,19 @@ class LogEntryType(StrEnum):
     #: because "who was told" is the first question after an incident where
     #: somebody was not told.
     AGENT_HANDOFF = "AGENT_HANDOFF"
+    #: What one agent concluded, in its own name.
+    #:
+    #: The log already recorded that an agent was *woken* and what it was
+    #: *pointed at*; what it then made of them was visible only as a side
+    #: effect -- a brief amendment attributed to whoever emitted it. So
+    #: `sensor-fusion` could register four building faces and read as idle,
+    #: because nothing in the record carried its name. This is the entry an
+    #: agent writes about its own work, and it is what the console's per-agent
+    #: cards are built from.
+    #:
+    #: Ids, keys and one-line summaries, like every other entry type here. An
+    #: analysis that carried a source document would be a second copy of it.
+    AGENT_ANALYSIS = "AGENT_ANALYSIS"
     #: What each woken agent was pointed at, in ids and canonical keys. The
     #: second question after an incident, once "who was told" is answered:
     #: they were told, and what were they told to look at. Stored in the log

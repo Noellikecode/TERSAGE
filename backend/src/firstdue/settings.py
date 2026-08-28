@@ -327,6 +327,21 @@ class Settings(BaseSettings):
     gcp_region: str = "us-central1"
     firestore_database: str = "(default)"
     pubsub_topic_prefix: str = "firstdue"
+    #: Pull from Pub/Sub instead of waiting to be pushed to.
+    #:
+    #: Production delivery is push, to an authenticated Cloud Run endpoint.
+    #: Google cannot push to ``localhost``, so a laptop with
+    #: ``EVENT_BACKEND=pubsub`` publishes real events and receives none -- the
+    #: bus works and the fleet looks dead. This starts a bridge that pulls from
+    #: its **own** subscriptions and delivers through the same handler the push
+    #: endpoint uses. See :mod:`firstdue.adapters.pubsub.pull`.
+    #:
+    #: Off by default and ignored unless ``EVENT_BACKEND=pubsub``: a background
+    #: loop consuming a real topic is not something to switch on by accident.
+    pubsub_pull_bridge: bool = False
+    #: Names this bridge's subscriptions. Prefixed so they are recognisable as
+    #: a local run's and can never collide with a deployed push subscription.
+    pubsub_pull_prefix: str = "local-demo"
     gcs_plans_bucket: str | None = None
     #: ``global``, not a region. Verified 2026-08-21 against a real project:
     #: ``gemini-3.5-flash`` and ``gemma-4-26b-a4b-it-maas`` both 404 in

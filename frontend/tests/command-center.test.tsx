@@ -261,10 +261,40 @@ describe('standby', () => {
     expect(within(bar).getAllByTestId('meter-unscaled')).toHaveLength(4);
   });
 
-  it('reports source availability honestly, including unconfigured ones', () => {
+  it('does not call a source with no endpoint an outage', () => {
+    // `tier-ii-confidential` is UNCONFIGURED: Tier II filings are confidential
+    // under EPCRA, so there is no endpoint and there never will be. Counting it
+    // beside a real outage put a red "3 UNAVAILABLE" on a district where
+    // nothing was wrong, permanently -- which teaches an officer to read the
+    // alarm colour as decoration. Why each source has no endpoint is stated on
+    // the source panel, where a standing policy belongs.
     renderConsole();
-    expect(screen.getByText(/1 UNAVAILABLE: tier-ii-confidential/)).toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/)).not.toBeInTheDocument();
     expect(screen.getByText(/1 simulated/)).toBeInTheDocument();
+  });
+
+  it('still names a source that should have answered and did not', () => {
+    // The other half of the same rule: suppressing the permanent case must not
+    // suppress an outage. An absent record from a dead source is not an absent
+    // record, and which source died is the part an officer can act on.
+    renderConsole({
+      initialStats: {
+        ...STATS,
+        sources: [
+          ...STATS.sources,
+          {
+            source_id: 'sf-permits-live',
+            mode: 'LIVE' as const,
+            circuit_state: 'OPEN' as const,
+            available: false,
+            cache_hits: 0,
+            upstream_calls: 3,
+            last_snapshot_id: null,
+          },
+        ],
+      },
+    });
+    expect(screen.getByText(/1 unreachable: sf-permits-live/)).toBeInTheDocument();
   });
 
   it('shows the fleet with publisher and pinned version', () => {

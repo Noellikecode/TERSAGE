@@ -159,6 +159,10 @@ async def _run_geometry(payload: AgentInput, _grant: object) -> AgentOutcome:
         district_id=current.district,
         sources=current.sources,
         correlation_id=payload.correlation_id,
+        # The runtime's deadline, the same one `_run_records` passes. Without
+        # it this agent measured until the runtime killed it and committed
+        # nothing -- 0 of 385 live profiles had geometry for that reason alone.
+        deadline=payload.deadline,
     )
     return outcome(facts=current.geometry.written_fact_ids)
 
@@ -303,6 +307,11 @@ def build_agents(
         facts=container.facts,
         materializer=materializer,
         clock=container.clock,
+        # So the pass leaves a trace. Without a sink this agent measured
+        # buildings and wrote nothing to the audit log, and the console -- whose
+        # only evidence is what an agent recorded -- drew it as idle.
+        audit=container.audit,
+        ids=container.ids,
     )
     hazards = HazardWatcher(
         profiles=container.profiles,
@@ -313,6 +322,11 @@ def build_agents(
         grounding=container.grounding,
         use_langgraph=container.settings.langgraph_enabled,
         max_graph_steps=container.settings.agent_graph_max_steps,
+        # Which registries answered and which refused, in this agent's own
+        # name. Without it a pass that read nothing because three registries
+        # were down looked exactly like a pass that found no hazards.
+        audit=container.audit,
+        ids=container.ids,
     )
     structure_watch = StructureWatch(
         profiles=container.profiles,

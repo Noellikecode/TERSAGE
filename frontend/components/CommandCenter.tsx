@@ -76,6 +76,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import { StructureModel, type ViewAngle } from '@/components/StructureModel';
 import { PhotorealisticModel, type GeometryState } from '@/components/PhotorealisticModel';
+import { AgentActivity } from '@/components/incident/AgentActivity';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
 import { BuildingImagery, type ImageryView } from '@/components/incident/BuildingImagery';
 import { CallAudio } from '@/components/incident/CallAudio';
@@ -99,7 +100,7 @@ import {
 import { PanelCard } from '@/components/standby/PanelCard';
 import { RegionalHeatMap } from '@/components/standby/RegionalHeatMap';
 import { browserGet, browserPost } from '@/lib/api/client';
-import { useBriefStream, useNarrativeStream } from '@/lib/api/stream';
+import { useBriefStream, useIncidentLogStream, useNarrativeStream } from '@/lib/api/stream';
 import type {
   AgentDescriptorView,
   AgentListResponse,
@@ -110,6 +111,7 @@ import type {
   DistrictStatsView,
   GeometryView,
   IntakeChannel,
+  IntakeResponse,
   OpenIncidentResponse,
   PolicyDecisionView,
   QueueView,
@@ -186,17 +188,179 @@ const AUTO_PASS_INCIDENT_MS = 60000;
 const AUTO_CALL_MS = 50000;
 const CALL_WARNING_MS = 6000;
 
+/**
+ * How often to look again when the call is due and the queue is not loaded.
+ *
+ * The call needs an address to dispatch against, and against a live backend the
+ * district read can still be in flight when the countdown ends. Two seconds is
+ * short enough that the call lands close to its appointed time and long enough
+ * not to spin.
+ */
+const CALL_RETRY_MS = 2000;
+
+/**
+ * How long a standby read may take before the console gives up on it.
+ *
+ * The client default is four seconds, which is right for a console talking to
+ * an idle backend and wrong for one talking to a backend part-way through a
+ * live district pass. Twenty seconds is still a bound -- a read that has not
+ * answered by then is a problem worth surfacing -- and it is past the point
+ * where a busy Firestore stops being one.
+ */
+const STANDBY_READ_TIMEOUT_MS = 20_000;
+
+/**
+ * How many audit events and policy decisions the fleet panel reads.
+ *
+ * The panel derives every agent's state and its whole reasoning terminal from
+ * this window, so an agent whose events fall outside it reads as idle no matter
+ * what it did. At 60 that happened constantly: `records-watcher` writes a dozen
+ * or more events per pass and `geometry-watcher` and `hazard-watcher` write one
+ * each, so within two passes the quiet agents were pushed out entirely and the
+ * console showed two working agents and three dead ones.
+ *
+ * 300 holds several passes of a busy district. It is a window, not a fix for
+ * the shape of the metric -- an agent's own run records would be the right
+ * source -- but it is the difference between a panel that is wrong every time
+ * and one that is right.
+ */
+const AUDIT_WINDOW = 300;
+
 /** How long between walls on the drone sweep.
  *
- * Long enough that an officer sees each face arrive as its own event rather
- * than four appearing together, short enough that the building is covered
- * inside the first brief. The backend decides when the sweep is finished; this
- * only decides how fast it is asked. */
-const SWEEP_INTERVAL_MS = 3500;
+ * Short, because it no longer has to create the separation. This was 3.5s so
+ * that an officer saw each face arrive as its own event rather than four at
+ * once -- but the activity stream now gives every face its own message with its
+ * own timestamp, so the separation is in the record rather than in the pacing,
+ * and the delay was just fourteen seconds of an incident's first minute spent
+ * waiting. Against real services the vision call spaces the walls on its own.
+ *
+ * Not zero: the sweep is sequential by construction -- each request flies the
+ * next unflown wall -- and a small gap keeps a fast backend from arriving as a
+ * single indistinguishable burst. The backend decides when the sweep is
+ * finished; this only decides how fast it is asked. */
+const SWEEP_INTERVAL_MS = 600;
+
+/**
+ * How long to wait for one wall of the sweep.
+ *
+ * The longest single call in the incident loop: the backend points a camera,
+ * renders the face, and puts it through a vision model. On the client's old
+ * 4-second default that abort landed as `Drone sweep stopped: signal is aborted
+ * without reason` after the first or second wall, which is why `sensor-fusion`
+ * read as an agent that did one thing and stopped.
+ */
+const SWEEP_TIMEOUT_MS = 90_000;
 
 /** A hard ceiling on sweep requests, so a backend that never reports `complete`
  *  cannot spin this loop for ever. Four walls, one spare. */
 const SWEEP_FACES = 5;
+
+/**
+ * The notifications the demo asks for on dispatch, in order.
+ *
+ * **Choreography, and it is a simulated operator rather than a claim about the
+ * agent.** Each of these is a kind `agency-notifier` may send autonomously --
+ * informing an agency that stays free to act or not -- and each is a button an
+ * officer can press in this console. The demo presses a few of them so the
+ * fleet is visibly doing its work inside the first ninety seconds, which is
+ * what an unattended screen cannot otherwise show.
+ *
+ * It does not decide *whether* a notification is warranted; the agent does that
+ * when it composes each one, and refuses the ones it cannot support. Anything
+ * needing a chief -- a gas shutoff, a road closure -- is deliberately absent:
+ * a demo must never press an approval gate on nobody's authority.
+ *
+ * All seven autonomous kinds, not four. The catalog has seven and the console
+ * pressed four of them, so three agencies a real fire would inform -- the
+ * exposure address next door, the building department, the utility -- were
+ * never told anything, and the notifier looked like an agent with four
+ * behaviours. The other five kinds in the catalog are approval-gated and stay
+ * out, on the rule above.
+ */
+const DEMO_NOTIFICATIONS = [
+  'water-supply',
+  'mutual-aid',
+  'county-oem',
+  'public-works',
+  'exposure',
+  'building-department',
+  'utility-conditions',
+] as const;
+
+/**
+ * How long to let a slow-loop pass run before giving up on it.
+ *
+ * Ten minutes. Generous because the loop is serial end to end -- records
+ * extraction, geometry, the hazard graph, then a profile materialised per
+ * address -- and a live district measured 318 seconds. This is a ceiling on a
+ * job that is genuinely long, not a target: it exists so an honest wait does
+ * not read as a failure.
+ */
+const SLOW_LOOP_TIMEOUT_MS = 600_000;
+
+/**
+ * How long the console waits for an incident to open.
+ *
+ * The open itself is quick by construction -- the instant brief is budgeted at
+ * `instant_brief_budget_ms` and is model-free -- but it is still a Firestore
+ * write, a grant mint and a Pub/Sub publish against real services. The client's
+ * 4-second default aborted it, and because the abort arrives as
+ * `signal is aborted without reason`, the console reported a failure for an
+ * incident the backend had already opened.
+ */
+const OPEN_INCIDENT_TIMEOUT_MS = 30_000;
+
+/**
+ * How long the console waits for one agency notification.
+ *
+ * Each is a policy decision, a write action and a delivery through the gateway.
+ * Seven of them now go out together, so the slowest sets the wall clock rather
+ * than the sum -- but each still needs more than the client's 4-second default
+ * against real services.
+ */
+const NOTIFY_TIMEOUT_MS = 30_000;
+
+/**
+ * How long the console waits for a narrative to be read.
+ *
+ * This one is a model call: Model Armor screens the transcript and Gemini reads
+ * it into a closed key set with every value bound to a span. Against Vertex that
+ * is seconds, not milliseconds, and it is the reason this no longer rides along
+ * with the open -- see `dispatch`.
+ */
+const INTAKE_TIMEOUT_MS = 60_000;
+
+/**
+ * Run the demo choreography against a live backend.
+ *
+ * Off unless `NEXT_PUBLIC_DEMO_DISPATCH=true` was set at launch, which only
+ * `make live-demo` does. It exists so the fleet can be shown working against
+ * real Vertex, real Firestore and real municipal feeds without somebody having
+ * to hand-drive a dispatch mid-sentence -- and it is opt-in rather than
+ * inferred precisely because a console that decided on its own to simulate a
+ * 911 call would be indefensible.
+ *
+ * The call it places is still labelled synthetic wherever it appears.
+ */
+function demoDispatchRequested(): boolean {
+  // The launch flag, inlined at build time by Next.
+  if (process.env.NEXT_PUBLIC_DEMO_DISPATCH === 'true') return true;
+  // And `?demo=1` on the URL, which does not depend on the console having been
+  // started with the right environment. That matters more than it sounds: a
+  // `NEXT_PUBLIC_*` value is baked in when the bundle is built, so a console
+  // already running cannot be talked into the choreography, and an operator
+  // about to present has no way to tell whether the flag took. The query
+  // parameter is checked in the browser, at the moment the page loads, and is
+  // visible in the address bar -- which is the property that makes it usable
+  // under pressure.
+  if (typeof window === 'undefined') return false;
+  try {
+    return new URLSearchParams(window.location.search).get('demo') === '1';
+  } catch {
+    return false;
+  }
+}
 
 /** What one step of the sweep reports back. A refusal is a value: `flown` false
  *  with a reason, never an exception. */
@@ -423,6 +587,17 @@ export function CommandCenter({
 
   /** The hand-run slow-loop pass: idle, in flight, or finished with a word. */
   const [passRunning, setPassRunning] = useState(false);
+  /**
+   * Seconds the current pass has been running, or null between passes.
+   *
+   * A live district pass is minutes, not seconds: the loop is serial end to
+   * end, and against real feeds one measured **318s** -- records-watcher,
+   * geometry, the hazard graph and then a profile materialised per address,
+   * one at a time. A status line with no clock on it is indistinguishable from
+   * a hung request, and the honest fix while the loop is still serial is to
+   * say how long it has been rather than to imply it is nearly done.
+   */
+  const [passElapsed, setPassElapsed] = useState<number | null>(null);
   //: When the last pass finished, for the off-screen slow-loop line. Null until
   //: one has, because "no pass yet" and "a pass just now" are different claims.
   const [passAt, setPassAt] = useState<number | null>(null);
@@ -478,6 +653,14 @@ export function CommandCenter({
   // transcript this incident arrived with, which is a different thing entirely
   // -- one is what a caller said, the other is what the model composed.
   const prose = useNarrativeStream(incident?.incident_id ?? null);
+  /**
+   * The incident log as it is written, for the agent cards above the brief.
+   *
+   * Its own stream rather than a field on the brief stream: the two answer
+   * different questions and move at different rates, and a log entry that had
+   * to wait for a brief version would arrive late for no reason.
+   */
+  const incidentLog = useIncidentLogStream(incident?.incident_id ?? null);
   const announcedRef = useRef<number>(0);
 
   // The brief the officer is looking at: whatever arrived last on the stream,
@@ -563,11 +746,30 @@ export function CommandCenter({
         options.forceFireActivity === true ||
         Date.now() - fireActivityAtRef.current >= FIRE_ACTIVITY_MAX_AGE_MS;
 
+      // `STANDBY_READ_TIMEOUT_MS`, not the client's 4-second default.
+      //
+      // These are quick reads against an idle backend and slow ones against a
+      // busy one: a live slow-loop pass holds Firestore for minutes, and the
+      // district read queues behind it. At 4s they aborted, the queue stayed
+      // null, and the demo's 911 call had no address to dispatch against --
+      // which is how a console that looked fine never placed a call.
       const [statsResult, queueResult, eventsResult, decisionsResult] = await Promise.all([
-        browserGet<DistrictStatsView>(`/api/v1/districts/${districtId}/stats`, { signal }),
-        browserGet<QueueView>(`/api/v1/districts/${districtId}/queue`, { signal }),
-        browserGet<AuditEventView[]>('/api/v1/internal/audit/events?limit=60', { signal }),
-        browserGet<PolicyDecisionView[]>('/api/v1/internal/audit/decisions?limit=60', { signal }),
+        browserGet<DistrictStatsView>(`/api/v1/districts/${districtId}/stats`, {
+          signal,
+          timeoutMs: STANDBY_READ_TIMEOUT_MS,
+        }),
+        browserGet<QueueView>(`/api/v1/districts/${districtId}/queue`, {
+          signal,
+          timeoutMs: STANDBY_READ_TIMEOUT_MS,
+        }),
+        browserGet<AuditEventView[]>(`/api/v1/internal/audit/events?limit=${AUDIT_WINDOW}`, {
+          signal,
+          timeoutMs: STANDBY_READ_TIMEOUT_MS,
+        }),
+        browserGet<PolicyDecisionView[]>(`/api/v1/internal/audit/decisions?limit=${AUDIT_WINDOW}`, {
+          signal,
+          timeoutMs: STANDBY_READ_TIMEOUT_MS,
+        }),
         fireIsStale ? refreshFireActivity(signal) : Promise.resolve(),
       ]);
       // An aborted request comes back `ok: false`, so a torn-down poll writes
@@ -647,14 +849,37 @@ export function CommandCenter({
    * every agent's reasoning box tick because work actually happened. Calling it
    * "refresh" would describe the screen instead of the system.
    */
+  // The clock behind the status line. Runs only while a pass is in flight, so
+  // an idle console has no timer in it.
+  useEffect(() => {
+    if (!passRunning) return;
+    const started = Date.now();
+    const tick = setInterval(() => {
+      setPassElapsed(Math.floor((Date.now() - started) / 1000));
+    }, 1000);
+    return () => clearInterval(tick);
+  }, [passRunning]);
+
   const runSlowLoopPass = useCallback(async () => {
     setPassRunning(true);
+    setPassElapsed(0);
     setPassNotice(null);
     const result = await browserPost<Record<string, unknown>>(
       `/api/v1/districts/${districtId}/poll`,
+      {},
+      // A slow-loop pass is not a request, it is a job.
+      //
+      // The client's 4-second default is right for every read on this console
+      // and wrong for this one: a live district pass runs the whole fleet
+      // serially and one measured 318 seconds. At 4s the browser aborted every
+      // pass and reported "Slow-loop pass failed: signal is aborted without
+      // reason" while the backend went on and finished the work -- a failure
+      // message about a pass that succeeded, which is the worst of both.
+      { timeoutMs: SLOW_LOOP_TIMEOUT_MS },
     );
     if (!result.ok) {
       setPassRunning(false);
+      setPassElapsed(null);
       setPassNotice(`Slow-loop pass failed: ${result.error.message}`);
       return;
     }
@@ -662,6 +887,7 @@ export function CommandCenter({
     // screen are the ones the pass produced rather than the ones before it.
     await refreshStandby(undefined, { forceFireActivity: true });
     setPassRunning(false);
+    setPassElapsed(null);
     setPassAt(Date.now());
     setPassNotice(summarisePass(result.data));
   }, [districtId, refreshStandby]);
@@ -697,6 +923,85 @@ export function CommandCenter({
    */
   const sweepRef = useRef<{ running: boolean; stop: boolean }>({ running: false, stop: false });
 
+  /**
+   * Ask for the autonomous notifications, one at a time.
+   *
+   * Sequential and spaced, so each arrives as its own card rather than four at
+   * once -- the point of the panel is watching the fleet work, and a burst is
+   * indistinguishable from a single step. A refusal is left to the notice the
+   * request path already sets: the agent declining a notification it cannot
+   * support is a correct outcome, not an error to interrupt the demo with.
+   */
+  /**
+   * Read the transcript, after the banner is already up.
+   *
+   * A failure here is not a failed incident. The instant brief is persisted and
+   * on screen before this is called, so an intake that times out, is refused by
+   * the screener, or comes back from a model that is unreachable leaves the
+   * incident exactly as it was -- which is the same guarantee `_read_intake`
+   * makes on the backend. It says so in the notice rather than silently, since
+   * a console that dropped a caller's words without a word would be the failure
+   * mode nobody catches until afterwards.
+   */
+  const readIntake = useCallback(
+    async (incidentId: string, narrative: string, channel: IntakeChannel) => {
+      if (!narrative) return;
+      const result = await browserPost<IntakeResponse>(
+        `/api/v1/incidents/${incidentId}/intake`,
+        { narrative, channel },
+        { timeoutMs: INTAKE_TIMEOUT_MS },
+      );
+      if (!result.ok) {
+        setNotice(`The call was not read: ${result.error.message}`);
+        return;
+      }
+      // Guarded on the id: by the time a slow read returns, the console may be
+      // on a different incident, and writing this one's transcript onto that
+      // one would attribute a caller's words to the wrong fire.
+      setIncident((current) =>
+        current && current.incident_id === incidentId
+          ? { ...current, intake: result.data }
+          : current,
+      );
+    },
+    [],
+  );
+
+  /**
+   * Tell every agency at once, not one every couple of seconds.
+   *
+   * These were sequential with a 2.2s pause between them, which is nine seconds
+   * of an incident's first minute spent waiting on nothing -- and against real
+   * services the request latency was on top of that, so a demo could end with
+   * two of the four sent. They are independent notifications to different
+   * departments and nothing orders them, so they go together and land as a
+   * burst, which is also what a real dispatch looks like.
+   *
+   * Concurrency here is only safe because the outcome each one produces is now
+   * filed under its own correlation id; it used to be filed under the incident,
+   * where four at once overwrote each other and a notification to one agency
+   * could be reported under another's name.
+   */
+  const notifyAgencies = useCallback(
+    async (incidentId: string) => {
+      await Promise.all(
+        DEMO_NOTIFICATIONS.map(async (kindId) => {
+          const result = await browserPost<ResourceOutcomeView>(
+            `/api/v1/incidents/${incidentId}/resources`,
+            { kind_id: kindId },
+            { timeoutMs: NOTIFY_TIMEOUT_MS },
+          );
+          if (!result.ok) return;
+          setOutcomes((current) => [
+            ...current.filter((o) => o.kind_id !== kindId),
+            result.data,
+          ]);
+        }),
+      );
+    },
+    [],
+  );
+
   const flyDroneSweep = useCallback(
     async (incidentId: string, addressId: string) => {
       if (sweepRef.current.running) return;
@@ -707,6 +1012,8 @@ export function CommandCenter({
           if (sweepRef.current.stop) return;
           const result = await browserPost<DroneSweepResult>(
             `/api/v1/incidents/${incidentId}/drone-sweep`,
+            {},
+            { timeoutMs: SWEEP_TIMEOUT_MS },
           );
           if (!result.ok) {
             setSweepNotice(`Drone sweep stopped: ${result.error.message}`);
@@ -746,12 +1053,29 @@ export function CommandCenter({
       // The narrative is kept so the intake panel can check a quote against
       // the offsets it claims. Without the source text, a span is unverifiable.
       setNarrative(narrative);
-      const result = await browserPost<OpenIncidentResponse>('/api/v1/incidents', {
-        address: addressId,
-        cad_ref: `CAD-${Date.now().toString().slice(-6)}`,
-        alarm_level: 2,
-        ...(narrative ? { intake_narrative: narrative, intake_channel: channel } : {}),
-      });
+      // The narrative is deliberately *not* sent with the open.
+      //
+      // `POST /incidents` reads a dispatch narrative inline, after it persists
+      // the instant brief, so one request carried both a sub-second write and a
+      // Gemini extraction. Against real services that request routinely ran past
+      // the client's default timeout, and the abort surfaced as
+      // `Could not open an incident: signal is aborted without reason` -- for an
+      // incident that had in fact opened.
+      //
+      // Splitting them restores what the instant brief is *for*: version 1 is
+      // model-free and on screen in well under a second, and the transcript
+      // amends it when the model comes back. `POST /incidents/{id}/intake` runs
+      // the same `_read_intake` the inline path does, so nothing about how the
+      // narrative is screened, bound to spans, or routed changes.
+      const result = await browserPost<OpenIncidentResponse>(
+        '/api/v1/incidents',
+        {
+          address: addressId,
+          cad_ref: `CAD-${Date.now().toString().slice(-6)}`,
+          alarm_level: 2,
+        },
+        { timeoutMs: OPEN_INCIDENT_TIMEOUT_MS },
+      );
       setBusy(false);
       if (!result.ok) {
         setNotice(`Could not open an incident: ${result.error.message}`);
@@ -768,8 +1092,14 @@ export function CommandCenter({
       // And the drone goes up. Not awaited: the brief is what the first ninety
       // seconds are for, and the sweep paints onto it as each wall lands.
       void flyDroneSweep(result.data.incident_id, result.data.address_id);
+      // And the agencies. Runs beside the sweep rather than after it: both are
+      // things the fleet does in the first minute, and serialising them would
+      // put the notifier's work after the window it belongs in.
+      void notifyAgencies(result.data.incident_id);
+      // And the transcript, beside the sweep rather than ahead of the banner.
+      void readIntake(result.data.incident_id, narrative, channel);
     },
-    [openProfile, flyDroneSweep],
+    [openProfile, flyDroneSweep, notifyAgencies, readIntake],
   );
 
   demoRef.current = {
@@ -783,19 +1113,31 @@ export function CommandCenter({
   /**
    * Standby runs itself: real passes on an interval, then a call.
    *
-   * **Auto-dispatch is gated on the backend calling itself fake.** `status.mode`
-   * comes from `/api/v1/system/status`; anything other than the string `fake`
-   * -- including a status this console has not managed to read yet -- means no
-   * call is placed. Software that invented a 911 call on a real deployment
-   * would be the worst thing in this repository, so the gate is a positive
-   * check on a known value rather than an absence of a live flag. Do not
-   * relax it into `!== 'live'`.
+   * **Auto-dispatch is gated on the backend calling itself fake, or on somebody
+   * explicitly asking for it.** `status.mode` comes from
+   * `/api/v1/system/status`; anything other than the string `fake` -- including
+   * a status this console has not managed to read yet -- means no call is
+   * placed. Software that invented a 911 call on a real deployment would be the
+   * worst thing in this repository, so the gate is a positive check on a known
+   * value rather than an absence of a live flag. **Do not relax it into
+   * `!== 'live'`.**
+   *
+   * The one way past it is `NEXT_PUBLIC_DEMO_DISPATCH=true`, which `make
+   * live-demo` sets and nothing else does. That is a different statement from
+   * inferring permission: a live console still never decides on its own to
+   * simulate a call, and an operator who wants the choreography against real
+   * services has to say so at launch. The banner it produces says the call is
+   * simulated either way, so nobody watching can mistake it for a real one.
    *
    * Both timers live here, in the effect the incident tears down, so an open
    * incident silences the demo without a second piece of state deciding that.
    */
   useEffect(() => {
-    const demo = !incident && status?.mode === 'fake' && !autoCallOff && !dispatchedRef.current;
+    // Fake mode runs the choreography by default; a live console runs it only
+    // when it was launched with the flag. Read once, at module scope, so a
+    // runtime value can never turn it on.
+    const choreographed = status?.mode === 'fake' || demoDispatchRequested();
+    const demo = !incident && choreographed && !autoCallOff && !dispatchedRef.current;
 
     // Runs in both modes, slower during an incident. A pass is one HTTP request
     // that returns before it resolves; the brief arrives on its own SSE stream
@@ -826,9 +1168,26 @@ export function CommandCenter({
       () => setCallIn((left) => (left === null || left <= 0 ? left : left - 1)),
       1000,
     );
-    const call = setTimeout(() => {
+    // Retried, not fired once.
+    //
+    // This used to be a single `setTimeout`: at the appointed second it read
+    // the top of the survey queue and, if the queue had not loaded yet, simply
+    // returned. Nothing rescheduled it, so the demo never dispatched and
+    // nothing on screen said why. In fake mode the queue is always there by
+    // then and the bug was invisible; against a live backend -- where the
+    // district read competes with a slow-loop pass -- it is the ordinary case.
+    //
+    // So it waits for the queue instead of assuming it. The countdown still
+    // starts on time; the call is placed on the first tick that has an address
+    // to place it against.
+    let callTimer: ReturnType<typeof setTimeout>;
+    const placeCall = () => {
       const top = demoRef.current.queue?.entries?.[0]?.address_id;
-      if (!top) return;
+      if (!top) {
+        // No queue yet. Look again shortly rather than giving up silently.
+        callTimer = setTimeout(placeCall, CALL_RETRY_MS);
+        return;
+      }
       dispatchedRef.current = true;
       setCallIn(null);
       const sample = SAMPLE_CALLS[0];
@@ -843,13 +1202,14 @@ export function CommandCenter({
       // Not awaited, deliberately: the overlay and the dispatch start together,
       // and the brief lands while the recording plays.
       void demoRef.current.dispatch(top, sample.text, sample.channel, sample.audioSrc);
-    }, AUTO_CALL_MS);
+    };
+    callTimer = setTimeout(placeCall, AUTO_CALL_MS);
 
     return () => {
       clearInterval(passes);
       clearInterval(tick);
       clearTimeout(warn);
-      clearTimeout(call);
+      clearTimeout(callTimer);
     };
     // Deliberately narrow. Everything the timers *read* -- the queue, whether a
     // pass is in flight, the callbacks -- goes through a ref, because this
@@ -1312,7 +1672,13 @@ export function CommandCenter({
         <div className="space-y-4">
           <ConflictPanel
             conflicts={profile.conflicts}
-            referrals={[...profile.open_referrals, ...staged]}
+            // `?? []`, because a profile without the field is a crash here.
+            // The spread threw `open_referrals is not iterable` the first time
+            // a test rendered the incident view against a profile that had not
+            // been written back with one -- and a console that dies on an
+            // absent optional field would take the whole incident view with it
+            // on a fireground, over a referral nobody had filed yet.
+            referrals={[...(profile.open_referrals ?? []), ...staged]}
             onResolve={resolve}
             onStageReferral={stageReferral}
             onApproveReferral={approveReferral}
@@ -1366,7 +1732,15 @@ export function CommandCenter({
         data-testid="slow-loop-pass-status"
         className={`mt-1 text-micro ${passNotice?.startsWith('Slow-loop pass failed') ? 'text-alarm' : 'text-muted'}`}
       >
-        {passRunning ? 'Slow-loop pass running: sources, facts, conflicts, ranking.' : passNotice}
+        {passRunning
+          ? `Slow-loop pass running: sources, facts, conflicts, ranking.${
+              passElapsed === null ? '' : ` ${passElapsed}s elapsed.`
+            }${
+              // Said once, past the point where a viewer starts wondering
+              // whether it has hung. It has not: a live pass is minutes.
+              (passElapsed ?? 0) >= 20 ? ' A live district takes minutes; nothing is stuck.' : ''
+            }`
+          : passNotice}
       </p>
     </div>
   );
@@ -1643,6 +2017,15 @@ export function CommandCenter({
                     />
                   </div>
                 )}
+                {/* The fleet at work, above the brief it is producing. Every
+                    action arrives as its own message as the log is written,
+                    newest at the top, and the stream scrolls inside its own
+                    bounded height -- so the column answers both "what is
+                    happening now" and "what has happened" without pushing the
+                    brief off the screen. */}
+                <div className="mb-4">
+                  <AgentActivity entries={incidentLog.entries} />
+                </div>
                 <BriefPanel
                   emission={latest}
                   emissions={stream.emissions}

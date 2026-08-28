@@ -28,7 +28,7 @@ import math
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -50,7 +50,8 @@ from firstdue.domain.profiles import BuildingProfile, ProfileEvent, ProfileEvent
 from firstdue.domain.values import BooleanValue, IntegerValue, QuantityValue
 from firstdue.errors import AppendOnlyViolationError, SourceUnavailableError, StaleVersionError
 from firstdue.observability.logging import get_logger
-from firstdue.ports.clock import Clock
+from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
+from firstdue.ports.clock import Clock, IdGenerator
 from firstdue.ports.repositories import FactRepository, ProfileRepository
 from firstdue.ports.sources import SourceAdapter, SourceRecord
 from firstdue.services.materialization import ProfileMaterializer
@@ -262,6 +263,13 @@ class GeometryWatchResult(BaseModel):
     invalidated: tuple[str, ...] = ()
     conflicts_detected: tuple[str, ...] = ()
     unavailable_sources: tuple[str, ...] = ()
+    #: Structures that were stale and were not reached this pass.
+    #:
+    #: Reported rather than dropped silently. A district larger than one budget
+    #: is the ordinary case, and a pass that measured twelve of four hundred
+    #: has to say so -- otherwise "geometry updated" reads as "the district is
+    #: measured", which is the claim this system exists not to make.
+    deferred: int = Field(default=0, ge=0)
 
 
 def geometry_is_stale(profile: BuildingProfile) -> bool:
@@ -281,6 +289,31 @@ def geometry_is_stale(profile: BuildingProfile) -> bool:
     return False
 
 
+#: How many structures one pass will measure.
+#:
+#: Each one costs two point queries -- Solar and 3DEP -- and USGS answers in
+#: about seven seconds. Against a 300-second budget an uncapped pass over a
+#: 385-structure district cannot finish, is killed by the runtime, and commits
+#: nothing: this agent had written geometry for **0 of 385** live profiles for
+#: exactly that reason. Twelve fits comfortably inside the budget with the
+#: commit tail to spare.
+#:
+#: The cap is not a limit on coverage, because staleness advances. A structure
+#: measured this pass is no longer stale next pass, so the following pass takes
+#: the next twelve. The district is covered over several passes rather than
+#: never.
+DEFAULT_MAX_TARGETS: Final[int] = 12
+
+#: Stop this far short of the deadline.
+#:
+#: Sized to the tail rather than to one address: the loop commits profiles,
+#: runs materialization and detects conflicts *after* measuring, so a margin
+#: that only covered the last Solar call would stop with seconds to spare and
+#: be killed mid-commit -- writing nothing, which is the failure this whole
+#: change is about. The same trade `records-watcher` makes.
+STOP_MARGIN_MS: Final[int] = 30_000
+
+
 class GeometryWatcher:
     """Derives measured geometry and the facts that follow from it."""
 
@@ -292,12 +325,19 @@ class GeometryWatcher:
         materializer: ProfileMaterializer,
         clock: Clock,
         agent_version: str = "1.0.0",
+        audit: AuditSink | None = None,
+        ids: IdGenerator | None = None,
     ) -> None:
         self._profiles = profiles
         self._facts = facts
         self._materializer = materializer
         self._clock = clock
         self._agent_version = agent_version
+        #: Optional so every existing caller and test constructs unchanged. With
+        #: no sink this agent behaves exactly as before -- and reads as idle on
+        #: the console, which is what having one fixes.
+        self._audit = audit
+        self._ids = ids
 
     async def poll(
         self,
@@ -306,7 +346,17 @@ class GeometryWatcher:
         sources: Sequence[SourceAdapter],
         correlation_id: str,
         address_ids: Sequence[str] | None = None,
+        deadline: datetime | None = None,
+        max_targets: int = DEFAULT_MAX_TARGETS,
     ) -> GeometryWatchResult:
+        """Measure what fits in one budget, and say what did not fit.
+
+        ``deadline`` is the runtime's. Without it this agent measured until it
+        was killed and committed nothing -- it is the reason a live district had
+        no geometry at all. It is honoured the same way ``records-watcher``
+        honours its own: stop early enough to commit what is already measured,
+        because keeping twelve structures beats losing four hundred.
+        """
         by_source = {s.source_id: s for s in sources}
         unavailable: list[str] = []
         records: dict[str, dict[str, SourceRecord]] = {}
@@ -346,13 +396,25 @@ class GeometryWatcher:
         # and filtering after is the same answer and a metered request per
         # structure in the district: a Solar call for all 135 to re-derive the
         # two whose records moved since the last flight.
-        targets: list[str] = []
+        stale: list[str] = []
         for address_id in candidates:
+            if self._past(deadline):
+                # Enumerating a large district is itself work: 385 profile
+                # reads is tens of seconds before a single measurement. Stop
+                # here rather than spending the whole budget deciding what to
+                # measure and then measuring none of it.
+                break
             profile = await self._profiles.get(address_id)
             if profile is None or profile.district_id != district_id:
                 continue
             if geometry_is_stale(profile):
-                targets.append(address_id)
+                stale.append(address_id)
+
+        # Sorted, so successive passes walk the district in a stable order and
+        # a structure measured this pass drops out of the next one's stale list
+        # rather than being overtaken by an arbitrary reordering.
+        targets = stale[:max_targets]
+        deferred = len(stale) - len(targets)
 
         # Solar and 3DEP answer about **one address**, and asking them about a
         # district raises `address_required` before a request is even made.
@@ -360,7 +422,13 @@ class GeometryWatcher:
         # every record whatever it is asked, so this agent produced measured
         # geometry in fake mode and none at all against the live feeds -- a
         # default footprint and a "measured height" nobody measured.
+        measured: list[str] = []
         for address_id in targets:
+            if self._past(deadline):
+                # Whatever is already measured still gets committed below.
+                deferred += len(targets) - len(measured)
+                break
+            measured.append(address_id)
             for source_id in (SOLAR, LIDAR):
                 source = by_source.get(source_id)
                 if source is None:
@@ -390,14 +458,20 @@ class GeometryWatcher:
         conflicts: list[str] = []
         written = 0
 
-        for address_id in targets:
+        for address_id in measured:
             profile = await self._profiles.get(address_id)
             if profile is None:  # pragma: no cover - filtered above
                 continue
             if profile.geometry is not None:
                 invalidated.append(address_id)
 
-            count = await self._derive(profile, records[address_id])
+            # `.get`, not `[...]`. An address whose Solar *and* 3DEP calls both
+            # refused has no entry here at all, and indexing raised a KeyError
+            # that took down the whole pass -- one building outside coverage
+            # losing the district's measurements, which is the opposite of the
+            # per-address refusal handling above.
+            answered = records.get(address_id, {})
+            count = await self._derive(profile, answered)
             if count == 0:
                 continue
             written += count
@@ -408,6 +482,17 @@ class GeometryWatcher:
                 correlation_id=correlation_id,
             )
             conflicts.extend(outcome.new_conflict_ids)
+            # Recorded per building rather than once at the end, because the
+            # pass runs for minutes and a console that only learns what happened
+            # after it finished is not showing work in progress.
+            await self._record_step(
+                address_id,
+                correlation_id=correlation_id,
+                written=count,
+                sources=sorted(answered),
+                conflicts=len(outcome.new_conflict_ids),
+                re_derived=address_id in invalidated,
+            )
 
         logger.info(
             "geometry_watcher_pass",
@@ -416,8 +501,18 @@ class GeometryWatcher:
                 "updated": len(updated),
                 "invalidated": len(invalidated),
                 "unavailable": len(unavailable),
+                "deferred": deferred,
             },
         )
+        await self._record_pass(
+            district_id,
+            updated=len(updated),
+            invalidated=len(invalidated),
+            deferred=deferred,
+            unavailable=unavailable,
+            written=written,
+        )
+
         return GeometryWatchResult(
             district_id=district_id,
             addresses_updated=tuple(updated),
@@ -425,9 +520,103 @@ class GeometryWatcher:
             invalidated=tuple(invalidated),
             conflicts_detected=tuple(conflicts),
             unavailable_sources=tuple(unavailable),
+            deferred=deferred,
         )
 
     # ------------------------------------------------------------ internals
+
+    async def _record_pass(
+        self,
+        district_id: str,
+        *,
+        updated: int,
+        invalidated: int,
+        deferred: int,
+        unavailable: Sequence[str],
+        written: int,
+    ) -> None:
+        """One line in the log saying what this pass measured.
+
+        Counts and source ids. No coordinate, no height, no footprint: the
+        facts carry those, with their provenance, and a second uncited copy in
+        an audit record would be a measurement nobody could check.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        # A flat map of strings, which is what the audit record carries: every
+        # value here is a count or a source id, so nothing from a document can
+        # reach the log through it.
+        detail = {
+            "measured": str(updated),
+            "facts_written": str(written),
+            "re_derived": str(invalidated),
+            "deferred": str(deferred),
+        }
+        if unavailable:
+            detail["unavailable"] = ",".join(unavailable)
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_PASS,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=district_id,
+                correlation_id=self._ids.new_id("corr"),
+                detail=detail,
+            )
+        )
+
+    async def _record_step(
+        self,
+        address_id: str,
+        *,
+        correlation_id: str,
+        written: int,
+        sources: Sequence[str],
+        conflicts: int,
+        re_derived: bool,
+    ) -> None:
+        """One building, as it is measured.
+
+        Which sources answered for this address and how many facts came out --
+        the same discipline as the pass record: counts and source ids, never a
+        measurement. The correlation id is the pass's own, so the console can
+        group a building's step under the pass that produced it.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        detail = {
+            "facts_written": str(written),
+            "sources": ",".join(sources) if sources else "none",
+            "conflicts": str(conflicts),
+        }
+        if re_derived:
+            detail["re_derived"] = "true"
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=address_id,
+                correlation_id=correlation_id,
+                detail=detail,
+            )
+        )
+
+    def _past(self, deadline: datetime | None) -> bool:
+        """Whether this pass has spent its budget, less the commit tail.
+
+        The injected clock, never the wall clock -- the same rule
+        `records-watcher` states: a deadline derived from a `SteppingClock`
+        compared against `datetime.now()` puts every pass instantly past its
+        budget and measures nothing.
+        """
+        if deadline is None:
+            return False
+        return self._clock.now() >= deadline - timedelta(milliseconds=STOP_MARGIN_MS)
 
     async def _derive(self, profile: BuildingProfile, by_source: dict[str, SourceRecord]) -> int:
         """Write measurement facts and the spec they support."""

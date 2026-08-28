@@ -5047,6 +5047,80 @@
         ]
       }
     },
+    "/api/v1/incidents/{incident_id}/log/stream": {
+      "get": {
+        "description": "Every entry the incident has recorded, in order, resumable.\n\n**The same record, pushed rather than polled.** ``GET /log`` already returns\nthis; it is a document, fetched when somebody asks. A commander watching the\nfleet work wants the entries as they land, and the log is the right thing to\nstream because it is monotonic and gapless -- ``sequence`` is a resume point\nthat cannot skip and cannot repeat, which is exactly what ``Last-Event-ID``\nneeds and what a version number on a brief already gives the other stream.\n\n``agent_versions`` travels with each frame, which the document endpoint does\nnot send. It is how a console attributes an entry to the agent that produced\nit: without it every card would have to be inferred from the entry type, and\ntwo agents that write the same type would be indistinguishable.\n\nCarries what the log carries and nothing else -- ids, keys, counts and\nreasons. The intake entry names attributes and outcomes, never the caller's\nwords; the focus entry carries references, never values. A stream that\nwidened either would be a second, looser copy of the log.",
+        "operationId": "stream_incident_log_api_v1_incidents__incident_id__log_stream_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_sequence",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Sequence"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Last-Event-ID",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last-Event-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stream incident log entries over SSE",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
     "/api/v1/incidents/{incident_id}/resolutions": {
       "post": {
         "description": "Settle a disagreement by looking at the building.\n\nAn IC walking the 360 is a human observation, so it can close a conflict\nthat no newer document could. It writes a live-observation fact, resolves\nthe conflict, bumps ``profile_version``, and produces a marked amendment.",

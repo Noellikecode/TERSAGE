@@ -146,7 +146,9 @@ export interface BuildingProfileView {
   unknown_keys: string[];
   hydrant_ids: string[];
   last_human_survey: string | null;
-  open_referrals: ReferralSummary[];
+  /** Filed referrals. Absent on a profile the backend has not written one to,
+      so every reader must treat it as optional rather than spreading it. */
+  open_referrals?: ReferralSummary[];
   has_geometry: boolean;
 }
 

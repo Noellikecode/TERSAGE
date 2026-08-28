@@ -419,3 +419,97 @@ def test_a_reading_that_cannot_say_does_not_claim_a_stepped_roof() -> None:
     assert unknown.plane_spread_m is None
     assert not unknown.is_stepped
     assert isinstance(unknown, MeasuredHeight)
+
+
+# ------------------------------------------------------- budget and coverage
+#
+# The defect these cover, measured against the live project on 2026-08-27:
+# `geometry-watcher` had written geometry for **0 of 385** profiles, ever. It
+# took no deadline, walked every stale structure in the district at two point
+# queries apiece -- USGS 3DEP answers in about seven seconds -- and was killed
+# by the runtime every pass before its commit. Its own pass-completion log line
+# never appeared in a live run, which is how it stayed invisible.
+
+
+def test_the_pass_takes_a_deadline_and_stops_short_of_it() -> None:
+    """The whole defect in one assertion.
+
+    `records-watcher` honoured the runtime's deadline and committed what it
+    had; this agent did not take one at all. Committing twelve structures beats
+    losing four hundred.
+    """
+    import inspect
+
+    from firstdue.agents import geometry_watcher
+
+    signature = inspect.signature(geometry_watcher.GeometryWatcher.poll)
+    assert "deadline" in signature.parameters
+
+    source = inspect.getsource(geometry_watcher.GeometryWatcher.poll)
+    assert "self._past(deadline)" in source
+
+
+def test_the_handler_passes_the_runtimes_deadline() -> None:
+    """A parameter nothing supplies is a parameter that does nothing.
+
+    `_run_records` passed `payload.deadline` and `_run_geometry` did not, which
+    is the asymmetry that let one agent survive its budget and the other never
+    finish a single pass.
+    """
+    import inspect
+
+    from firstdue.demo import scenario
+
+    source = inspect.getsource(scenario._run_geometry)
+    assert "deadline=payload.deadline" in source
+
+
+def test_a_pass_is_capped_and_says_what_it_deferred() -> None:
+    """Coverage is reported, never implied.
+
+    A pass that measured twelve of four hundred must not read as "the district
+    is measured".
+    """
+    from firstdue.agents.geometry_watcher import (
+        DEFAULT_MAX_TARGETS,
+        GeometryWatchResult,
+    )
+
+    assert DEFAULT_MAX_TARGETS > 0
+    result = GeometryWatchResult(district_id="d", deferred=373)
+    assert result.deferred == 373
+
+
+def test_the_cap_advances_because_staleness_advances() -> None:
+    """The cap bounds one pass, not coverage.
+
+    A structure measured this pass is no longer stale next pass, so the
+    following pass takes the next twelve. Written as a test because a cap that
+    always took the *same* twelve would look identical for one pass and never
+    measure the thirteenth building.
+    """
+    import inspect
+
+    from firstdue.agents import geometry_watcher
+
+    source = inspect.getsource(geometry_watcher.GeometryWatcher.poll)
+    # Stale-first, then cap -- not cap, then filter.
+    stale_at = source.index("geometry_is_stale(profile)")
+    cap_at = source.index("stale[:max_targets]")
+    assert stale_at < cap_at
+
+
+def test_one_address_outside_coverage_does_not_lose_the_district() -> None:
+    """Both point sources refusing left no entry, and indexing raised KeyError.
+
+    The per-address refusal handling exists precisely so one building outside
+    coverage does not mark the source down for the rest of the district; a
+    KeyError three lines later threw the whole pass away instead.
+    """
+    import inspect
+
+    from firstdue.agents import geometry_watcher
+
+    source = inspect.getsource(geometry_watcher.GeometryWatcher.poll)
+    assert "records.get(address_id, {})" in source
+    assert "records[address_id]" not in source

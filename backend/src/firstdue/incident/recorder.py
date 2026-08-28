@@ -292,6 +292,11 @@ class IncidentRecorder:
         return await self._append(
             incident_id,
             LogEntryType.NOTIFICATION_SENT,
+            # The notifier's work, written down by the recorder. Both names go
+            # on the entry: without the actor, every notification this agent
+            # sent was filed under whoever wrote the log and `agency-notifier`
+            # read as an agent that had done nothing.
+            actor="agency-notifier",
             content={
                 "target": target,
                 "external_ref": external_ref,
@@ -416,9 +421,29 @@ class IncidentRecorder:
         )
 
     async def _append(
-        self, incident_id: str, entry_type: LogEntryType, *, content: Mapping[str, Any]
+        self,
+        incident_id: str,
+        entry_type: LogEntryType,
+        *,
+        content: Mapping[str, Any],
+        actor: str | None = None,
+        actor_version: str = "1.0.0",
     ) -> IncidentLogEntry:
+        """Append one entry.
+
+        ``actor`` names the agent whose *work* this records, when that is not
+        the recorder. Both end up in ``agent_versions``, because both were
+        involved and the record should say so: this recorder wrote the entry,
+        and some other agent did the thing it describes. Without the
+        distinction every entry in the log was attributed to whoever wrote it,
+        which made agents that never write their own entries -- `sensor-fusion`
+        registering building faces -- indistinguishable from agents that did
+        nothing at all.
+        """
         sequence = await self._log.next_sequence(incident_id)
+        versions = {AGENT_ID: self._agent_version}
+        if actor and actor != AGENT_ID:
+            versions[actor] = actor_version
         return await self._log.append(
             IncidentLogEntry(
                 entry_id=self._ids.new_id("entry"),
@@ -427,9 +452,40 @@ class IncidentRecorder:
                 entry_type=entry_type,
                 occurred_at=self._clock.now(),
                 profile_snapshot_id=content.get("profile_snapshot_id", "") or "pending",
-                agent_versions={AGENT_ID: self._agent_version},
+                agent_versions=versions,
                 content=dict(content),
             )
+        )
+
+    async def record_analysis(
+        self,
+        incident_id: str,
+        *,
+        agent_id: str,
+        agent_version: str = "1.0.0",
+        headline: str,
+        detail: str = "",
+        refs: Sequence[str] = (),
+    ) -> IncidentLogEntry:
+        """What one agent concluded, in its own name.
+
+        The entry the per-agent cards are built from. ``headline`` is one line
+        an officer reads; ``refs`` are ids and canonical keys, never values --
+        the same rule the focus keeps, for the same reason: a summary that
+        carried a measurement would be a second copy of a fact with no source,
+        no confidence and no span behind it.
+        """
+        return await self._append(
+            incident_id,
+            LogEntryType.AGENT_ANALYSIS,
+            actor=agent_id,
+            actor_version=agent_version,
+            content={
+                "agent_ref": f"{agent_id}@{agent_version}",
+                "headline": headline[:200],
+                "detail": detail[:300],
+                "refs": list(refs)[:12],
+            },
         )
 
     # --------------------------------------------------------- buffered RMS

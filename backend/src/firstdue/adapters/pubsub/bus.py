@@ -18,8 +18,9 @@ actually publishing does.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from firstdue.domain.events import EventEnvelope, Topic
 from firstdue.errors import ConfigurationError
@@ -39,6 +40,13 @@ from firstdue.ports.clock import Clock
 from firstdue.reliability.retry import DEFAULT_POLICY, FailureClass, RetryPolicy
 
 logger = get_logger(__name__)
+
+#: How long to wait for a publish to be accepted, seconds.
+#:
+#: Bounded because this is awaited inside an agent's budget. A broker that has
+#: not accepted the message by now is an outage, and the caller's failure
+#: classification is the right place for that -- not an unbounded wait.
+PUBLISH_TIMEOUT_S: Final[float] = 10.0
 
 
 @runtime_checkable
@@ -117,12 +125,27 @@ class PubSubEventBus:
         """Publish one envelope. Ordering is keyed by the entity it concerns."""
         message = encode(envelope)
         client = self._client()
-        client.publish(
+        future = client.publish(
             self.topic_for(envelope.topic),
             message.data,
             ordering_key=message.ordering_key,
             **message.attributes,
         )
+        # Resolved, not fired and forgotten.
+        #
+        # `publish` returns a future and the client sends in a background
+        # thread, so a failure -- a topic that does not exist, a permission
+        # denied -- surfaces only when the future is read. It never was, so
+        # every publish in live mode logged `event_published` and silently went
+        # nowhere: the app's default `firstdue-` topic prefix did not match the
+        # unprefixed topics Terraform creates, and nothing in the system said
+        # so. A publish that failed must not read as one that succeeded.
+        #
+        # Off the event loop, because `result()` blocks until the send
+        # completes and this runs under an agent's deadline.
+        resolve = getattr(future, "result", None)
+        if callable(resolve):
+            await asyncio.to_thread(resolve, PUBLISH_TIMEOUT_S)
         self._published.append(envelope)
         logger.info(
             "event_published",
@@ -143,6 +166,17 @@ class PubSubEventBus:
 
     def subscribers_for(self, topic: Topic) -> tuple[str, ...]:
         return tuple(sub.subscriber for sub in self._subscriptions.get(topic, []))
+
+    def subscribed_topics(self) -> tuple[Topic, ...]:
+        """Topics this process has a local handler for.
+
+        What the pull bridge subscribes to. Deliberately the *registered*
+        topics rather than every topic in the catalog: a bridge that subscribed
+        to all of them would pull envelopes nothing here handles, and
+        ``handle_push`` would dead-letter each one as ``NO_SUBSCRIBER`` --
+        turning a healthy quiet topic into a stream of undeliverables.
+        """
+        return tuple(sorted(self._subscriptions, key=str))
 
     async def handle_push(
         self, envelope: EventEnvelope, *, subscriber: str | None = None

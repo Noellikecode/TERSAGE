@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,6 +27,9 @@ from firstdue.observability.logging import configure_logging, get_logger
 from firstdue.registry.seed import RegistrySeedResult, seed_registry, verify_registry
 from firstdue.security.limits import RequestLimitsMiddleware, TokenBucketLimiter
 from firstdue.settings import AppEnv, Settings, StorageBackend, get_settings
+
+if TYPE_CHECKING:  # pragma: no cover - import shape only
+    from firstdue.adapters.pubsub.pull import PubSubPullBridge
 
 logger = get_logger(__name__)
 
@@ -116,9 +120,17 @@ def _lifespan_factory(settings: Settings) -> object:
                 "published_agents": seeded_registry.published,
             },
         )
+        # Real Pub/Sub on a laptop. Started after the fleet has registered its
+        # handlers, because the bridge subscribes to the topics this process
+        # actually listens for and an empty registration list would subscribe
+        # to nothing. See `firstdue.adapters.pubsub.pull`.
+        bridge = await _start_pull_bridge(settings, container)
+
         try:
             yield
         finally:
+            if bridge is not None:
+                await bridge.stop()
             # SIGTERM path: stop advertising readiness first so the load
             # balancer drains us, then let in-flight requests finish.
             lifecycle.begin_drain()
@@ -128,6 +140,45 @@ def _lifespan_factory(settings: Settings) -> object:
             logger.info("shutdown_complete")
 
     return lifespan
+
+
+async def _start_pull_bridge(settings: Settings, container: Container) -> PubSubPullBridge | None:
+    """The Pub/Sub pull bridge, or ``None`` when it was not asked for.
+
+    Three conditions, all required. The flag is explicit; the backend has to be
+    Pub/Sub, because there is nothing to pull from otherwise; and the bus has to
+    be the Pub/Sub one, which is the same statement made against the object
+    rather than the setting so a future rewiring cannot make them disagree.
+    """
+    if not settings.pubsub_pull_bridge:
+        return None
+
+    from firstdue.adapters.pubsub.bus import PubSubEventBus
+
+    bus = container.bus
+    if not isinstance(bus, PubSubEventBus):
+        logger.warning(
+            "pubsub_pull_bridge_skipped",
+            extra={"reason": "the event bus is not Pub/Sub", "bus": type(bus).__name__},
+        )
+        return None
+
+    from firstdue.adapters.pubsub.pull import build_subscriber
+
+    topics = bus.subscribed_topics()
+    if not topics:
+        logger.warning("pubsub_pull_bridge_skipped", extra={"reason": "no topics registered"})
+        return None
+
+    bridge = PubSubPullBridge(
+        bus=bus,
+        project_id=settings.gcp_project_id or "",
+        subscriber=build_subscriber(),
+        prefix=settings.pubsub_pull_prefix,
+        topic_prefix=settings.pubsub_topic_prefix,
+    )
+    await bridge.start(topics)
+    return bridge
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
