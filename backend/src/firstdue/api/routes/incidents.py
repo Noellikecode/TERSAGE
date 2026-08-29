@@ -20,7 +20,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Header, Query, status
+from fastapi import APIRouter, Depends, Header, Query, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette.sse import EventSourceResponse
 
@@ -35,10 +35,14 @@ from firstdue.container import Container
 from firstdue.domain.briefs import BriefEmission
 from firstdue.domain.enums import BenchmarkType
 from firstdue.errors import NotFoundError, ValidationError
+from firstdue.incident.autonomy import AutonomyDiagnostics
 from firstdue.incident.controller import IncidentController
+from firstdue.incident.entrypath import EntryPathPlan
 from firstdue.incident.fusion import ThermalFrame
 from firstdue.incident.intake import MAX_NARRATIVE_CHARS, IntakeChannel
 from firstdue.incident.interceptor import InterceptResult
+from firstdue.incident.packages import EntryPackage, package_pdf, package_pdf_filename
+from firstdue.incident.readiness import ReadinessAssessment
 from firstdue.incident.reconciler import NarrativeChunk
 from firstdue.incident.session import IncidentSession, get_session, sessions
 from firstdue.observability.context import get_correlation_id
@@ -233,6 +237,42 @@ class CloseIncidentRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     closed_by: str = Field(min_length=1, max_length=120)
+
+
+class EntryPathRequest(BaseModel):
+    """Which storey the route is solved to.
+
+    Zero-based, and defaulting to the ground floor -- the only storey a route
+    can reach without assuming a stairwell nobody surveyed. A caller that knows
+    the floor of origin (the intake binds one, marked as reported) passes it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    target_level: int = Field(default=0, ge=0, le=199)
+
+
+class PackageSummary(BaseModel):
+    """One row of the package list. Ids, statuses and counts, never a claim."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str
+    status: str
+    created_at: datetime
+    #: The readiness verdict as it stood when the package was composed.
+    ready: bool
+    path_refused: bool
+    #: Halves still waiting on a human. Empty once both are granted.
+    outstanding: list[str]
+    sent_at: datetime | None = None
+
+
+class PackageListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    incident_id: str
+    packages: list[PackageSummary]
 
 
 def _controller(container: Container) -> IncidentController:
@@ -603,13 +643,51 @@ async def stream_incident_log(
     reasons. The intake entry names attributes and outcomes, never the caller's
     words; the focus entry carries references, never values. A stream that
     widened either would be a second, looser copy of the log.
+
+    **Finding a package that is waiting for two signatures.** Since the
+    incident loop composes entry packages for itself, a console has to learn
+    about one without being told, and this stream is where it does. There is no
+    second endpoint to poll: filter these frames for
+
+        ``entry_type == "ENTRY_PACKAGE"`` and ``content["status"] ==
+        "AWAITING_APPROVAL"``
+
+    and the newest such frame *for a given* ``content["package_id"]`` is the
+    current state of that package. Every state change appends a fresh entry
+    carrying the whole document, so a later frame supersedes an earlier one
+    with the same id and a package that has been signed or sent stops matching
+    on its own.
+
+    The frame carries everything the approval card needs, flattened beside the
+    document so nothing has to be re-derived:
+    ``package_id``; ``outstanding`` (which halves are unsigned);
+    ``path_approval_id`` and ``brief_approval_id``; ``ready`` and
+    ``failed_criteria`` (the readiness verdict, and what did not pass);
+    ``path_refused``; ``prose_source``; and ``autonomy_trigger`` -- empty when a
+    human asked for the package, otherwise ``ready``, ``sweep-terminated`` or
+    ``deadline``. **Render the last three differently from the first**: a
+    package composed against a deadline states gaps that a ready one does not
+    have, and a card that showed them alike would be the one place this system
+    let a gap read as a verdict.
+
+    Approving is two posts to
+    ``/incidents/{id}/entry-packages/{package_id}/approvals/{half}``, one per
+    id above, and sending is a third to ``.../dispatch``. Nothing the loop does
+    on its own touches any of the three.
     """
-    resume_from = _resume_point(last_event_id, after_sequence)
+    # `None`, not `0`, for a fresh connection. Log sequences start at **zero**,
+    # so a resume point of `0` and "nothing to resume from" are different
+    # statements about different entries -- and collapsing them made
+    # `sequence <= resume_from` swallow entry 0 on every connection this stream
+    # ever served. That entry is the dispatch benchmark: the first thing the
+    # incident records, permanently absent from the only feed the console
+    # watches it through.
+    resume_from = _log_resume_point(last_event_id, after_sequence)
     log = await container.incident_log.get_log(incident_id)
 
     async def frames() -> AsyncIterator[dict[str, str]]:
         for entry in log.entries:
-            if entry.sequence <= resume_from:
+            if resume_from is not None and entry.sequence <= resume_from:
                 continue
             yield {
                 "event": "entry",
@@ -630,7 +708,11 @@ async def stream_incident_log(
 
 
 def _resume_point(last_event_id: str | None, after_version: int | None) -> int:
-    """Where to resume from. The header wins; the query is for testing."""
+    """Where to resume from. The header wins; the query is for testing.
+
+    Brief versions start at 1, so ``0`` is a safe "from the beginning" here.
+    The log stream cannot use this -- see :func:`_log_resume_point`.
+    """
     if last_event_id:
         try:
             return int(last_event_id)
@@ -639,6 +721,24 @@ def _resume_point(last_event_id: str | None, after_version: int | None) -> int:
             # rather than an error: showing the brief again is always safe.
             return 0
     return after_version or 0
+
+
+def _log_resume_point(last_event_id: str | None, after_sequence: int | None) -> int | None:
+    """Where to resume the *log* stream, or ``None`` for the whole log.
+
+    Separate from :func:`_resume_point` because log sequences are zero-based.
+    A brief has no version 0, so "resume from 0" and "send everything" mean the
+    same thing there; a log's entry 0 is a real entry -- the dispatch benchmark
+    -- and the two statements are not interchangeable.
+    """
+    if last_event_id:
+        try:
+            return int(last_event_id)
+        except ValueError:
+            # Same rule as above: a malformed resume point replays rather than
+            # erroring, and the console drops what it already holds by sequence.
+            return None
+    return after_sequence
 
 
 # --------------------------------------------------------------- the 360
@@ -822,6 +922,276 @@ async def approve_action(
     """The human tap. Records who approved it, and then executes."""
     session = get_session(container)
     return await session.approve(incident_id, approval_id, decided_by=caller.subject)
+
+
+# -------------------------------------------------------- the entry package
+#
+# Three documents and two taps. The readiness assessment and the entry path have
+# endpoints of their own because a console shows them while an officer is
+# deciding; the package endpoint below composes all three together and stages
+# the approvals, and it is the one that produces something a crew can be handed.
+#
+# Every POST here is a write: each records what it concluded to the incident log
+# under the agent that concluded it, which is what the console's activity stream
+# reads. None of them sends anything to anybody.
+
+
+@router.post(
+    "/incidents/{incident_id}/readiness",
+    response_model=ReadinessAssessment,
+    summary="Assess whether the record supports handing a crew an entry plan",
+)
+async def assess_readiness(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_profile_write)],
+) -> ReadinessAssessment:
+    """Evaluate six named criteria against what this incident has recorded.
+
+    A write, not a read: every criterion leaves a line in the incident log under
+    the agent that evaluated it, and so does the verdict.
+
+    ``ready: false`` is a 200, not an error. Not ready is a finding about the
+    record -- it names which criteria are outstanding and what each of them
+    checked -- and it does not stop anything: a commander may still compose,
+    approve and send a package, with the verdict printed on it.
+    """
+    return await get_session(container).assess_entry_readiness(incident_id)
+
+
+@router.post(
+    "/incidents/{incident_id}/entry-path",
+    response_model=EntryPathPlan,
+    summary="Solve the optimal entry and egress route over the measured geometry",
+)
+async def solve_entry_path(
+    incident_id: str,
+    request: EntryPathRequest,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_profile_write)],
+) -> EntryPathPlan:
+    """A\\* over a graph derived from this building's own geometry.
+
+    Nodes come from the footprint the slow loop measured and the storeys it
+    derived; edge costs come from measured thermal peaks, coverage voids,
+    UNSCANNED faces, roof obstructions, the collapse zone and the structural
+    facts and conflicts on the profile. Every leg comes back with the terms that
+    priced it and the alternatives it was priced against.
+
+    ``refused: true`` is a 200 with a stated reason -- no pre-incident geometry,
+    no storeys, a storey the model does not have, or a graph the cost model
+    disconnected. There is no fallback route and no straight line.
+    """
+    return await get_session(container).solve_entry_path(
+        incident_id, target_level=request.target_level
+    )
+
+
+@router.post(
+    "/incidents/{incident_id}/entry-packages",
+    response_model=EntryPackage,
+    status_code=status.HTTP_201_CREATED,
+    summary="Compose an entry package: readiness, path, synthesised brief, two approvals",
+)
+async def compose_entry_package(
+    incident_id: str,
+    request: EntryPathRequest,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_profile_write)],
+) -> EntryPackage:
+    """Assess, solve, synthesise, and stage both approval cards.
+
+    Runs through the runtime under the incident's own grant, so the work carries
+    a durable run record naming the pinned version that produced it -- the same
+    treatment the enriched brief and the intake get.
+
+    The brief's prose is model-composed where a model is wired and the
+    composition passes two screens: every number in it must appear in the claims
+    it was composed from, and it must contain no tactical language. Otherwise
+    the deterministic rendering ships and ``prose_rejection`` says which screen
+    refused it. Both cases are a 201.
+
+    Nothing is sent. The response carries two approval ids, both ``STAGED``.
+    """
+    session = get_session(container)
+    return await session.run_entry_package(
+        incident_id,
+        target_level=request.target_level,
+        correlation_id=get_correlation_id() or container.ids.new_id("corr"),
+    )
+
+
+@router.get(
+    "/incidents/{incident_id}/entry-packages",
+    response_model=PackageListResponse,
+    summary="List every entry package this incident produced",
+)
+async def list_entry_packages(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> PackageListResponse:
+    """Ids and statuses, in the order the packages were composed.
+
+    Read from the incident log, which is where a package lives: append-only,
+    gapless, sealed at close, and holding every state each package passed
+    through. This returns the latest state of each.
+    """
+    packages = await get_session(container).list_entry_packages(incident_id)
+    return PackageListResponse(
+        incident_id=incident_id,
+        packages=[
+            PackageSummary(
+                package_id=package.package_id,
+                status=str(package.status),
+                created_at=package.created_at,
+                ready=package.assessment.ready,
+                path_refused=package.path.refused,
+                outstanding=list(package.outstanding_halves),
+                sent_at=package.sent_at,
+            )
+            for package in packages
+        ],
+    )
+
+
+@router.get(
+    # Registered **before** ``/entry-packages/{package_id}``, and it has to be:
+    # FastAPI matches in declaration order, so with the id route first this path
+    # would be read as a request for a package called "diagnostics" and answered
+    # with the 404 it is meant to explain.
+    "/incidents/{incident_id}/entry-packages/diagnostics",
+    response_model=AutonomyDiagnostics,
+    summary="Why the loop has or has not composed an entry package yet",
+)
+async def entry_package_diagnostics(
+    incident_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> AutonomyDiagnostics:
+    """What the autonomous composer has decided so far, and why there is no card.
+
+    A read, and the only one in this file whose subject is the fleet rather than
+    the incident. Composing a package is optional by design -- every failure on
+    that path is swallowed so an optional document can never cost a frame -- and
+    the cost of that design was that a package which never appeared appeared the
+    same way as one that was never due yet. This is the question that separates
+    them: is autonomy on, does this process hold the incident, is the fallback
+    timer armed and when does it fire, has a composition been attempted, and if
+    one failed, with what.
+
+    Ids, counts, canonical criterion keys, an exception type and a capped
+    message. No claim, no prose, no fact value -- a reader who wants the
+    document reads the package.
+
+    When the card has not appeared::
+
+        curl -sS -H "Authorization: Bearer $TOKEN" \
+          "$BASE/api/v1/incidents/$INCIDENT_ID/entry-packages/diagnostics" | jq
+
+    ``autonomy_enabled: false`` means only the console button will ever compose.
+    ``tracked: false`` means this process did not open the incident and holds no
+    deadline for it. ``failures > 0`` names what went wrong. Otherwise
+    ``deadline_in_s`` is how long until the fallback fires and
+    ``outstanding_criteria`` is what the ready trigger is still waiting on.
+    """
+    return await get_session(container).describe_autonomy(incident_id)
+
+
+@router.get(
+    "/incidents/{incident_id}/entry-packages/{package_id}",
+    response_model=EntryPackage,
+    summary="Fetch one entry package in full",
+)
+async def read_entry_package(
+    incident_id: str,
+    package_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> EntryPackage:
+    """The whole document as it now stands: assessment, path, brief, approvals."""
+    return await get_session(container).get_entry_package(incident_id, package_id)
+
+
+@router.post(
+    "/incidents/{incident_id}/entry-packages/{package_id}/approvals/{half}",
+    response_model=EntryPackage,
+    summary="Approve one half of an entry package",
+)
+async def approve_entry_package_half(
+    incident_id: str,
+    package_id: str,
+    half: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_referral_write)],
+) -> EntryPackage:
+    """One human tap on one half. ``half`` is ``entry-path`` or ``crew-brief``.
+
+    Two separate judgements, so two separate taps: whether this is a route a
+    crew may be sent down, and whether this is an accurate account of what is
+    known. The approver is the authenticated caller -- there is no field for
+    naming somebody else.
+
+    Approving a half that is already granted is idempotent in effect; the
+    package simply comes back with both stamps as they stand.
+    """
+    return await get_session(container).approve_package_half(
+        incident_id, package_id, half=half, decided_by=caller.subject
+    )
+
+
+@router.post(
+    "/incidents/{incident_id}/entry-packages/{package_id}/dispatch",
+    response_model=EntryPackage,
+    summary="Mark an approved package sent to the crew",
+)
+async def dispatch_entry_package(
+    incident_id: str,
+    package_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_referral_write)],
+) -> EntryPackage:
+    """Send it. Refuses with 422 unless **both** halves are approved.
+
+    The gateway is asked again with the path approval on the request, so the
+    permission that allowed the send is a recorded decision rather than a check
+    this endpoint remembered to make. Dispatching an already-sent package
+    returns it unchanged rather than sending it twice.
+    """
+    return await get_session(container).dispatch_package(
+        incident_id, package_id, sent_by=caller.subject
+    )
+
+
+@router.get(
+    "/incidents/{incident_id}/entry-packages/{package_id}/pdf",
+    response_class=Response,
+    responses={200: {"content": {"application/pdf": {}}, "description": "The printed brief"}},
+    summary="Download an entry package as a PDF",
+)
+async def entry_package_pdf(
+    incident_id: str,
+    package_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+) -> Response:
+    """The whole package on paper: verdict, prose, every claim with its refs.
+
+    Written by a hand-rolled encoder in ``incident/pdf.py`` rather than by a
+    dependency, on the same argument as the PNG encoder in the fake tile
+    adapter -- the credential-free path is the default path and the test suite,
+    and a PDF is a header, a few objects and a cross-reference table.
+
+    Downloadable at any state, including before either half is approved: the
+    approval block prints what has and has not been signed, so a sheet nobody
+    approved says so on its own face.
+    """
+    package = await get_session(container).get_entry_package(incident_id, package_id)
+    return Response(
+        content=package_pdf(package),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{package_pdf_filename(package)}"'},
+    )
 
 
 # ----------------------------------------------------------------- the log

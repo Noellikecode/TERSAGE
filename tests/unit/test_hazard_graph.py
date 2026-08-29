@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from firstdue.adapters.memory.audit import InMemoryAuditSink
 from firstdue.adapters.memory.memory_bank import (
     InMemoryCheckpointRepository,
     InMemoryOpenQuestionRepository,
@@ -50,6 +51,7 @@ from firstdue.domain.enums import Classification, Scope, SourceType
 from firstdue.domain.profiles import BuildingProfile
 from firstdue.errors import SourceUnavailableError
 from firstdue.observability.tracing import TRACER
+from firstdue.ports.audit import AuditEventKind
 from firstdue.ports.grounding import Resolution
 from firstdue.ports.sources import SourceHealth, SourceRecord, SourceSnapshot
 from firstdue.services.materialization import ProfileMaterializer
@@ -795,3 +797,54 @@ def test_the_tail_is_kept_because_it_is_the_frontier() -> None:
 
     assert len(kept) == MAX_CHECKPOINT_ENTRIES
     assert kept[-1] == str(MAX_CHECKPOINT_ENTRIES * 3 - 1)
+
+
+async def test_a_pass_out_of_budget_still_says_it_ran(watcher_parts, clock, ids) -> None:
+    """The console's only evidence is what an agent recorded.
+
+    A pass that spent its allowance is the case where a line in the log matters
+    most and is the case that had none: applying an address is a profile read, a
+    fact write and a materialisation, and with nothing held back for them the
+    runtime cancelled the coroutine before the closing record. From the fleet
+    panel that is indistinguishable from an agent that never started.
+
+    So a pass whose deadline has already passed must defer rather than apply,
+    and must still write its ``AGENT_PASS`` saying which of the two happened.
+    The fixed pass on purpose: it is the half that reaches ``_settle`` with a
+    registry's rows actually in hand, so a zero here is a deferral this guard
+    produced rather than an empty gather.
+    """
+    profiles, facts, materializer = watcher_parts
+    audit = InMemoryAuditSink()
+    watcher = HazardWatcher(
+        profiles=profiles,
+        facts=facts,
+        materializer=materializer,
+        clock=clock,
+        audit=audit,
+        ids=ids,
+    )
+    sources = [_Registry(EPA, (_epa("Solo", address_id=BRYANT, ref="epa/1"),))]
+
+    # The control: the same registry row, the same agent, no deadline.
+    unbounded = await watcher.poll(district_id=DISTRICT, sources=sources, correlation_id="corr-0")
+    assert unbounded.facts_written > 0
+
+    spent = await watcher.poll(
+        district_id=DISTRICT,
+        sources=sources,
+        correlation_id="corr-1",
+        deadline=clock.now() - timedelta(seconds=1),
+    )
+
+    passes = [e for e in await audit.list_events(limit=50) if e.kind is AuditEventKind.AGENT_PASS]
+    assert [e.correlation_id for e in passes] == ["corr-1", "corr-0"]
+    assert all(e.actor == AGENT_ID for e in passes)
+
+    # Nothing applied, and the record says so as a deferral rather than as a
+    # district with no hazards in it -- which is the distinction this agent
+    # exists to keep.
+    assert spent.facts_written == 0
+    truncated = passes[0]
+    assert truncated.detail["addresses"] == "0"
+    assert int(truncated.detail["deferred"]) > 0

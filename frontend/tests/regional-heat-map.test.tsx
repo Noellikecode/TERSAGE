@@ -25,6 +25,9 @@ import {
   distanceKm,
   hotspotsFrom,
   nearestDetection,
+  regionKey,
+  terrainCoversZoom,
+  terrainExtent,
   totalFrp,
 } from '@/components/standby/RegionalHeatMap';
 import type { RegionBasemapView } from '@/lib/api/types';
@@ -327,5 +330,164 @@ describe('the regional heat map', () => {
     render(<RegionalHeatMap activity={activity()} basemap={null} webgl={false} />);
     expect(screen.queryByText(/request failed/i)).not.toBeInTheDocument();
     expect(screen.getByTestId('regional-heat-lede')).toBeInTheDocument();
+  });
+});
+
+describe('the camera', () => {
+  /**
+   * The reported bug: zooming out and being put back where you started.
+   *
+   * The camera was `initialViewState`, which deck.gl re-reads on every
+   * `setProps` and writes over its own state with whenever the value differs.
+   * The value was solved from the region box and the frame's measured size, and
+   * the fire-activity poll re-mints the box every few minutes -- so the officer
+   * was re-framed by a refresh they did not ask for. There is no WebGL here to
+   * drive a gesture through, so what is tested is the thing that decides
+   * whether to re-frame at all.
+   */
+  it('reads a refetched region as the same region, not a new one', () => {
+    const first = activity();
+    const second = activity();
+    expect(first.bbox).not.toBe(second.bbox);
+    expect(regionKey(second.bbox!)).toBe(regionKey(first.bbox!));
+  });
+
+  it('reads a region that actually moved as a different one', () => {
+    // A district whose region genuinely changes should be re-framed: the old
+    // camera is pointed at ground that is no longer the subject.
+    const moved = { west: -120.5, south: 38.5, east: -115.5, north: 42.5 };
+    expect(regionKey(moved)).not.toBe(regionKey(activity().bbox!));
+  });
+
+  it('keeps one map frame across a data refresh rather than remounting it', () => {
+    // A remounted frame is a remounted deck.gl, which is the same reset by a
+    // different route: the camera would go back to the opening shot every poll.
+    const { rerender } = render(
+      <RegionalHeatMap activity={activity()} basemap={BASEMAP} webgl={false} />,
+    );
+    const frame = screen.getByTestId('regional-heat-canvas');
+
+    rerender(
+      <RegionalHeatMap
+        activity={activity({ detections: [detection(), detection({ frp: 40 })] })}
+        basemap={BASEMAP}
+        webgl={false}
+      />,
+    );
+    expect(screen.getByTestId('regional-heat-canvas')).toBe(frame);
+  });
+});
+
+describe('the zoom floor', () => {
+  /**
+   * The other half of the reported bug: zooming out to a black rectangle.
+   *
+   * `TileLayer` does not clamp down against its `minZoom` the way it clamps up
+   * against its ceiling -- below the floor it answers with no tiles at all, so
+   * the mesh does not coarsen, it disappears. The floor was 5 against an
+   * opening camera near 6.5, which put it about two wheel notches away.
+   */
+  it('has mesh under every zoom the camera can reach', () => {
+    for (let zoom = 3; zoom <= 11; zoom += 0.25) {
+      expect(terrainCoversZoom(zoom)).toBe(true);
+    }
+  });
+
+  it('has no mesh below the floor, which is why the camera is stopped there', () => {
+    // The failure this documents: one notch under and there is nothing to draw.
+    expect(terrainCoversZoom(2.4)).toBe(false);
+  });
+
+  it('leaves room to zoom out from the opening shot', () => {
+    // The old floor of 5 was inside the range an officer reaches by scrolling.
+    // A regional map that cannot pull back to a continental view is not a fix.
+    expect(terrainCoversZoom(4)).toBe(true);
+    expect(terrainCoversZoom(3)).toBe(true);
+  });
+});
+
+/**
+ * What the mesh is allowed to ask the proxy for.
+ *
+ * The measured problem: the proxy refuses every square outside the region
+ * before it contacts a provider, but a camera tilted back 50 degrees sees
+ * ground well past the region on three sides -- so the mesh was requesting a
+ * pile of squares whose only possible answer was a 404, two per square because
+ * height and skin are separate grids, each one a real trip through the gateway
+ * queued ahead of the tiles the officer was waiting on.
+ */
+describe('the ground the mesh asks for', () => {
+  const REGION = { west: -124.5, south: 36.5, east: -119.5, north: 40.5 };
+
+  it('is the region, in the order a tile loader reads it', () => {
+    expect(terrainExtent(REGION)).toEqual([-124.5, 36.5, -119.5, 40.5]);
+  });
+
+  it('is the region rather than the basemap, which covers more ground than it', () => {
+    // An integer zoom always overshoots, and the overshoot is exactly the ground
+    // the proxy refuses. Framing the extent on the basemap would put every one
+    // of those squares back on the wire.
+    const extent = terrainExtent(REGION);
+    expect(extent[0]).toBeGreaterThan(BASEMAP.bounds!.west);
+    expect(extent[2]).toBeLessThan(BASEMAP.bounds!.east);
+    expect(extent[1]).toBeGreaterThan(BASEMAP.bounds!.south);
+    expect(extent[3]).toBeLessThan(BASEMAP.bounds!.north);
+  });
+
+  it('is the same four numbers a re-read of the same region produces', () => {
+    // The poll hands back a freshly parsed box every few minutes. If the extent
+    // that comes out of it compared unequal, the mesh would rebuild under a
+    // camera nobody had moved -- the same failure `regionKey` exists to stop.
+    expect(terrainExtent(REGION)).toEqual(terrainExtent({ ...REGION }));
+  });
+});
+
+describe('the key under the map', () => {
+  it('renders the key below the frame, not beside or above it', () => {
+    render(<RegionalHeatMap activity={activity()} basemap={BASEMAP} webgl={false} />);
+    const frame = screen.getByTestId('regional-heat-canvas');
+    const key = screen.getByTestId('regional-heat-key');
+    expect(frame.compareDocumentPosition(key) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('lets the frame give up height so the key is never the part that is clipped', () => {
+    // The reported bug: the frame held a 440px floor at `lg`, the key does not
+    // shrink, and the card around them clips its overflow -- so the panel ran
+    // past the bottom of the card and the key went over the edge. The frame
+    // takes what is left over now, and what it is left over from is the key.
+    render(<RegionalHeatMap activity={activity()} basemap={BASEMAP} webgl={false} />);
+    const frame = screen.getByTestId('regional-heat-canvas');
+    expect(frame.className).toContain('flex-1');
+    expect(frame.className).not.toMatch(/min-h-\[[4-9]\d\dpx\]/);
+    expect(screen.getByTestId('regional-heat-key').className).toContain('shrink-0');
+  });
+
+  it('fills the card it sits in rather than sizing itself past the bottom of it', () => {
+    render(<RegionalHeatMap activity={activity()} basemap={BASEMAP} webgl={false} />);
+    const panel = screen.getByTestId('regional-heat');
+    expect(panel.className).toContain('flex-1');
+    expect(panel.className).toContain('min-h-0');
+  });
+
+  it('does not announce a terrain wait on a display that has no mesh to wait for', () => {
+    // The line states what is happening while the mesh loads. A display with no
+    // WebGL2 is never going to draw one, and a permanent "loading" over a panel
+    // that has finished is the failure this console refuses everywhere else.
+    render(<RegionalHeatMap activity={activity()} basemap={BASEMAP} webgl={false} />);
+    expect(screen.queryByTestId('regional-heat-terrain-status')).not.toBeInTheDocument();
+    expect(screen.getByText(/no WebGL2/i)).toBeInTheDocument();
+  });
+
+  it('keeps the key when there are no detections to key', () => {
+    // An empty region is the normal reading, and the sentence explaining why
+    // the city is always empty lives in the key.
+    render(
+      <RegionalHeatMap
+        activity={activity({ detections: [], regionalCount: 0 })}
+        basemap={BASEMAP}
+        webgl={false}
+      />,
+    );
+    expect(screen.getByTestId('regional-heat-key')).toBeInTheDocument();
   });
 });

@@ -57,6 +57,18 @@ function backendHeaders(request: NextRequest, credential: BackendCredential): He
   if (lastEventId) {
     headers.set('Last-Event-ID', lastEventId);
   }
+  // Conditional revalidation for tiles.
+  //
+  // The terrain route answers with a content-derived `ETag`, and without this
+  // the validator never reaches it: this route builds the upstream request from
+  // scratch, so an unlisted header is simply dropped. That made the backend's
+  // ETag inert through the console -- every revalidation returned a full PNG of
+  // a hillside the browser already had. A validator is not a credential and
+  // carries nothing about the caller, so it is safe on the allowlist.
+  const ifNoneMatch = request.headers.get('if-none-match');
+  if (ifNoneMatch) {
+    headers.set('If-None-Match', ifNoneMatch);
+  }
   const correlationId = request.headers.get('x-correlation-id');
   if (correlationId) {
     headers.set('X-Correlation-ID', correlationId);
@@ -139,6 +151,20 @@ export async function GET(request: NextRequest, context: { params: { path: strin
     });
 
     const contentType = upstream.headers.get('content-type') ?? '';
+
+    // A revalidation that matched. Handled before anything reads a body,
+    // because a 304 has none and carries no content-type -- it would otherwise
+    // fall through to the text branch and be relabelled as JSON, which is a
+    // 304 the browser cannot use for the image it asked about.
+    if (upstream.status === 304) {
+      const revalidated: Record<string, string> = {};
+      const etag = upstream.headers.get('etag');
+      if (etag) revalidated['ETag'] = etag;
+      const cached = upstream.headers.get('cache-control');
+      if (cached) revalidated['Cache-Control'] = cached;
+      return new Response(null, { status: 304, headers: revalidated });
+    }
+
     if (contentType.includes('text/event-stream')) {
       // Piped, not buffered: the whole point of the stream is that frames
       // arrive as they are produced.
@@ -164,6 +190,24 @@ export async function GET(request: NextRequest, context: { params: { path: strin
       const headers: Record<string, string> = { 'Content-Type': contentType };
       const cacheControl = upstream.headers.get('cache-control');
       if (cacheControl) headers['Cache-Control'] = cacheControl;
+      // And the validator, so the browser can ask "still this one?" next time.
+      const etag = upstream.headers.get('etag');
+      if (etag) headers['ETag'] = etag;
+      return new Response(upstream.body, { status: upstream.status, headers });
+    }
+
+    if (contentType.startsWith('application/pdf')) {
+      // Bytes, for the same reason the image branch is: `upstream.text()`
+      // decodes as UTF-8, and a PDF's cross-reference table is byte offsets
+      // into the file. Re-encoding shifts every one of them, and the browser
+      // gets a document it will not open -- silently, with a 200 on it.
+      //
+      // The disposition is carried through so the printed brief downloads under
+      // the backend's own `crew-brief-{package_id}.pdf` rather than under the
+      // gateway path, which is what a records clerk has to file it by.
+      const headers: Record<string, string> = { 'Content-Type': contentType };
+      const disposition = upstream.headers.get('content-disposition');
+      if (disposition) headers['Content-Disposition'] = disposition;
       return new Response(upstream.body, { status: upstream.status, headers });
     }
 

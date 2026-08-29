@@ -363,3 +363,154 @@ def test_fire_activity_never_carries_a_provider_url(loaded: TestClient) -> None:
     assert "firms.modaps.eosdis.nasa.gov" not in rendered
     assert "api/area/csv" not in rendered
     assert "FIRMS_MAP_KEY" not in rendered
+
+
+# ------------------------------------------------------------------ terrain --
+
+#: A square inside the fake region, and one nowhere near it. The tile proxy
+#: serves one region and the route refuses everything else before the provider
+#: is contacted, so both cases are about what is *not* spent.
+TILE_INSIDE = "10/160/390"
+
+#: Past the port's ceiling. Deeper squares are a street map, which is a different
+#: product and somebody else's quota, so every implementation refuses them --
+#: including the synthetic one this suite runs against, which is deliberately not
+#: region-bounded because it fronts nobody's meter.
+TILE_TOO_DEEP = "18/160000/390000"
+
+
+@pytest.mark.parametrize("layer", ["elevation", "imagery"])
+def test_a_terrain_tile_is_cached_hard_enough_to_survive_a_reload(
+    app_client: TestClient, layer: str
+) -> None:
+    """A screenful of mesh is two requests per square and a camera move re-asks
+    for most of them. Without these headers the map re-downloads a hillside that
+    has not moved since the last ice age, on every render and every reload."""
+    response = app_client.get(f"{PREFIX}/terrain/{layer}/{TILE_INSIDE}")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/")
+
+    cache_control = response.headers["cache-control"]
+    assert "private" in cache_control
+    # `immutable` is the load-bearing one: it is what stops a reload
+    # revalidating every square on screen just to be told nothing changed.
+    assert "immutable" in cache_control
+    # The lifetime is the tile's own, not a number invented at the route.
+    max_age = int(cache_control.split("max-age=")[1].split(",")[0])
+    assert max_age >= 7 * 24 * 3600
+    assert response.headers["etag"]
+
+
+def test_a_tile_the_caller_already_holds_comes_back_without_its_bytes(
+    app_client: TestClient,
+) -> None:
+    """A validator that returned the tile anyway would be a round trip that saved
+    the caller nothing at all."""
+    first = app_client.get(f"{PREFIX}/terrain/elevation/{TILE_INSIDE}")
+    etag = first.headers["etag"]
+
+    second = app_client.get(
+        f"{PREFIX}/terrain/elevation/{TILE_INSIDE}", headers={"If-None-Match": etag}
+    )
+
+    assert second.status_code == 304
+    assert second.content == b""
+    # The 304 re-states the validators, so the cache can extend the entry it
+    # already has rather than dropping it on the next read.
+    assert second.headers["etag"] == etag
+    assert "immutable" in second.headers["cache-control"]
+
+
+def test_a_weakened_validator_still_earns_its_304(app_client: TestClient) -> None:
+    """``If-None-Match`` uses the weak comparison function, and a proxy is
+    entitled to have marked our tag weak on the way past."""
+    etag = app_client.get(f"{PREFIX}/terrain/elevation/{TILE_INSIDE}").headers["etag"]
+
+    weakened = app_client.get(
+        f"{PREFIX}/terrain/elevation/{TILE_INSIDE}",
+        headers={"If-None-Match": f'W/{etag}, "some-other-tile"'},
+    )
+
+    assert weakened.status_code == 304
+
+
+def test_a_stale_validator_gets_the_tile_rather_than_a_304(app_client: TestClient) -> None:
+    """The ETag is over the bytes, so a re-flown square is a different tile."""
+    response = app_client.get(
+        f"{PREFIX}/terrain/elevation/{TILE_INSIDE}", headers={"If-None-Match": '"not-this-tile"'}
+    )
+
+    assert response.status_code == 200
+    assert response.content
+
+
+def test_the_etag_distinguishes_one_square_from_another(app_client: TestClient) -> None:
+    """A tag keyed on the address rather than the bytes would serve last year's
+    imagery for a square that had been re-flown."""
+    here = app_client.get(f"{PREFIX}/terrain/elevation/{TILE_INSIDE}").headers["etag"]
+    next_door = app_client.get(f"{PREFIX}/terrain/elevation/10/161/390").headers["etag"]
+
+    assert here != next_door
+
+
+def test_a_refused_square_is_a_404_and_is_not_cached_as_one(app_client: TestClient) -> None:
+    """deck.gl reads a non-200 as "no tile here" and draws a hole, which is the
+    correct rendering of a missing square. Caching that refusal would outlive the
+    reconfiguration that made the square servable again."""
+    response = app_client.get(f"{PREFIX}/terrain/elevation/{TILE_TOO_DEEP}")
+
+    assert response.status_code == 404
+    assert "immutable" not in response.headers.get("cache-control", "")
+    assert response.json()["error"]["details"]["reason"]
+
+
+# ------------------------------------------------ the slow loop's own account
+
+
+def test_the_diagnostics_name_the_pass_and_who_recorded_it(loaded: TestClient) -> None:
+    """The question the fleet panel cannot answer about itself.
+
+    An agent that did nothing, an agent cancelled before it could say what it
+    did, and an agent whose work the console filtered out all render as
+    "0 recorded / idle". This is what separates them, so the first thing anyone
+    reaches for during a demo is a request rather than a hypothesis.
+    """
+    body = loaded.get(f"{PREFIX}/districts/{DISTRICT}/slow-loop/diagnostics").json()
+
+    assert body["district_id"] == DISTRICT
+    assert body["events_read"] > 0
+    assert set(body["slow_loop_agents"]) == {
+        "records-watcher",
+        "geometry-watcher",
+        "hazard-watcher",
+        "structure-watch",
+        "referral-clerk",
+    }
+
+    # A pass ran, and every agent in it is named with what it wrote.
+    assert body["last_pass_correlation_id"]
+    recorded = {line["agent_id"]: line for line in body["recorded"]}
+    assert set(body["slow_loop_agents"]) <= set(recorded)
+    assert all(line["events"] > 0 for line in recorded.values())
+    assert all(sum(line["kinds"].values()) == line["events"] for line in recorded.values())
+
+    # The two instants an operator compares the console's session floor
+    # against, in the format the console compares strings in.
+    assert body["last_pass_started_at"] <= body["last_pass_ended_at"]
+    assert body["last_pass_ended_at"] <= body["server_now"]
+    assert body["newest_event"]["occurred_at"] <= body["server_now"]
+
+
+def test_the_diagnostics_say_so_when_the_loop_has_never_run(app_client: TestClient) -> None:
+    """An empty answer, not a guess.
+
+    A log with no pass in it is exactly the state a console that shows an idle
+    fleet is *supposed* to be in, and reporting a correlation id here would be
+    inventing the pass the caller is asking whether happened.
+    """
+    body = app_client.get(f"{PREFIX}/districts/{DISTRICT}/slow-loop/diagnostics").json()
+
+    assert body["last_pass_correlation_id"] is None
+    assert body["recorded"] == []
+    assert body["server_now"]

@@ -35,7 +35,7 @@ has always produced.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import datetime
 from typing import Any, Final
 
@@ -59,7 +59,11 @@ from firstdue.domain.incidents import Benchmark, Incident
 from firstdue.domain.logentries import AppendOnlyLog, IncidentLogEntry
 from firstdue.domain.policy import PolicyDecision
 from firstdue.domain.work import WriteAction
-from firstdue.errors import SourceUnavailableError
+from firstdue.errors import (
+    AppendOnlyViolationError,
+    SourceUnavailableError,
+    StaleVersionError,
+)
 from firstdue.extraction.recorded import request_digest
 from firstdue.observability.logging import get_logger
 from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
@@ -74,6 +78,32 @@ logger = get_logger(__name__)
 
 AGENT_ID: Final[str] = "incident-recorder"
 RMS_TARGET: Final[str] = "department-rms"
+
+#: How many times an append re-reads the counter and takes the next sequence.
+#:
+#: The log's sequence is decided *outside* the transaction that commits it --
+#: :meth:`IncidentLogRepository.next_sequence` is a read, and the entry carries
+#: the number it read -- so two agents writing at the same instant both claim
+#: the same one and the loser is refused. That is the right refusal for the
+#: repository to make: nothing may take a sequence that is already taken.
+#:
+#: It is the wrong outcome *here*. Three agency notifications going out
+#: together is the ordinary shape of an incident, and on a live run three of
+#: them died with ``APPEND_ONLY_VIOLATION`` -- work that had happened, refused
+#: a line in the record because two writes landed in the same millisecond. So
+#: the loser re-reads the counter and takes the next number, which is what it
+#: would have done had it arrived a moment later.
+#:
+#: The same applies to the transaction underneath it: the Firestore backend
+#: commits the counter and the entry together, and a document three agents are
+#: appending to at once is a document whose transaction can exhaust its own
+#: attempts. That surfaced on the same live run as a composing run dying with
+#: ``STALE_VERSION`` and staging no entry package.
+#:
+#: Bounded, and small. Each attempt is a fresh read of a counter that only
+#: moves forward, so a writer that loses five times in a row is contending with
+#: something this loop should not be quietly absorbing.
+MAX_APPEND_ATTEMPTS: Final[int] = 5
 
 #: NERIS is the national incident reporting standard replacing NFIRS. What this
 #: produces is a *draft*: the fields the system observed, for a human to
@@ -225,27 +255,37 @@ class IncidentRecorder:
         third.
         """
         sealed = emission if emission.content_hash else emission.sealed()
-        sequence = await self._log.next_sequence(emission.incident_id)
-        entry = IncidentLogEntry(
-            entry_id=self._ids.new_id("entry"),
-            incident_id=emission.incident_id,
-            sequence=sequence,
-            entry_type=LogEntryType.BRIEF_EMITTED,
-            occurred_at=self._clock.now(),
-            profile_snapshot_id=sealed.profile_snapshot_id,
-            agent_versions=dict(sealed.agent_versions),
-            content={
-                "emission_id": sealed.emission_id,
-                "version": sealed.version,
-                "stage": str(sealed.stage),
-                "content_hash": sealed.content_hash,
-                "unknown_count": len(sealed.unknowns),
-                "unavailable": list(sealed.unavailable),
-                "narrative_available": sealed.narrative_available,
-                "model_invoked": sealed.model_invoked,
-            },
+        stored = await self._commit(
+            emission.incident_id,
+            lambda sequence: IncidentLogEntry(
+                entry_id=self._ids.new_id("entry"),
+                incident_id=emission.incident_id,
+                sequence=sequence,
+                entry_type=LogEntryType.BRIEF_EMITTED,
+                occurred_at=self._clock.now(),
+                profile_snapshot_id=sealed.profile_snapshot_id,
+                agent_versions=dict(sealed.agent_versions),
+                content={
+                    "emission_id": sealed.emission_id,
+                    "version": sealed.version,
+                    "stage": str(sealed.stage),
+                    "content_hash": sealed.content_hash,
+                    "unknown_count": len(sealed.unknowns),
+                    "unavailable": list(sealed.unavailable),
+                    "narrative_available": sealed.narrative_available,
+                    "model_invoked": sealed.model_invoked,
+                },
+            ),
         )
-        stored = await self._log.append(entry)
+        # A brief is the interceptor's work and it does not come through
+        # `_append`, so without this the one agent producing a brief every few
+        # seconds had a single `grant_minted` to its name for the whole
+        # incident. Attributed to the emission's own agents, which is who
+        # composed it.
+        for agent_id, agent_version in (
+            sealed.agent_versions or {AGENT_ID: self._agent_version}
+        ).items():
+            await self._record_step(stored, actor=agent_id, actor_version=agent_version)
         logger.info(
             "brief_persisted",
             extra={
@@ -411,6 +451,36 @@ class IncidentRecorder:
             },
         )
 
+    async def record_entry_package(
+        self,
+        content: Mapping[str, Any],
+        *,
+        incident_id: str,
+        agent_id: str,
+        agent_version: str = "1.0.0",
+    ) -> IncidentLogEntry:
+        """One state of one entry package: staged, half-approved, or sent.
+
+        The package has no collection of its own and this is why. The log is
+        already append-only, gapless, sealable and written through to the
+        records system, and "what was the crew handed, who signed each half of
+        it, and when" is the question it exists to answer. Every state change
+        appends rather than edits, so the approval history *is* the entry
+        sequence and a later version cannot quietly replace an earlier one.
+
+        The content comes from
+        :func:`~firstdue.incident.packages.package_content`, which is the only
+        thing that builds one -- a package that reached the log by another route
+        would be a document nobody could validate on the way back out.
+        """
+        return await self._append(
+            incident_id,
+            LogEntryType.ENTRY_PACKAGE,
+            actor=agent_id,
+            actor_version=agent_version,
+            content=content,
+        )
+
     async def record_observed_fact(
         self, incident_id: str, *, fact_id: str, canonical_key: str, source: str
     ) -> IncidentLogEntry:
@@ -440,12 +510,12 @@ class IncidentRecorder:
         registering building faces -- indistinguishable from agents that did
         nothing at all.
         """
-        sequence = await self._log.next_sequence(incident_id)
         versions = {AGENT_ID: self._agent_version}
         if actor and actor != AGENT_ID:
             versions[actor] = actor_version
-        return await self._log.append(
-            IncidentLogEntry(
+        entry = await self._commit(
+            incident_id,
+            lambda sequence: IncidentLogEntry(
                 entry_id=self._ids.new_id("entry"),
                 incident_id=incident_id,
                 sequence=sequence,
@@ -454,6 +524,122 @@ class IncidentRecorder:
                 profile_snapshot_id=content.get("profile_snapshot_id", "") or "pending",
                 agent_versions=versions,
                 content=dict(content),
+            ),
+        )
+        await self._record_step(entry, actor=actor, actor_version=actor_version)
+        return entry
+
+    async def _commit(
+        self,
+        incident_id: str,
+        build: Callable[[int], IncidentLogEntry],
+    ) -> IncidentLogEntry:
+        """Append one entry, taking the next free sequence.
+
+        ``build`` is called once per attempt with the sequence to claim, rather
+        than being handed a finished entry to renumber: the content hash covers
+        the sequence, so an entry rebuilt at a new number has to be *built* at
+        it. It also means the timestamp is the instant the entry was actually
+        committed rather than the instant the first attempt was made.
+
+        Two lost races are retried and nothing else.
+
+        The first is the sequence: somebody committed the number this attempt
+        read. The second is the transaction itself -- the Firestore backend
+        writes the counter and the entry together, and a document several
+        agents are appending to at once is a document whose transaction can
+        exhaust its own attempts and come back as a
+        :class:`~firstdue.errors.WriteContentionError`. Both mean the entry did
+        not land and nothing committed under its id, so building it again at a
+        fresh number is the same write, made a moment later.
+
+        A sealed log is neither: it carries no ``expected`` in its details and
+        is re-raised untouched, because an entry arriving after the incident
+        closed is a real violation and retrying it would be a writer hammering
+        a closed record. See :data:`MAX_APPEND_ATTEMPTS`.
+        """
+        last: Exception | None = None
+        for attempt in range(MAX_APPEND_ATTEMPTS):
+            sequence = await self._log.next_sequence(incident_id)
+            try:
+                return await self._log.append(build(sequence))
+            except AppendOnlyViolationError as exc:
+                if "expected" not in exc.details:
+                    raise
+                last = exc
+            except StaleVersionError as exc:
+                last = exc
+            logger.info(
+                "log_append_retried",
+                extra={
+                    "incident_id": incident_id,
+                    "attempted_sequence": sequence,
+                    "attempt": attempt + 1,
+                    "error_type": type(last).__name__,
+                },
+            )
+        raise (
+            last
+            if last is not None
+            else AppendOnlyViolationError(  # pragma: no cover
+                "the incident log could not be appended to",
+                details={"incident_id": incident_id},
+            )
+        )
+
+    async def _record_step(
+        self,
+        entry: IncidentLogEntry,
+        *,
+        actor: str | None,
+        actor_version: str,
+    ) -> None:
+        """Say in the audit log that this happened, under the name that did it.
+
+        The incident log and the audit log answer different questions and are
+        read by different things. The incident log is the department's record of
+        *the fire*; the audit log is the record of *the fleet*, and it is the
+        only evidence the console has for whether an agent is working.
+
+        Every entry above passed through here and none of them landed in the
+        audit log, so two agents that do their whole job through this recorder
+        -- `sensor-fusion` registering building faces, and the recorder itself
+        writing the record -- had no audit trail at all and the console drew
+        both as idle for the length of an incident they were busy through. An
+        agent that works and leaves no trace is indistinguishable from one that
+        did not run.
+
+        Attributed exactly as the entry is: the acting agent where the entry
+        names one, the recorder where it does not. Crediting the recorder for
+        another agent's analysis is the same mistake in the other direction.
+        """
+        acting = actor or AGENT_ID
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=entry.occurred_at,
+                actor=acting,
+                actor_version=actor_version if acting != AGENT_ID else self._agent_version,
+                target=entry.incident_id,
+                # Set, so this step can be counted against *this* fire.
+                #
+                # Without it the console could only ever total an agent's whole
+                # session, and the incident agents' counters opened at whatever
+                # the last few incidents had left behind -- "45 recorded" before
+                # this one had done anything. It is also the field the Firestore
+                # sink promotes to a queryable column, so a per-incident read is
+                # a filter rather than a scan.
+                incident_id=entry.incident_id,
+                correlation_id=entry.incident_id,
+                # The entry type and where it sits in the log -- enough to find
+                # the entry itself, and nothing copied out of it. The content is
+                # in the incident log with its provenance; a second uncited copy
+                # here would be a claim nobody could check.
+                detail={
+                    "entry": entry.entry_type.value,
+                    "sequence": str(entry.sequence),
+                },
             )
         )
 

@@ -270,6 +270,15 @@ class GeometryWatchResult(BaseModel):
     #: has to say so -- otherwise "geometry updated" reads as "the district is
     #: measured", which is the claim this system exists not to make.
     deferred: int = Field(default=0, ge=0)
+    #: Structures the budget ran out before it could even ask about.
+    #:
+    #: Separate from ``deferred`` because it is a different sentence. A deferred
+    #: structure was found stale and left for next pass; an unexamined one was
+    #: never opened, and nothing here knows whether it was stale. Folded
+    #: together, a pass that stopped during enumeration reported "measured 0,
+    #: deferred 0" -- the same numbers as a district with nothing stale in it,
+    #: which is the one reading it must never be confused with.
+    unexamined: int = Field(default=0, ge=0)
 
 
 def geometry_is_stale(profile: BuildingProfile) -> bool:
@@ -397,12 +406,18 @@ class GeometryWatcher:
         # structure in the district: a Solar call for all 135 to re-derive the
         # two whose records moved since the last flight.
         stale: list[str] = []
-        for address_id in candidates:
+        unexamined = 0
+        for position, address_id in enumerate(candidates):
             if self._past(deadline):
                 # Enumerating a large district is itself work: 385 profile
                 # reads is tens of seconds before a single measurement. Stop
                 # here rather than spending the whole budget deciding what to
                 # measure and then measuring none of it.
+                #
+                # Counted, because stopping here is the one case where every
+                # other number this pass reports is zero, and zeroes that mean
+                # "we never looked" have to say so.
+                unexamined = len(candidates) - position
                 break
             profile = await self._profiles.get(address_id)
             if profile is None or profile.district_id != district_id:
@@ -422,10 +437,26 @@ class GeometryWatcher:
         # every record whatever it is asked, so this agent produced measured
         # geometry in fake mode and none at all against the live feeds -- a
         # default footprint and a "measured height" nobody measured.
+        #
+        # One building at a time, measured *and committed* before the next one
+        # is asked about. Measuring all twelve and then deriving all twelve was
+        # the same total work in a worse order: about seven seconds of USGS per
+        # structure means a minute and a half in which the pass had written
+        # nothing and recorded nothing, followed by twelve steps at once -- a
+        # report of finished work rather than work in progress, which is the
+        # thing the step record exists to show. It also meant a pass killed
+        # during the measuring half threw away every measurement it held,
+        # because the only commit was on the far side of the loop.
         measured: list[str] = []
+        updated: list[str] = []
+        invalidated: list[str] = []
+        conflicts: list[str] = []
+        written = 0
+
         for address_id in targets:
             if self._past(deadline):
-                # Whatever is already measured still gets committed below.
+                # Everything measured so far is already committed above; only
+                # what has not been reached yet is deferred to the next pass.
                 deferred += len(targets) - len(measured)
                 break
             measured.append(address_id)
@@ -453,12 +484,7 @@ class GeometryWatcher:
                     # A point source answers about the address it was asked
                     # about; the mapper has no address to attribute it to.
                     records.setdefault(address_id, {})[source_id] = record
-        updated: list[str] = []
-        invalidated: list[str] = []
-        conflicts: list[str] = []
-        written = 0
 
-        for address_id in measured:
             profile = await self._profiles.get(address_id)
             if profile is None:  # pragma: no cover - filtered above
                 continue
@@ -506,9 +532,11 @@ class GeometryWatcher:
         )
         await self._record_pass(
             district_id,
+            correlation_id=correlation_id,
             updated=len(updated),
             invalidated=len(invalidated),
             deferred=deferred,
+            unexamined=unexamined,
             unavailable=unavailable,
             written=written,
         )
@@ -521,6 +549,7 @@ class GeometryWatcher:
             conflicts_detected=tuple(conflicts),
             unavailable_sources=tuple(unavailable),
             deferred=deferred,
+            unexamined=unexamined,
         )
 
     # ------------------------------------------------------------ internals
@@ -529,9 +558,11 @@ class GeometryWatcher:
         self,
         district_id: str,
         *,
+        correlation_id: str,
         updated: int,
         invalidated: int,
         deferred: int,
+        unexamined: int,
         unavailable: Sequence[str],
         written: int,
     ) -> None:
@@ -551,6 +582,9 @@ class GeometryWatcher:
             "facts_written": str(written),
             "re_derived": str(invalidated),
             "deferred": str(deferred),
+            # Zero on every ordinary pass, and the one number that separates a
+            # measured district from a pass that never got to look at one.
+            "unexamined": str(unexamined),
         }
         if unavailable:
             detail["unavailable"] = ",".join(unavailable)
@@ -562,7 +596,11 @@ class GeometryWatcher:
                 actor=AGENT_ID,
                 actor_version=self._agent_version,
                 target=district_id,
-                correlation_id=self._ids.new_id("corr"),
+                # The pass's own id, not a fresh one. A closing line that
+                # floated loose could not be grouped with the steps it closes,
+                # and a console scoping a column to the pass in flight has
+                # nothing else to key on.
+                correlation_id=correlation_id,
                 detail=detail,
             )
         )

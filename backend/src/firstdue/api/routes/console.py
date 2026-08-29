@@ -17,10 +17,11 @@ Three shapes recur, and they are the honest ones:
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from firstdue.agents.actions import ActionFlow
@@ -36,7 +37,7 @@ from firstdue.api.routes.health import get_container
 from firstdue.container import Container
 from firstdue.demo.scenario import build_agents
 from firstdue.domain.conflicts import ConflictStatus
-from firstdue.domain.enums import AssertionStatus, SourceType, SurveyOutcome
+from firstdue.domain.enums import AssertionStatus, Loop, SourceType, SurveyOutcome
 from firstdue.domain.geometry import GeometrySpec
 from firstdue.domain.keys import CanonicalKey
 from firstdue.domain.preplan import render_svg
@@ -45,6 +46,7 @@ from firstdue.domain.values import FactValue
 from firstdue.domain.work import SurveyRecord
 from firstdue.errors import NotFoundError, ValidationError
 from firstdue.observability.metrics import METRICS
+from firstdue.ports.audit import AuditEvent
 from firstdue.ports.fireactivity import FireActivity, FireActivityClient
 from firstdue.ports.imagery import (
     BasemapStyle,
@@ -54,6 +56,7 @@ from firstdue.ports.imagery import (
     RegionBasemap,
 )
 from firstdue.ports.tiles import TileLayer
+from firstdue.registry.descriptors import active_descriptors
 from firstdue.services.surveys import SurveyService
 
 router = APIRouter(tags=["console"])
@@ -542,6 +545,7 @@ async def terrain_tile(
     z: int,
     x: int,
     y: int,
+    request: Request,
     container: Annotated[Container, Depends(get_container)],
     caller: Annotated[Caller, Depends(require_read)],
 ) -> Response:
@@ -577,6 +581,33 @@ async def terrain_tile(
     loader rather than a person: deck.gl reads a non-200 as "no tile here" and
     draws the mesh with a gap, which is the correct rendering of a square that
     is missing. A 200 carrying an explanation would be decoded as terrain.
+
+    **The caching here is the difference between a map that opens and one that
+    reloads.** A screenful of mesh is two requests per square -- height and skin
+    -- so a first paint is scores of them, and every later camera move re-asks
+    for squares it has already seen. Three things make that cheap:
+
+    * ``max-age`` from the tile itself, which is what ``MapTile.max_age_s``
+      is for: a month for elevation, a week for imagery.
+    * ``immutable``, because a square at a fixed zoom, x and y *is* immutable
+      for that window -- terrain does not move and imagery is re-flown on a
+      scale of years. Without it a browser reload revalidates every tile on
+      screen, which is a round trip each to be told nothing changed.
+    * An ``ETag``, so the revalidations that do happen -- a hard refresh, a
+      cache that has aged out -- come back 304 with no body instead of a
+      quarter-megabyte of identical PNG.
+
+    ``private`` stays: these are served behind the console's authorization and
+    have no business in a shared cache, even though the bytes are not personal.
+
+    One caveat worth knowing before anybody measures this: the console reaches
+    this route through its own gateway, which rebuilds request and response
+    headers from scratch so that a browser-supplied ``Authorization`` cannot
+    survive into an upstream call. It forwards ``Cache-Control`` and does not
+    yet forward ``ETag`` or ``If-None-Match``, so today ``immutable`` is what
+    the browser acts on and the validator below only serves a direct caller.
+    That is the right way round -- a tile not requested beats a tile requested
+    and answered 304 -- but it means the ETag is not what makes the map fast.
     """
     tile = await container.tiles.fetch(layer=layer, z=z, x=x, y=y)
     if not tile.available:
@@ -590,10 +621,39 @@ async def terrain_tile(
                 "reason": tile.unavailable_reason,
             },
         )
-    return Response(
-        content=tile.payload,
-        media_type=tile.content_type,
-        headers={"Cache-Control": f"private, max-age={tile.max_age_s}"},
+
+    # Over the bytes rather than over the coordinates: the address of a square
+    # does not change when the provider re-flies it, and an ETag that could not
+    # tell those apart would serve last year's imagery forever.
+    etag = f'"{hashlib.blake2b(tile.payload, digest_size=16).hexdigest()}"'
+    headers = {
+        "Cache-Control": f"private, max-age={tile.max_age_s}, immutable",
+        "ETag": etag,
+    }
+    if _matches_etag(request.headers.get("if-none-match"), etag):
+        # 304 carries the validators and no body. Returned before the
+        # media type is set, because a body-less response that declares one is
+        # a claim about bytes that are not there.
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
+    return Response(content=tile.payload, media_type=tile.content_type, headers=headers)
+
+
+def _matches_etag(header: str | None, etag: str) -> bool:
+    """Whether ``If-None-Match`` covers this tile's ETag.
+
+    A list, because that is what the header is: a cache holding several variants
+    sends them all. ``W/`` is stripped before comparing -- the weak comparison
+    function is the one RFC 9110 requires for ``If-None-Match``, and a proxy that
+    weakened our tag in transit must still get its 304 rather than the tile.
+    """
+    if not header:
+        return False
+    if header.strip() == "*":
+        return True
+    return any(
+        candidate.strip().removeprefix("W/") == etag.removeprefix("W/")
+        for candidate in header.split(",")
     )
 
 
@@ -1002,4 +1062,162 @@ async def recall_narratives(
             for match in matches
         ),
         index_populated=bool(matches),
+    )
+
+
+# ------------------------------------------------------- slow-loop diagnostics
+
+
+class AgentPassLine(BaseModel):
+    """What one agent recorded in one pass."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    agent_id: str
+    #: Audit events this agent wrote under the pass's correlation id.
+    events: int = Field(ge=0)
+    #: Those events by kind, so a pass that only recorded its own failure is
+    #: distinguishable from one that recorded a district's worth of steps.
+    kinds: dict[str, int] = Field(default_factory=dict)
+    first_at: str | None = None
+    last_at: str | None = None
+
+
+class NewestAuditEvent(BaseModel):
+    """The newest thing in the audit log, whoever wrote it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    audit_id: str
+    kind: str
+    actor: str
+    occurred_at: str
+    correlation_id: str
+
+
+class SlowLoopDiagnostics(BaseModel):
+    """Why the fleet panel does or does not have anything to draw."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    district_id: str
+    #: This process's clock at the moment of the read, in the format every
+    #: timestamp below is written in. The console's session floor is a string
+    #: comparison against values stamped by *this* clock, so a floor that looks
+    #: impossible next to this number is a clock-skew answer rather than a
+    #: fleet answer.
+    server_now: str
+    #: Audit events read to answer this. The window, not the log.
+    events_read: int = Field(ge=0)
+    #: The catalogued slow-loop agents, whatever they have recorded.
+    slow_loop_agents: tuple[str, ...] = ()
+    #: The newest pass any slow-loop agent recorded, by its correlation id.
+    #: ``None`` when no slow-loop agent has written a pass or a step at all,
+    #: which is the honest answer to "when did the loop last run" on a log that
+    #: has never seen one.
+    last_pass_correlation_id: str | None = None
+    last_pass_started_at: str | None = None
+    last_pass_ended_at: str | None = None
+    #: Every agent that recorded something in that pass, and how much. An agent
+    #: absent from this list recorded nothing in it.
+    recorded: tuple[AgentPassLine, ...] = ()
+    newest_event: NewestAuditEvent | None = None
+
+
+#: The two kinds that carry a slow-loop pass's own correlation id. The console
+#: reads the same pair for the same reason -- a write or a blocked injection
+#: mints a fresh correlation and so identifies no pass.
+_PASS_KINDS: frozenset[str] = frozenset({"agent_pass", "agent_step"})
+
+
+@router.get(
+    "/districts/{district_id}/slow-loop/diagnostics",
+    response_model=SlowLoopDiagnostics,
+    summary="When the slow loop last ran, and which agents recorded it",
+)
+async def slow_loop_diagnostics(
+    district_id: str,
+    container: Annotated[Container, Depends(get_container)],
+    caller: Annotated[Caller, Depends(require_read)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 500,
+) -> SlowLoopDiagnostics:
+    """The one question the fleet panel cannot answer about itself.
+
+    The panel's only evidence is the audit log, and it renders an agent that
+    recorded nothing exactly the same way whether the agent did nothing, did
+    something and was cancelled before it could say so, or did something the
+    console then filtered out under its session floor. Those are three different
+    faults with three different fixes and one appearance, which is what this
+    endpoint separates.
+
+    Read-only, viewer role, and counts and ids only -- no fact value, no record
+    contents, nothing the audit sink did not already redact on the way in::
+
+        curl -sS -H "Authorization: Bearer $TOKEN" \
+          "$BASE/api/v1/districts/$DISTRICT_ID/slow-loop/diagnostics" | jq
+
+    ``last_pass_correlation_id: null`` means no slow-loop agent has ever
+    recorded a pass or a step here: the loop is not running, or it is being
+    cancelled before it writes. A correlation id with ``recorded`` naming fewer
+    agents than ``slow_loop_agents`` names the ones that ran out of budget.
+    A full ``recorded`` list beside a console showing ``0 recorded`` is a
+    console-side filter, and ``last_pass_ended_at`` against ``server_now`` and
+    against the console's own floor is where that is settled.
+    """
+    slow_agents = tuple(sorted({d.agent_id for d in active_descriptors() if d.loop is Loop.SLOW}))
+    events = await container.audit.list_events(limit=limit)
+    now = container.clock.now()
+
+    newest = max(events, key=lambda e: (e.occurred_at, e.audit_id), default=None)
+
+    # The pass in flight is read out of the log rather than remembered, for the
+    # same reason the console reads it that way: a scheduler drives most passes
+    # and this process may not have run the one being asked about.
+    passes = [e for e in events if str(e.kind) in _PASS_KINDS and e.actor in set(slow_agents)]
+    newest_pass = max(passes, key=lambda e: (e.occurred_at, e.audit_id), default=None)
+
+    lines: tuple[AgentPassLine, ...] = ()
+    started_at: str | None = None
+    ended_at: str | None = None
+    if newest_pass is not None:
+        in_pass = [e for e in events if e.correlation_id == newest_pass.correlation_id]
+        started_at = min(e.occurred_at for e in in_pass).isoformat()
+        ended_at = max(e.occurred_at for e in in_pass).isoformat()
+        by_actor: dict[str, list[AuditEvent]] = {}
+        for event in in_pass:
+            by_actor.setdefault(event.actor, []).append(event)
+        lines = tuple(
+            AgentPassLine(
+                agent_id=actor,
+                events=len(written),
+                kinds={
+                    kind: len([e for e in written if str(e.kind) == kind])
+                    for kind in sorted({str(e.kind) for e in written})
+                },
+                first_at=min(e.occurred_at for e in written).isoformat(),
+                last_at=max(e.occurred_at for e in written).isoformat(),
+            )
+            for actor, written in sorted(by_actor.items())
+        )
+
+    return SlowLoopDiagnostics(
+        district_id=district_id,
+        server_now=now.isoformat(),
+        events_read=len(events),
+        slow_loop_agents=slow_agents,
+        last_pass_correlation_id=newest_pass.correlation_id if newest_pass else None,
+        last_pass_started_at=started_at,
+        last_pass_ended_at=ended_at,
+        recorded=lines,
+        newest_event=(
+            NewestAuditEvent(
+                audit_id=newest.audit_id,
+                kind=str(newest.kind),
+                actor=newest.actor,
+                occurred_at=newest.occurred_at.isoformat(),
+                correlation_id=newest.correlation_id,
+            )
+            if newest is not None
+            else None
+        ),
     )

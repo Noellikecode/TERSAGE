@@ -357,10 +357,19 @@ INCIDENT_INTERCEPTOR = _agent(
     # The **slowest** stage's budget, not the fastest. This was 500 ms for one
     # release and that was a defect: `budget_seconds` treats
     # `latency_target_ms` as a hard cap on every run of the agent, so a 500 ms
-    # target would have timed out both model-bearing stages -- the enriched
-    # prose at 4 s and the intake read at 6 s -- against a real Vertex
-    # endpoint. Fake mode answers in microseconds, so nothing failed locally
-    # and the whole incident loop would have degraded on the first live call.
+    # target would have timed out all three model-bearing stages -- the
+    # enriched prose and the crew brief at 4 s and the intake read at 5 s --
+    # against a real Vertex endpoint. Fake mode answers in microseconds, so
+    # nothing failed locally and the whole incident loop would have degraded on
+    # the first live call.
+    #
+    # The gap between 5 s and this is not slack, it is the reserve. A stage
+    # whose model deadline equalled the cap would be cancelled by the runtime
+    # at the same instant the model gave up, so the refusal the loop knows how
+    # to record and route around would be replaced by a handler that recorded
+    # nothing and woke nobody. What the second buys is everything after the
+    # model call: the screen, the log entry, the amendment, the routing and the
+    # wakes -- or, on the package stage, the readiness verdict and the solve.
     #
     # The instant brief does not need this number to protect it. It is emitted
     # synchronously outside any runtime run and is already checked against
@@ -385,9 +394,30 @@ SENSOR_FUSION = _agent(
     # viewer do it, which is how that was settled.
     scopes={Scope.READ_PROFILE, Scope.READ_GEOMETRY, Scope.WRITE_PROFILE},
     classifications={Classification.PUBLIC, Classification.RESTRICTED},
-    # A frame that registers slower than this is a frame describing a fire that
-    # has moved. Void detection is a fixed threshold, not a search.
-    latency_ms=2_000,
+    # It was 2 s, and the sentence beside it read: "a frame that registers
+    # slower than this is a frame describing a fire that has moved." That is a
+    # true thing about *frames* and it was the wrong thing to enforce here,
+    # because this number is not a staleness rule -- it is the hard cap the
+    # runtime cancels the run at, and the vision call happens inside it.
+    #
+    # Measured against live Vertex, one frame at `_FRAME_PX`: 5.2 s, 5.4 s,
+    # 5.9 s, 7.1 s, 9.0 s cold. Every one of those is over 2 s, so on a live
+    # incident every frame was cancelled, every wall stayed UNSCANNED,
+    # `thermal.coverage` could never pass, and the agent that reads walls
+    # recorded one line -- that four faces were unscanned -- for a whole fire.
+    # Fake mode answers in microseconds, which is why 2 s looked fine for as
+    # long as nobody flew a sweep against a real model.
+    #
+    # 12 s is the cold call plus `FRAME_WORK_RESERVE_MS` and the writes after
+    # it, and it is the number the sweep's own arithmetic is now written
+    # against: `MAX_FACE_ATTEMPTS` is 2, so a wall that genuinely cannot be
+    # read costs up to 24 s of a sweep rather than the 4 s it used to. That is
+    # the price of the frames that *can* be read arriving at all.
+    #
+    # Staleness is still enforced, and by the thing that should enforce it:
+    # `DEFAULT_COVERAGE_WINDOW` lapses a face back to UNSCANNED five minutes
+    # after the frame that covered it, whatever the run cost.
+    latency_ms=12_000,
     input_schema="ThermalFrame",
     output_schema="ThermalObservation",
 )

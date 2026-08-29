@@ -447,6 +447,8 @@ export interface AuditEventView {
   occurred_at: string;
   actor: string;
   target: string | null;
+  /** Which fire this belongs to, where it belongs to one. */
+  incident_id?: string | null;
   correlation_id: string;
   detail: Record<string, string>;
 }
@@ -605,4 +607,212 @@ export interface RegionBasemapView {
       synthetic ground plane says in this line that it is one. */
   attribution: string;
   unavailable_reason: string;
+}
+
+// ---------------------------------------------------------- entry package --
+
+/**
+ * One readiness criterion, as the backend evaluated it.
+ *
+ * `passed` is the whole verdict for this line and there is no third state: a
+ * check that could not run fails and says why in `reason`. The console must
+ * never render a failure as anything other than a failure -- that inversion is
+ * the single reading this document exists to prevent.
+ */
+export interface CriterionView {
+  criterion_id: string;
+  title: string;
+  passed: boolean;
+  reason: string;
+  /** Fact ids, canonical keys, face labels, conflict ids. Never a value. */
+  refs: string[];
+}
+
+/**
+ * The six criteria and the verdict over them.
+ *
+ * `ready`, `failed_ids` and `summary` are computed by the backend and sent on
+ * the wire deliberately -- a console that re-derived "is this ready" from six
+ * booleans is a console that can disagree with the document it is rendering.
+ * So nothing here recomputes them.
+ */
+export interface ReadinessAssessmentView {
+  incident_id: string;
+  address_id: string;
+  assessed_at: string;
+  assessed_by: string;
+  assessed_by_version: string;
+  profile_snapshot_id: string;
+  criteria: CriterionView[];
+  ready: boolean;
+  failed_ids: string[];
+  summary: string;
+}
+
+/** One priced term on a leg: what it cost and what measurement said so. */
+export interface CostTermView {
+  term_id: string;
+  weight: number;
+  detail: string;
+  refs: string[];
+}
+
+/** A leg the cost model refused to build, and why. Never a large number. */
+export interface BarrierView {
+  from_id: string;
+  to_id: string;
+  reason: string;
+  refs: string[];
+}
+
+/**
+ * One point on the route, in every frame a renderer might want it in.
+ *
+ * `x_m`/`y_m`/`z_m` are footprint-local metres -- the same frame the geometry
+ * spec's footprint is in, so the two can be drawn together without a transform
+ * either side invented. `longitude`/`latitude` are **null** whenever the city
+ * could not place the parcel; a renderer that filled them in from anywhere
+ * else would be putting a crew's route at coordinates nobody surveyed.
+ */
+export interface WaypointView {
+  node_id: string;
+  kind: string;
+  face: string;
+  level: number | null;
+  x_m: number;
+  y_m: number;
+  z_m: number;
+  longitude: number | null;
+  latitude: number | null;
+}
+
+export interface RouteLegView {
+  from_id: string;
+  to_id: string;
+  distance_m: number;
+  cost: number;
+  multiplier: number;
+  terms: CostTermView[];
+  /** What the search priced this against and rejected. */
+  avoided: string[];
+  /** One sentence joining the two. Composed from the terms, never authored. */
+  chose_because: string;
+}
+
+export interface RouteView {
+  waypoints: WaypointView[];
+  legs: RouteLegView[];
+  total_cost: number;
+  total_distance_m: number;
+  expanded_nodes: number;
+}
+
+/**
+ * The route in, the route out, or a stated refusal.
+ *
+ * `refused` and `entry` are not redundant: a refusal carries no route at all
+ * and the reason is the finding. There is no fallback route and no straight
+ * line, so a console that drew something when `refused` is true would be
+ * drawing a path the backend declined to compute.
+ */
+export interface EntryPathPlanView {
+  incident_id: string;
+  address_id: string;
+  algorithm: string;
+  heuristic: string;
+  target_level: number;
+  refused: boolean;
+  refusal_reason: string;
+  refusal_refs: string[];
+  entry: RouteView | null;
+  egress: RouteView | null;
+  egress_note: string;
+  barriers: BarrierView[];
+  unscanned_faces: string[];
+  node_count: number;
+  edge_count: number;
+  /** The face the route makes entry through, or an empty string. */
+  entry_face: string;
+}
+
+export interface BriefClaimView {
+  claim_id: string;
+  /** One of READINESS, STRUCTURE, THERMAL, ROUTE, UNKNOWNS, CAVEATS. */
+  section: string;
+  text: string;
+  refs: string[];
+}
+
+export interface CrewBriefView {
+  brief_id: string;
+  incident_id: string;
+  address_id: string;
+  composed_at: string;
+  composed_by: string;
+  composed_by_version: string;
+  profile_snapshot_id: string;
+  claims: BriefClaimView[];
+  prose: string;
+  /** "deterministic" or "model". Shown, because the two are not the same claim. */
+  prose_source: string;
+  /** Why a model composition was refused, when one was. A stable code. */
+  prose_rejection: string;
+  model_ref: string;
+  unknowns: string[];
+  readiness_summary: string;
+  claim_refs: string[];
+}
+
+export type PackageStatus = 'AWAITING_APPROVAL' | 'READY_TO_SEND' | 'SENT';
+
+/** The two halves, named the way the endpoint path spells them. */
+export type PackageHalf = 'entry-path' | 'crew-brief';
+
+/**
+ * One assessment, one path, one brief, and what humans did about them.
+ *
+ * `status` and `outstanding_halves` are computed backend-side from the two
+ * approval stamps; the console reflects them rather than deriving its own,
+ * for the same reason it does not recompute `ready`.
+ */
+export interface EntryPackageView {
+  package_id: string;
+  incident_id: string;
+  address_id: string;
+  created_at: string;
+  created_by: string;
+  created_by_version: string;
+  assessment: ReadinessAssessmentView;
+  path: EntryPathPlanView;
+  brief: CrewBriefView;
+  path_approval_id: string;
+  brief_approval_id: string;
+  path_approved_by: string | null;
+  path_approved_at: string | null;
+  brief_approved_by: string | null;
+  brief_approved_at: string | null;
+  sent_at: string | null;
+  sent_by: string | null;
+  dispatch_decision_id: string;
+  disclaimer: string;
+  path_approved: boolean;
+  brief_approved: boolean;
+  status: PackageStatus;
+  outstanding_halves: PackageHalf[];
+}
+
+/** One row of the package list. Ids, statuses and counts, never a claim. */
+export interface PackageSummaryView {
+  package_id: string;
+  status: string;
+  created_at: string;
+  ready: boolean;
+  path_refused: boolean;
+  outstanding: string[];
+  sent_at: string | null;
+}
+
+export interface PackageListView {
+  incident_id: string;
+  packages: PackageSummaryView[];
 }

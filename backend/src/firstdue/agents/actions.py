@@ -73,6 +73,8 @@ from firstdue.ports.repositories import (
     WriteActionRepository,
 )
 from firstdue.ports.writes import ExternalWriteTarget
+from firstdue.registry.descriptors import descriptor_for
+from firstdue.reliability.budget import budget_seconds
 
 logger = get_logger(__name__)
 
@@ -105,6 +107,28 @@ REFERRAL_DRAFT_MAX_CHARS: Final[int] = 4000
 #: A referral is drafted in the slow loop, where nobody is waiting on a fire
 #: ground. Generous, and still a hard bound.
 REFERRAL_DRAFT_DEADLINE_MS: Final[int] = 8000
+
+#: What a dispatch keeps back so the referral -- this clerk's actual job -- is
+#: still reachable when the four autonomous writes have eaten the budget.
+#:
+#: One dispatch makes five external calls: a work-order write, a Calendar
+#: insert, a crew mail, a plan artifact into object storage, and a model draft.
+#: Both runtimes wrap the handler in ``asyncio.timeout`` (``FakeRuntime.invoke``,
+#: ``ADKRuntime.invoke``), so overrunning the 60-second descriptor budget is a
+#: *cancellation*: ``dispatch`` never returns and the pass record at the end of
+#: it never executes. That is the whole reason this agent showed "0 recorded" on
+#: a live console while it was staging referrals -- fixtures answer in
+#: microseconds, so fake mode never saw it. Stopping short and saying so beats
+#: being killed with the work done and no evidence that it was.
+#:
+#: Sized to cover staging: a draft bounded by ``REFERRAL_DRAFT_DEADLINE_MS``
+#: plus the repository writes behind it.
+_REFERRAL_TAIL_MS: Final[int] = 12_000
+
+#: What staging keeps back for the record of having staged. Repository writes
+#: and two audit appends, no network -- small, and the last thing standing
+#: between a pass that happened and a console that can see it.
+_RECORD_TAIL_MS: Final[int] = 3_000
 
 #: Matches the shape of a fact id, so a draft that *invents* a citation is
 #: caught as well as one that drops a real one. Best effort by construction: it
@@ -242,6 +266,7 @@ class ActionFlow:
         crew_email: str,
         correlation_id: str,
         prior_referrals: Sequence[ReferralRecord] = (),
+        deadline: datetime | None = None,
     ) -> DispatchResult:
         """Cut the work order, hold the calendar, notify the crew, write the plan.
 
@@ -253,44 +278,105 @@ class ActionFlow:
                 repository to widen its own context is an agent whose blast
                 radius is no longer written down. Defaults to the referrals
                 already carried on the profile.
+            deadline: when this dispatch must have stopped. The caller's, and
+                the runtime that invoked the clerk is the caller that has one --
+                see ``_REFERRAL_TAIL_MS`` for why an agent that cannot see its
+                own budget is an agent the runtime kills mid-write. Defaults to
+                this agent's own catalogued budget so a direct caller, a test,
+                or an API route is bounded too.
         """
         profile = await self._profiles.get(entry.address_id)
         if profile is None:
             raise NotFoundError("profile not found", details={"address_id": entry.address_id})
 
+        deadline = deadline or self._own_deadline()
         now = self._clock.now()
         scheduled = now + SURVEY_LEAD
         compensations: list[str] = []
+        # Stages the budget did not reach, in the order they would have run.
+        # Named on the pass record: "the calendar was skipped" is a result, and
+        # a dispatch that quietly wrote four of five things is not.
+        skipped: list[str] = []
+        work_order_ref: str | None = None
+        calendar_ref: str | None = None
+        notification_ref: str | None = None
+        stored: Any = None
+        replayed = False
+        referral_id: str | None = None
+        approval_id: str | None = None
+        staging = "not_reached"
 
-        work_order_ref, replayed = await self._work_order(
-            entry, company=company, profile=profile, now=now, compensations=compensations
-        )
-        calendar_ref = await self._calendar_hold(
-            entry, company=company, crew_email=crew_email, profile=profile, starts_at=scheduled
-        )
-        notification_ref = await self._notify(
-            entry, company=company, crew_email=crew_email, profile=profile, starts_at=scheduled
-        )
-        plan, stored = await self._write_plan(profile, now=now, compensations=compensations)
+        # The pass record lives in a `finally` because it is the only evidence
+        # this agent leaves on an ordinary pass, and every other statement here
+        # can end the coroutine: a municipal endpoint that hangs, a mail
+        # transport that raises, a cancellation the runtime delivers because
+        # one call outlived the margins below. A net rather than a guarantee --
+        # a cancellation landing inside the record's own await still loses it --
+        # but the guards are what keep the pass off that path in the first
+        # place, and this catches the rest.
+        try:
+            if self._past(deadline, margin_ms=_REFERRAL_TAIL_MS):
+                skipped.append("work_order")
+            else:
+                work_order_ref, replayed = await self._work_order(
+                    entry, company=company, profile=profile, now=now, compensations=compensations
+                )
+            if self._past(deadline, margin_ms=_REFERRAL_TAIL_MS):
+                skipped.append("calendar")
+            else:
+                calendar_ref = await self._calendar_hold(
+                    entry,
+                    company=company,
+                    crew_email=crew_email,
+                    profile=profile,
+                    starts_at=scheduled,
+                )
+            if self._past(deadline, margin_ms=_REFERRAL_TAIL_MS):
+                skipped.append("crew_mail")
+            else:
+                notification_ref = await self._notify(
+                    entry,
+                    company=company,
+                    crew_email=crew_email,
+                    profile=profile,
+                    starts_at=scheduled,
+                )
+            if self._past(deadline, margin_ms=_REFERRAL_TAIL_MS):
+                skipped.append("preplan")
+            else:
+                _, stored = await self._write_plan(profile, now=now, compensations=compensations)
 
-        await self._queue.save(
-            entry.model_copy(
-                update={
-                    "status": QueueEntryStatus.DISPATCHED,
-                    "assigned_company": company,
-                    "dispatched_at": now,
-                    "calendar_event_ref": calendar_ref,
-                }
+            # Unconditional even when stages were skipped. A truncated dispatch
+            # is a dispatch to redo, and every write above keys on a derived
+            # idempotency key, so the next pass re-picks this entry and fills in
+            # what this one could not reach rather than double-booking a company.
+            await self._queue.save(
+                entry.model_copy(
+                    update={
+                        "status": QueueEntryStatus.DISPATCHED,
+                        "assigned_company": company,
+                        "dispatched_at": now,
+                        "calendar_event_ref": calendar_ref,
+                    }
+                )
             )
-        )
 
-        referral_id, approval_id = await self._stage_referral(
-            profile,
-            entry=entry,
-            now=now,
-            correlation_id=correlation_id,
-            prior_referrals=prior_referrals or profile.open_referrals,
-        )
+            referral_id, approval_id, staging = await self._stage_referral(
+                profile,
+                entry=entry,
+                now=now,
+                correlation_id=correlation_id,
+                prior_referrals=prior_referrals or profile.open_referrals,
+                deadline=deadline,
+            )
+        finally:
+            await self._record_referral_pass(
+                entry,
+                correlation_id=correlation_id,
+                open_conflicts=len(list(profile.current_conflicts)),
+                staging=staging,
+                skipped=skipped,
+            )
 
         logger.info(
             "survey_dispatched",
@@ -299,6 +385,7 @@ class ActionFlow:
                 "company": company,
                 "replayed": replayed,
                 "referral_staged": referral_id is not None,
+                "skipped": ",".join(skipped),
             },
         )
         return DispatchResult(
@@ -307,8 +394,8 @@ class ActionFlow:
             work_order_ref=work_order_ref,
             calendar_event_ref=calendar_ref,
             notification_ref=notification_ref,
-            plan_object_id=stored.object_id,
-            plan_uri=stored.uri,
+            plan_object_id=stored.object_id if stored is not None else None,
+            plan_uri=stored.uri if stored is not None else None,
             referral_id=referral_id,
             approval_id=approval_id,
             replayed=replayed,
@@ -493,7 +580,8 @@ class ActionFlow:
         now: datetime,
         correlation_id: str,
         prior_referrals: Sequence[ReferralRecord] = (),
-    ) -> tuple[str | None, str | None]:
+        deadline: datetime | None = None,
+    ) -> tuple[str | None, str | None, str]:
         """Stage a referral for the worst open conflict, if there is one.
 
         Staged, never filed. Filing accuses a property owner of unpermitted
@@ -503,26 +591,75 @@ class ActionFlow:
         staged, and the building department hears nothing until
         :meth:`approve_referral` runs -- which is why the mail client is not
         touched anywhere in this method.
+
+        The third element of the return is which of the three things happened
+        -- a referral drafted, one that already stood, or no open disagreement
+        to refer -- because the pass record has to tell them apart. A clerk that
+        looked and found nothing to file did work; a clerk that never ran did
+        not, and an empty return says both.
+
+        All three outcomes record a step, not only the one that writes a
+        referral. ``staged`` used to be the only one that did, so every pass
+        after the first over the same district -- a referral is derived from a
+        conflict, and a conflict is stable -- left one bare pass line behind and
+        the console drew a clerk that had gone back to sleep. Having looked and
+        found nothing new to file is a result.
         """
         open_conflicts = list(profile.current_conflicts)
         if not open_conflicts:
-            return None, None
+            await self._record_referral_step(
+                profile.address_id,
+                correlation_id=correlation_id,
+                detail={"open_conflicts": "0", "status": "no_open_conflict"},
+            )
+            return None, None, "none"
         conflict = max(open_conflicts, key=lambda c: (c.severity, c.conflict_id))
 
         referral_id = f"ref_{conflict.conflict_id.removeprefix('conflict_')}"
         existing = await self._referrals.get(referral_id)
         if existing is not None:
-            return existing.referral_id, existing.action_id
+            # The approval this referral is waiting on, read back rather than
+            # taken off the referral: `ReferralRecord.action_id` is the *write*
+            # action, set when the referral is filed, and reporting it as the
+            # approval id meant a re-derived dispatch answered `None` for an
+            # approval that was sitting in a captain's queue. Derived from the
+            # referral id, which is where it came from when it was staged.
+            staged = await self._approvals.get(f"apr_{existing.referral_id}")
+            await self._record_referral_step(
+                profile.address_id,
+                correlation_id=correlation_id,
+                detail={
+                    "referral_id": existing.referral_id,
+                    # `none` rather than an empty string: a value that renders
+                    # as nothing is indistinguishable from a key nobody wrote,
+                    # and the two mean different things.
+                    "approval_id": staged.approval_id if staged else "none",
+                    "conflict_id": conflict.conflict_id,
+                    "rule_id": conflict.rule_id,
+                    "severity": str(conflict.severity),
+                    "open_conflicts": str(len(open_conflicts)),
+                    # The referral this pass re-derived and did not rewrite. A
+                    # captain's queue is unchanged by it, which is the point:
+                    # the clerk is not drafting the same accusation twice.
+                    "status": "already_staged",
+                },
+            )
+            return (
+                existing.referral_id,
+                staged.approval_id if staged else None,
+                "already_staged",
+            )
 
+        narrative, drafted_by = await self._draft_narrative(
+            profile, conflict, prior_referrals=prior_referrals, deadline=deadline
+        )
         referral = ReferralRecord(
             referral_id=referral_id,
             address_id=profile.address_id,
             conflict_id=conflict.conflict_id,
             receiving_department=Department.BUILDING,
             supporting_fact_ids=conflict.fact_ids,
-            narrative=await self._draft_narrative(
-                profile, conflict, prior_referrals=prior_referrals
-            ),
+            narrative=narrative,
             status=ReferralStatus.AWAITING_APPROVAL,
             idempotency_key=self._ids.idempotency_key("referral", conflict.conflict_id),
             drafted_at=now,
@@ -545,6 +682,32 @@ class ActionFlow:
         )
         await self._approvals.stage(approval)
 
+        # The drafting itself, as a step: one referral, the conflict it rests
+        # on, and how many records it cites. A pass over a district stages one
+        # of these per building it decided to refer, and a console that saw only
+        # the closing pass line would show a clerk that had been idle for
+        # minutes and then finished.
+        await self._record_referral_step(
+            profile.address_id,
+            correlation_id=correlation_id,
+            detail={
+                "referral_id": referral.referral_id,
+                "approval_id": approval.approval_id,
+                "conflict_id": conflict.conflict_id,
+                "rule_id": conflict.rule_id,
+                "severity": str(conflict.severity),
+                "supporting_facts": str(len(referral.supporting_fact_ids)),
+                # Which text a captain is about to read, by provenance rather
+                # than by content: the deterministic template, or a draft a
+                # model rewrote and every check in `_reject_draft` accepted.
+                # What shipped, not what was attempted -- a rejected draft
+                # leaves `template` here and its reason in its own event. The
+                # narrative itself is on the referral record, which is where a
+                # reviewer reads it from.
+                "drafted_by": drafted_by,
+                "status": "awaiting_approval",
+            },
+        )
         logger.info(
             "referral_staged",
             extra={
@@ -553,7 +716,7 @@ class ActionFlow:
                 "approval_id": approval.approval_id,
             },
         )
-        return referral.referral_id, approval.approval_id
+        return referral.referral_id, approval.approval_id, "staged"
 
     @staticmethod
     def _referral_narrative(profile: BuildingProfile, conflict: Conflict) -> str:
@@ -580,7 +743,8 @@ class ActionFlow:
         conflict: Conflict,
         *,
         prior_referrals: Sequence[ReferralRecord] = (),
-    ) -> str:
+        deadline: datetime | None = None,
+    ) -> tuple[str, str]:
         """The referral text a captain will read, polished but not authored.
 
         The deterministic template is the floor and the fallback. A model may
@@ -595,10 +759,24 @@ class ActionFlow:
         A rejected or failed draft is not an error. The deterministic text
         stands, the fallback is recorded, and the captain gets a referral that
         is worse-written and exactly as true.
+
+        Returns the text and which of the two it is, so the staging record can
+        say which one shipped. Whether a model was *configured* is not that
+        answer: a wired model whose draft was rejected ships the template, and a
+        record saying otherwise would send a reviewer looking for a draft that
+        was never used.
         """
         deterministic = self._referral_narrative(profile, conflict)
         if self._model is None:
-            return deterministic
+            return deterministic, "template"
+        if deadline is not None and self._past(deadline, margin_ms=_RECORD_TAIL_MS):
+            # Polish is the one thing in a dispatch that can be dropped without
+            # losing a fact: the template is the floor, not a degraded copy of
+            # the draft. Spending the last seconds of the budget on wording and
+            # being cancelled before the referral is written would trade a
+            # staged accusation for a better-worded one that does not exist.
+            await self._record_draft_fallback(profile, conflict, reason="out_of_budget")
+            return deterministic, "template"
 
         try:
             result = await self._model.compose(
@@ -628,13 +806,13 @@ class ActionFlow:
             await self._record_draft_fallback(
                 profile, conflict, reason="model_unavailable", error=type(exc).__name__
             )
-            return deterministic
+            return deterministic, "template"
 
         rejection = _reject_draft(result, conflict=conflict)
         if rejection is not None:
             await self._record_draft_fallback(profile, conflict, reason=rejection)
-            return deterministic
-        return result.text.strip()
+            return deterministic, "template"
+        return result.text.strip(), "model"
 
     async def _record_draft_fallback(
         self,
@@ -787,7 +965,7 @@ class ActionFlow:
             },
         )
         notification_ref = await self._mail_referral(filed, approval=approval, now=now)
-        await self._write_back_case_number(filed, now=now)
+        await self._write_back_case_number(filed, now=now, correlation_id=correlation_id)
 
         logger.info(
             "referral_filed",
@@ -868,7 +1046,9 @@ class ActionFlow:
         )
         return sent.external_ref
 
-    async def _write_back_case_number(self, referral: ReferralRecord, *, now: datetime) -> None:
+    async def _write_back_case_number(
+        self, referral: ReferralRecord, *, now: datetime, correlation_id: str
+    ) -> None:
         """Record the returned case number on the profile timeline.
 
         The number the building department issued is the only evidence the
@@ -902,8 +1082,135 @@ class ActionFlow:
             await self._profiles.save(updated, expected_version=profile.profile_version)
         except StaleVersionError:
             logger.info("case_number_write_contended", extra={"referral_id": referral.referral_id})
+            return
+        # The second half of this clerk's work, and the half nothing else
+        # records: `WRITE_EXECUTED` above says the building department opened a
+        # case, and this says the number they returned reached the building's
+        # own file. A write-back that silently lost the number would look
+        # identical on the console without it.
+        await self._record_referral_step(
+            referral.address_id,
+            correlation_id=correlation_id,
+            detail={
+                "referral_id": referral.referral_id,
+                "conflict_id": referral.conflict_id,
+                # The case number, which is the handle both departments use to
+                # find the same case. An identifier, not a record's contents.
+                "case_number": referral.case_number or "none",
+                "supporting_facts": str(len(referral.supporting_fact_ids)),
+                "status": "filed",
+            },
+        )
 
     # ------------------------------------------------------------ internals
+
+    async def _record_referral_pass(
+        self,
+        entry: SurveyQueueEntry,
+        *,
+        correlation_id: str,
+        open_conflicts: int,
+        staging: str,
+        skipped: Sequence[str] = (),
+    ) -> None:
+        """One line saying what the clerk did with one dispatched building.
+
+        This agent only ever wrote to the log on the far side of a human tap --
+        the approval, the filing, a rejected draft -- so a district where
+        nothing had been approved yet left it with no trace at all, and the
+        console, whose only evidence is this log, drew it as idle while it was
+        drafting referrals for a captain to read. Staging is the work; approval
+        is somebody else's decision about it.
+
+        Scoped to the referral deliberately. The work order, the calendar hold,
+        the crew mail, and the plan artifact happen in the same dispatch and are
+        already recorded under ``structure-watch``, which is the agent whose
+        write actions they are; repeating them here would put one act on the
+        record twice under two names.
+
+        Counts and ids: the queue entry, how many disagreements were open, and
+        which of the outcomes happened. Nothing the conflict said.
+        """
+        if self._audit is None:
+            return
+        detail = {
+            "entry_id": entry.entry_id,
+            "open_conflicts": str(open_conflicts),
+            # `staged`, `already_staged`, `none`, or `not_reached`. A pass that
+            # found nothing to refer and a pass that re-derived a referral it
+            # had already drafted both write zero new records, and they are not
+            # the same statement about the building. `not_reached` is the fourth
+            # and it is not an outcome about the building at all -- it says the
+            # dispatch ended before the referral, which is what a truncated or
+            # failed pass looks like from here.
+            "referral": staging,
+        }
+        if skipped:
+            detail["skipped"] = ",".join(skipped)
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_PASS,
+                occurred_at=self._clock.now(),
+                actor=REFERRAL_AGENT_ID,
+                actor_version=self._agent_version,
+                target=entry.district_id,
+                address_id=entry.address_id,
+                correlation_id=correlation_id,
+                detail=detail,
+            )
+        )
+
+    def _own_deadline(self) -> datetime:
+        """When a dispatch must stop, from the catalogue rather than the caller.
+
+        ``budget_seconds`` against this clerk's own descriptor, which is the
+        same number the runtime will enforce from outside. An agent that could
+        not see its own budget could not stop inside it.
+        """
+        started = self._clock.now()
+        return started + timedelta(
+            seconds=budget_seconds(descriptor_for(REFERRAL_AGENT_ID), None, started)
+        )
+
+    def _past(self, deadline: datetime, *, margin_ms: int) -> bool:
+        """Whether the budget is spent down to the tail this step still needs.
+
+        ``margin_ms`` is what has to be left for everything after the check,
+        which is why the two callers pass different numbers: the external
+        writes must leave room for the referral, and the draft must leave room
+        for the record of it.
+
+        The injected clock, never the wall clock. A deadline derived from a
+        ``SteppingClock`` and compared against ``datetime.now()`` reads as spent
+        before the first write, and every dispatch would truncate to nothing.
+        """
+        return self._clock.now() >= deadline - timedelta(milliseconds=margin_ms)
+
+    async def _record_referral_step(
+        self, address_id: str, *, correlation_id: str, detail: dict[str, str]
+    ) -> None:
+        """One referral, as it is drafted or as its case number comes back.
+
+        The pass's own correlation id rather than a fresh one -- unlike
+        :meth:`_audit_event`, whose events stand alone -- so a step groups under
+        the pass that produced it instead of floating loose in the log.
+        """
+        if self._audit is None:
+            return
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=self._clock.now(),
+                actor=REFERRAL_AGENT_ID,
+                actor_version=self._agent_version,
+                target=address_id,
+                address_id=address_id,
+                correlation_id=correlation_id,
+                detail=detail,
+            )
+        )
 
     async def _audit_event(
         self,

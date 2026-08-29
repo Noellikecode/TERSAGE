@@ -17,6 +17,17 @@ requests, and re-minted when it is close to expiring -- close, not expired,
 because a token that dies mid-camera-move would put a hole in the terrain that
 looks like an outage.
 
+**The connection is the part with a cost.** A camera opening on the region asks
+for two grids at once -- height and skin, one request each per square -- so a
+first paint is scores of upstream fetches inside a second or two. Opening an
+``httpx.AsyncClient`` per tile pays a fresh TCP handshake and a fresh TLS
+handshake for every one of them, and against the real terrarium bucket that
+measured 3.0s for 48 tiles at eight-way concurrency where one pooled client took
+1.2s. So there is exactly one client per process, built on first use and kept:
+the handshake is paid once and every square after it rides a warm connection.
+That includes the session mint, which talks to the same host the imagery tiles
+do and therefore reuses their connection too.
+
 **RGB elevation is data, not a picture.** A terrarium pixel encodes metres:
 ``(red * 256 + green + blue / 256) - 32768``. Re-encoding, resizing or
 recompressing one changes the terrain silently, so bytes go through untouched
@@ -83,6 +94,13 @@ MAX_TILE_BYTES: Final[int] = 2 * 1024 * 1024
 
 #: A tile is small and a camera is waiting on a screenful of them.
 DEFAULT_DEADLINE_S: Final[float] = 6.0
+
+#: How long an idle upstream connection is kept before it is dropped, seconds.
+#:
+#: Longer than the console's standby heartbeat, so a station left open on the
+#: regional map pans onto warm sockets rather than re-handshaking every time
+#: somebody touches the mouse after a quiet minute.
+KEEPALIVE_EXPIRY_S: Final[float] = 300.0
 
 #: How many squares this process keeps. A region at the zooms this serves is a
 #: few hundred; past that the oldest go, because a proxy that grew without
@@ -163,12 +181,15 @@ class GoogleTerrainTileClient:
         self._max_zoom = max_zoom
         self._deadline_s = deadline_s
         self._limiter = RateLimiter(rate_per_second=rate_per_second, burst=burst)
+        self._max_concurrency = max_concurrency
         self._gate = asyncio.Semaphore(max_concurrency)
         self._cache_entries = cache_entries
         self._transport = transport
         self._cache: dict[str, MapTile] = {}
         self._session: _Session | None = None
         self._session_lock = asyncio.Lock()
+        self._client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
         self.cache_hits = 0
         self.upstream_calls = 0
 
@@ -212,7 +233,54 @@ class GoogleTerrainTileClient:
             self._remember(key, tile)
         return tile
 
+    async def aclose(self) -> None:
+        """Drop the pooled connections, for a process or a test that is done.
+
+        Not required for correctness -- the client owns sockets, and a process
+        exiting closes those anyway -- but a test that builds a client per case
+        would otherwise leave a pool behind for the garbage collector, and this
+        suite turns warnings into errors.
+        """
+        client, self._client = self._client, None
+        if client is not None:
+            await client.aclose()
+
     # ------------------------------------------------------------ internals
+
+    async def _http(self) -> httpx.AsyncClient:
+        """The one client, built on first use.
+
+        Built lazily rather than in ``__init__`` because an ``AsyncClient`` binds
+        its pool to the running loop, and the container constructs this before
+        the API's loop exists. First use is always inside a request, which is
+        always on the loop that will serve every later one.
+
+        The pool is sized to *twice* the concurrency gate above it, because the
+        two grids come from two different hosts and a camera move interleaves
+        them. Sized to the gate exactly, a burst of height tiles would evict the
+        warm connections to the imagery host and the next burst would re-handshake
+        them -- which is the cost this pool exists to avoid.
+        """
+        if self._client is not None:
+            return self._client
+
+        import httpx
+
+        async with self._client_lock:
+            # Re-checked under the lock for the same reason the session is: a
+            # camera move arrives as a burst, and every one of them found no
+            # client. Only the first should build one.
+            if self._client is None:
+                self._client = httpx.AsyncClient(
+                    timeout=self._deadline_s,
+                    transport=self._transport,
+                    limits=httpx.Limits(
+                        max_connections=self._max_concurrency * 2,
+                        max_keepalive_connections=self._max_concurrency * 2,
+                        keepalive_expiry=KEEPALIVE_EXPIRY_S,
+                    ),
+                )
+        return self._client
 
     def _remember(self, key: str, tile: MapTile) -> None:
         """Keep the square, and drop the oldest once the map is full.
@@ -228,28 +296,27 @@ class GoogleTerrainTileClient:
         self._cache[key] = tile
 
     async def _fetch_live(self, layer: TileLayer, z: int, x: int, y: int) -> MapTile:
-        import httpx
+        client = await self._http()
 
-        async with httpx.AsyncClient(timeout=self._deadline_s, transport=self._transport) as client:
-            params: list[tuple[str, str | int | float | bool | None]]
-            if layer == "elevation":
-                url = f"{TERRARIUM_URL}/{z}/{x}/{y}.png"
-                params = []
-                max_age = ELEVATION_MAX_AGE_S
-            else:
-                session = await self._session_token(client)
-                url = f"{MAP_TILES_URL}/{z}/{x}/{y}"
-                params = [("session", session), ("key", self._api_key)]
-                max_age = IMAGERY_MAX_AGE_S
+        params: list[tuple[str, str | int | float | bool | None]]
+        if layer == "elevation":
+            url = f"{TERRARIUM_URL}/{z}/{x}/{y}.png"
+            params = []
+            max_age = ELEVATION_MAX_AGE_S
+        else:
+            session = await self._session_token(client)
+            url = f"{MAP_TILES_URL}/{z}/{x}/{y}"
+            params = [("session", session), ("key", self._api_key)]
+            max_age = IMAGERY_MAX_AGE_S
 
-            self.upstream_calls += 1
-            try:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                payload = response.content
-                content_type = response.headers.get("content-type", "")
-            except Exception as exc:
-                raise _provider_down(exc) from exc
+        self.upstream_calls += 1
+        try:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            payload = response.content
+            content_type = response.headers.get("content-type", "")
+        except Exception as exc:
+            raise _provider_down(exc) from exc
 
         if not content_type.startswith("image/") or not payload:
             return MapTile.refused(layer, z, x, y, unavailable("not_an_image"))

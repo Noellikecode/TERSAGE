@@ -199,6 +199,13 @@ WAKE_RULES: Final[tuple[WakeRule, ...]] = (
 )
 
 
+#: The table, by rule id. A plan names the rules that fired and the rules that
+#: matched nobody, and both are only ids -- so anything explaining one of them
+#: to an officer has to be able to reach back to the sentence the rule already
+#: carries about why it exists, rather than inventing a second one beside it.
+RULES_BY_ID: Final[dict[str, WakeRule]] = {rule.rule_id: rule for rule in WAKE_RULES}
+
+
 class Handoff(BaseModel):
     """One agent, and everything the intake gives it."""
 
@@ -410,6 +417,7 @@ def plan_handoffs(
 
 
 __all__ = [
+    "RULES_BY_ID",
     "WAKE_RULES",
     "Handoff",
     "RoutingPlan",

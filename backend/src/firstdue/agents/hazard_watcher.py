@@ -42,7 +42,7 @@ it always has.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -191,6 +191,40 @@ MAX_QUESTIONS_PER_PASS: Final[int] = 12
 #: over: they are still pending on the next pass.
 MAX_ADDRESSES_PER_PASS: Final[int] = 15
 
+#: How much of a pass the cross-check graph may spend, leaving the rest to
+#: apply what it gathered and to say that it ran.
+#:
+#: The same split ``records-watcher`` makes between retrieval and extraction,
+#: and for the same reason: without it the graph's budget *is* the run's budget,
+#: so a graph that spends its allowance legally leaves nothing for the apply
+#: loop and the pass record, and the runtime cancels the coroutine before this
+#: agent has written anything at all. Weighted towards the graph because the
+#: parks and the registry reads are where the seconds go; what is kept back has
+#: to cover fifteen addresses of Firestore and one audit append.
+_CROSSCHECK_SHARE: Final[float] = 0.6
+
+#: Stop applying this far short of the deadline.
+#:
+#: Sized to the tail, not to one address: each address is a profile read, a
+#: fact write and a materialisation, and the pass record comes after all of
+#: them. Stopping with only one address's worth of slack would be stopping
+#: early *and* still being killed before the record, which is the worst of both.
+_STOP_MARGIN_MS: Final[int] = 20_000
+
+
+def _crosscheck_deadline(deadline: datetime | None, *, started: datetime) -> datetime | None:
+    """The slice of the pass the cross-check graph may spend.
+
+    ``None`` stays ``None``: an unbounded caller is a test or a one-off, and
+    inventing a bound for it would be inventing a policy nobody published.
+    """
+    if deadline is None:
+        return None
+    remaining = (deadline - started).total_seconds()
+    if remaining <= 0:
+        return deadline
+    return started + timedelta(seconds=remaining * _CROSSCHECK_SHARE)
+
 
 class HazardWatcher:
     """Federal and confidential hazard registries, with classification intact."""
@@ -270,6 +304,7 @@ class HazardWatcher:
                 unavailable=unavailable,
                 correlation_id=correlation_id,
                 now=now,
+                deadline=deadline,
             )
         return await self._poll_by_graph(
             district_id=district_id,
@@ -322,8 +357,15 @@ class HazardWatcher:
         decision reaches a value, because the nodes and the fact construction do
         not meet.
         """
+        # The graph gets a share of the pass, not all of it -- see
+        # `_CROSSCHECK_SHARE`. `_settle` and the pass record below inherit the
+        # remainder, which is what makes a truncated cross-check still leave
+        # evidence that it ran.
         budget = graph_budget(
-            AGENT_ID, deadline=deadline, started=now, max_steps=self._max_graph_steps
+            AGENT_ID,
+            deadline=_crosscheck_deadline(deadline, started=now),
+            started=now,
+            max_steps=self._max_graph_steps,
         )
         crosscheck = HazardCrossCheck(
             sources=sources,
@@ -362,6 +404,7 @@ class HazardWatcher:
             unavailable=state.unavailable,
             correlation_id=correlation_id,
             now=now,
+            deadline=deadline,
         )
         return result.model_copy(
             update={
@@ -461,6 +504,7 @@ class HazardWatcher:
         unavailable: Sequence[str],
         correlation_id: str,
         now: datetime,
+        deadline: datetime | None = None,
     ) -> HazardWatchResult:
         """Turn registry rows into facts. The only place this agent writes.
 
@@ -527,7 +571,16 @@ class HazardWatcher:
                     "district_id": district_id,
                 },
             )
-        for address_id in addresses[:MAX_ADDRESSES_PER_PASS]:
+        for position, address_id in enumerate(addresses[:MAX_ADDRESSES_PER_PASS]):
+            if self._past(deadline):
+                # The count is the cap on an ordinary pass; this is the cap on
+                # a pass whose registries were slow. Everything applied so far
+                # is already committed and everything below is still pending,
+                # so stopping here costs a pass rather than the work -- and it
+                # buys the one thing that cannot be recovered next pass, which
+                # is the record that this pass happened at all.
+                deferred_addresses += min(len(addresses), MAX_ADDRESSES_PER_PASS) - position
+                break
             # A registry row can name a building this district has no profile
             # for -- another district, or one nothing has filed on yet. Hazard
             # facts do not create profiles; the records watcher does that.
@@ -554,6 +607,7 @@ class HazardWatcher:
 
         await self._record_pass(
             district_id,
+            correlation_id=correlation_id,
             touched=len(touched),
             written=len(written),
             deferred_addresses=deferred_addresses,
@@ -570,10 +624,23 @@ class HazardWatcher:
             classifications=tuple(sorted(classifications)),
         )
 
+    def _past(self, deadline: datetime | None) -> bool:
+        """Whether this pass has spent its budget down to the commit tail.
+
+        The injected clock, never the wall clock -- the same trap
+        ``records-watcher`` and ``geometry-watcher`` name: a deadline derived
+        from a ``SteppingClock`` compared against ``datetime.now()`` reads as
+        spent before the first address and every pass would apply nothing.
+        """
+        if deadline is None:
+            return False
+        return self._clock.now() >= deadline - timedelta(milliseconds=_STOP_MARGIN_MS)
+
     async def _record_pass(
         self,
         district_id: str,
         *,
+        correlation_id: str,
         touched: int,
         written: int,
         deferred_addresses: int,
@@ -603,7 +670,10 @@ class HazardWatcher:
                 actor=AGENT_ID,
                 actor_version=self._agent_version,
                 target=district_id,
-                correlation_id=self._ids.new_id("corr"),
+                # The pass's own id, not a fresh one -- see `_record_step`. A
+                # closing line that floated loose could not be grouped with the
+                # steps it closes.
+                correlation_id=correlation_id,
                 detail=detail,
             )
         )

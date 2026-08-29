@@ -167,6 +167,14 @@ class WatchResult(BaseModel):
     written_fact_ids: tuple[str, ...] = ()
     #: Sources that could not be reached on this pass. Rendered as UNAVAILABLE.
     unavailable_sources: tuple[str, ...] = ()
+    #: Feeds this pass ran out of retrieval budget before asking at all.
+    #:
+    #: Not the same as unavailable, and kept apart for the reason every other
+    #: absence in this system is: a registry that refused and a registry nobody
+    #: had time to ask produce the same missing facts and mean opposite things.
+    #: An unavailable source is a fact about the source; this is a fact about
+    #: the pass, and next pass takes these first.
+    sources_unread: tuple[str, ...] = ()
     #: Records this pass read but ran out of budget before extracting.
     #:
     #: A district is bigger than one pass. Reporting the remainder is what keeps
@@ -295,35 +303,78 @@ class RecordsWatcher:
         deadline = deadline or self._own_deadline()
 
         if not self.reasons:
-            retrieved, unavailable = await self._read_every_feed(sources, since=since)
-            return await self._extract_and_apply(
+            # Retrieval gets a share of the pass here too, and it is the same
+            # share for the same reason the graph pass takes one -- see
+            # `_poll_by_graph`. Reading was the *unbounded* half: four feeds
+            # paginated fifty pages deep is up to two hundred live requests
+            # against municipal endpoints, with no clock consulted anywhere in
+            # it, so a district big enough to page could spend the whole 120
+            # seconds fetching. The runtime then cancels the coroutine at its
+            # budget (`FakeRuntime.invoke`, `ADKRuntime.invoke`), `poll` never
+            # returns, and the `_record_pass` below never runs -- an agent that
+            # polled every feed the department has and left no trace of having
+            # run, which is exactly what the console drew it as. Fixtures answer
+            # in microseconds, so fake mode never saw it.
+            started = self._clock.now()
+            retrieved, unavailable, unread = await self._read_every_feed(
+                sources, since=since, deadline=_retrieval_deadline(deadline, started=started)
+            )
+            result = await self._extract_and_apply(
                 district_id=district_id,
                 retrieved=retrieved,
                 unavailable=unavailable,
                 correlation_id=correlation_id,
                 deadline=deadline,
             )
-        return await self._poll_by_graph(
-            district_id=district_id,
-            sources=sources,
-            correlation_id=correlation_id,
-            since=since,
-            deadline=deadline,
-        )
+            # A feed the budget never reached is not a feed that refused, and
+            # the difference is the whole point of `unavailable_sources`.
+            result = result.model_copy(update={"sources_unread": unread})
+        else:
+            result = await self._poll_by_graph(
+                district_id=district_id,
+                sources=sources,
+                correlation_id=correlation_id,
+                since=since,
+                deadline=deadline,
+            )
+        # Here rather than inside `_extract_and_apply`, because the graph pass
+        # finishes filling the result in `_poll_by_graph` and a summary written
+        # before that would report a retrieval that had not stopped yet. One
+        # poll, one line, whichever half of this agent produced it.
+        await self._record_pass(result, correlation_id=correlation_id)
+        return result
 
     # -------------------------------------------------------- the fixed pass
 
     async def _read_every_feed(
-        self, sources: Sequence[SourceAdapter], *, since: datetime | None
-    ) -> tuple[tuple[tuple[str, SourceSnapshot], ...], tuple[str, ...]]:
-        """Read all four feeds in the order given. No decisions, no following."""
+        self,
+        sources: Sequence[SourceAdapter],
+        *,
+        since: datetime | None,
+        deadline: datetime | None = None,
+    ) -> tuple[tuple[tuple[str, SourceSnapshot], ...], tuple[str, ...], tuple[str, ...]]:
+        """Read the feeds in the order given, for as long as the budget allows.
+
+        No decisions and no following -- that is still the graph's job. What is
+        new is that reading stops on its own. It stops *between* feeds and
+        between pages rather than mid-request, so what comes back is whole
+        snapshots and the remainder is named: a feed nobody reached is the third
+        return value, and it is deliberately not folded into ``unavailable``.
+        "The assessor refused" and "we ran out of budget before asking the
+        assessor" produce the same missing facts and are opposite statements
+        about the district.
+        """
         retrieved: list[tuple[str, SourceSnapshot]] = []
         unavailable: list[str] = []
+        unread: list[str] = []
         for source in sources:
             if source.source_id not in SOURCE_TYPES:
                 continue
+            if self._out_of_time(deadline):
+                unread.append(source.source_id)
+                continue
             try:
-                snapshots = await self._pull_all(source, since=since)
+                snapshots = await self._pull_all(source, since=since, deadline=deadline)
             except SourceUnavailableError as exc:
                 logger.warning(
                     "watcher_source_unavailable",
@@ -332,7 +383,7 @@ class RecordsWatcher:
                 unavailable.append(source.source_id)
                 continue
             retrieved.extend((source.source_id, snapshot) for snapshot in snapshots)
-        return tuple(retrieved), tuple(unavailable)
+        return tuple(retrieved), tuple(unavailable), tuple(unread)
 
     # -------------------------------------------------------- the graph pass
 
@@ -412,8 +463,18 @@ class RecordsWatcher:
         )
         # Parked after materialization on purpose: a conflict does not exist
         # until the facts that disagree have both been written.
+        #
+        # And bounded, because this loop is the last thing between the pass and
+        # the line that says the pass happened. It is a profile read plus a bank
+        # write per open disagreement across every address the pass touched, and
+        # a bank write embeds -- so on a live district it is the longest thing
+        # in the tail and it consulted no clock at all. The runtime cancels at
+        # the budget, `poll` never returns, and `_record_pass` never runs: an
+        # agent that read four feeds, wrote a district's facts and left no trace
+        # of having run. A thread not opened this pass is opened next pass; the
+        # conflict is already stored, which is what makes that safe.
         questions += await self._open_conflict_questions(
-            district_id=district_id, address_ids=result.addresses_touched
+            district_id=district_id, address_ids=result.addresses_touched, deadline=deadline
         )
         return result.model_copy(
             update={
@@ -426,7 +487,7 @@ class RecordsWatcher:
         )
 
     async def _open_conflict_questions(
-        self, *, district_id: str, address_ids: Sequence[str]
+        self, *, district_id: str, address_ids: Sequence[str], deadline: datetime | None = None
     ) -> tuple[str, ...]:
         """Park a thread on every disagreement the filed record cannot settle.
 
@@ -446,11 +507,19 @@ class RecordsWatcher:
 
         ``PUBLIC``: a conflict between filed records is itself a public fact
         about public filings, and the question quotes neither side's value.
+
+        ``deadline`` bounds it. Stopping here loses nothing that is not already
+        durable -- the conflicts are stored, and the next pass finds the same
+        open ones and parks the threads it did not reach. What running past it
+        loses is the whole pass, and with it the record that any of this
+        happened.
         """
         if self._memory is None:
             return ()
         opened: list[str] = []
         for address_id in address_ids:
+            if self._past(deadline):
+                break
             profile = await self._profiles.get(address_id)
             if profile is None:
                 continue
@@ -556,8 +625,19 @@ class RecordsWatcher:
         a district and commits that part is the design working, not degrading.
 
         What it did not reach is counted and reported, never silently dropped.
+
+        **One building at a time, not one feed at a time.** The filings arrive
+        grouped by the source that published them, and the obvious loop --
+        extract every record, then commit every address -- put the entire
+        district's model latency in front of the first write. Nothing was
+        committed and nothing was recorded for the length of the extraction, and
+        then every building landed in the same instant: a report of finished
+        work where the console needs work in progress, and a pass killed part
+        way through losing every extraction it was holding. Grouping first costs
+        one address resolution per record up front, which is municipal-address
+        arithmetic rather than a model call, and buys a commit and a step for
+        each building the moment that building is done.
         """
-        pending: dict[str, list[StructuralFact]] = {}
         findings: set[str] = set()
         screens_unavailable = 0
         triaged = 0
@@ -567,12 +647,16 @@ class RecordsWatcher:
         extracted = 0
         out_of_time = False
 
+        # Which building each filing is about, decided before any of them are
+        # extracted. Cheap by comparison -- the city adapter settles almost all
+        # of them arithmetically -- and it is what lets the loop below finish
+        # with a building rather than revisiting it four times.
+        by_address: dict[str, list[tuple[str, SourceSnapshot, SourceRecord]]] = {}
         for source_id, snapshot in retrieved:
-            source_type = SOURCE_TYPES[source_id]
             for record in snapshot.records:
                 # Checked before the work, not after: stopping with a record
                 # half-extracted would leave a fact without the pass that wrote
-                # it. Everything already appended below stands.
+                # it. Everything already grouped below stands.
                 if out_of_time or self._past(deadline):
                     out_of_time = True
                     deferred += 1
@@ -580,12 +664,39 @@ class RecordsWatcher:
                 address_id = await self._resolve_address(record, district_id)
                 if address_id is None:
                     continue
+                by_address.setdefault(address_id, []).append((source_id, snapshot, record))
+
+        written: list[str] = []
+        touched: list[str] = []
+        deduped = 0
+        conflicts: list[str] = []
+
+        for address_id in sorted(by_address):
+            group = by_address[address_id]
+            # Whole buildings or none. A pass that stopped between a permit and
+            # the violation filed against the same structure would commit half
+            # a picture and count the other half as deferred, and the next pass
+            # would re-extract the permit to find it already stored -- so the
+            # cap and the clock both act on the building, not the filing.
+            #
+            # `_MAX_RECORDS_PER_PASS` is the count bound this module has
+            # documented since it was written and never applied to anything:
+            # the clock was the only bound, and the clock is the poorer of the
+            # two here, because model latency varies and the commit is
+            # proportional to what was extracted.
+            if out_of_time or self._past(deadline) or extracted >= _MAX_RECORDS_PER_PASS:
+                out_of_time = True
+                deferred += len(group)
+                continue
+
+            facts: list[StructuralFact] = []
+            for source_id, snapshot, record in group:
                 extracted += 1
                 outcome = await self._extractor.extract(
                     record,
                     address_id=address_id,
                     snapshot=snapshot,
-                    source_type=source_type,
+                    source_type=SOURCE_TYPES[source_id],
                     ingested_at=self._clock.now(),
                     field_map=FIELD_MAPS.get(source_id, {}),
                 )
@@ -633,7 +744,7 @@ class RecordsWatcher:
                     )
                 findings.update(outcome.screen_findings)
                 triaged += 1 if outcome.triaged_out else 0
-                pending.setdefault(address_id, []).extend(outcome.facts)
+                facts.extend(outcome.facts)
                 # The screened text, not the raw record: whatever an
                 # ingested document tried to instruct has already been
                 # removed, and the injection attempt must not be what a
@@ -642,12 +753,9 @@ class RecordsWatcher:
                     record, address_id=address_id, screened=outcome.screened_text
                 )
 
-        written: list[str] = []
-        deduped = 0
-        conflicts: list[str] = []
-        for address_id in sorted(pending):
-            stored, skipped = await self._apply(address_id, district_id, pending[address_id])
+            stored, skipped = await self._apply(address_id, district_id, facts)
             written.extend(stored)
+            touched.append(address_id)
             deduped += skipped
             materialized = await self._materializer.run(
                 address_id,
@@ -655,12 +763,24 @@ class RecordsWatcher:
                 correlation_id=correlation_id,
             )
             conflicts.extend(materialized.new_conflict_ids)
+            # Per building, the moment that building's filings are extracted,
+            # applied and materialized -- not queued up and flushed when the
+            # district is finished. This is the line a console watching a
+            # multi-minute pass has to print while the pass is still running.
+            await self._record_step(
+                address_id,
+                correlation_id=correlation_id,
+                facts=facts,
+                written=len(stored),
+                deduped=skipped,
+                conflicts=len(materialized.new_conflict_ids),
+            )
 
         logger.info(
             "records_watcher_pass",
             extra={
                 "district_id": district_id,
-                "addresses": len(pending),
+                "addresses": len(touched),
                 "facts_written": len(written),
                 "conflicts": len(conflicts),
                 "unavailable": len(unavailable),
@@ -668,7 +788,10 @@ class RecordsWatcher:
         )
         return WatchResult(
             district_id=district_id,
-            addresses_touched=tuple(sorted(pending)),
+            # The buildings this pass actually committed. An address whose
+            # filings were grouped and then deferred was read, not touched, and
+            # counting it here would claim a profile nobody wrote to.
+            addresses_touched=tuple(touched),
             facts_written=len(written),
             facts_deduped=deduped,
             conflicts_detected=tuple(conflicts),
@@ -703,18 +826,46 @@ class RecordsWatcher:
         # deserves. Nothing else in this file reads time directly either.
         return self._clock.now() >= deadline - timedelta(milliseconds=_STOP_MARGIN_MS)
 
+    def _out_of_time(self, deadline: datetime | None) -> bool:
+        """Whether retrieval's own slice is spent. No margin, unlike `_past`.
+
+        The margin `_past` keeps is the commit tail, and retrieval has none --
+        it stops between whole pages and hands what it holds straight on. The
+        tail is paid for by the extraction deadline, which is the rest of the
+        pass. Subtracting the same twenty-five seconds twice would spend a
+        third of the budget deciding not to read.
+        """
+        if deadline is None:
+            return False
+        # The injected clock here too, for the reason `_past` states.
+        return self._clock.now() >= deadline
+
     # ------------------------------------------------------------ internals
 
     async def _pull_all(
-        self, source: SourceAdapter, *, since: datetime | None, max_pages: int = 50
+        self,
+        source: SourceAdapter,
+        *,
+        since: datetime | None,
+        deadline: datetime | None = None,
+        max_pages: int = 50,
     ) -> list[SourceSnapshot]:
+        """Page one feed until it is exhausted, the page cap, or the budget.
+
+        Fifty pages is a page cap, not a time bound: a feed that answers in
+        four hundred milliseconds still spends twenty seconds here, and four
+        of them spend eighty of a hundred-and-twenty-second pass before a
+        single record is extracted. The deadline is what makes the cap a bound.
+        """
         snapshots: list[SourceSnapshot] = []
         cursor: str | None = None
         for _ in range(max_pages):
             snapshot = await source.fetch(since=since, cursor=cursor)
             snapshots.append(snapshot)
             cursor = snapshot.next_cursor
-            if cursor is None:
+            if cursor is None or self._out_of_time(deadline):
+                # The pages already fetched stand. Stopping mid-feed loses the
+                # tail of one source; not stopping loses the whole pass.
                 break
         return snapshots
 
@@ -858,6 +1009,111 @@ class RecordsWatcher:
         except Exception:
             logger.warning("narrative_index_failed", extra={"address_id": address_id})
             return 0
+
+    async def _record_pass(self, result: WatchResult, *, correlation_id: str) -> None:
+        """One line in the log saying what this pass read and what it wrote.
+
+        This agent already recorded its *exceptions* -- a blocked injection, a
+        screen that could not run, a rejected model output -- and nothing else,
+        so a district it ingested cleanly left no trace at all and the console,
+        whose only evidence is this log, drew it as idle while it was extracting
+        filings. The exceptional and the ordinary both have to be on the record
+        for the log to describe the pass.
+
+        Counts, source ids, and the graph's own stop code. A filing's words are
+        in the fact it produced, with the span and the snapshot id that make it
+        checkable; a second uncited copy here would be a claim about a building
+        with no document behind it.
+        """
+        if self._audit is None:
+            return
+        detail = {
+            "addresses": str(len(result.addresses_touched)),
+            "facts_written": str(result.facts_written),
+            "facts_deduped": str(result.facts_deduped),
+            "conflicts": str(len(result.conflicts_detected)),
+            "deferred": str(result.records_deferred),
+            # Counted, not named. A pattern name is the screen's vocabulary and
+            # would be safe; the count is what a pass summary can say without
+            # anyone having to check that it stayed safe.
+            "injections_blocked": str(len(result.screen_findings)),
+            "screens_unavailable": str(result.documents_screen_unavailable),
+            "triaged_out": str(result.documents_triaged_out),
+            "narratives_indexed": str(result.narratives_indexed),
+        }
+        if result.unavailable_sources:
+            detail["unavailable"] = ",".join(result.unavailable_sources)
+        if result.sources_unread:
+            # Named separately from `unavailable` in the log for the same reason
+            # they are separate on the result: one is the source's answer and
+            # the other is this pass's own shortfall.
+            detail["unread"] = ",".join(result.sources_unread)
+        if result.graph_stop:
+            # Only where retrieval actually ran. Zeroes on a fixed pass would
+            # read as a graph that chased nothing rather than as no graph.
+            detail["graph_stop"] = result.graph_stop
+            detail["graph_steps"] = str(result.graph_steps)
+            detail["references_followed"] = str(result.references_followed)
+            detail["references_outstanding"] = str(result.references_outstanding)
+            detail["questions_opened"] = str(len(result.open_question_ids))
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_PASS,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=result.district_id,
+                # The pass's own id, the same one every step above carries. A
+                # closing line under a fresh correlation could not be grouped
+                # with the pass it closes.
+                correlation_id=correlation_id,
+                detail=detail,
+            )
+        )
+
+    async def _record_step(
+        self,
+        address_id: str,
+        *,
+        correlation_id: str,
+        facts: Sequence[StructuralFact],
+        written: int,
+        deduped: int,
+        conflicts: int,
+    ) -> None:
+        """One building, as its filings become facts.
+
+        The canonical keys and the source tiers, which are this agent's own
+        vocabulary rather than anything a permit said -- and the deduped count
+        beside the written one, because a pass that re-derived forty identical
+        facts did the same reading as a pass that wrote forty new ones and must
+        not read as a pass that found nothing. The pass's correlation id, so a
+        building's step groups under the pass that produced it.
+        """
+        if self._audit is None:
+            return
+        keys = sorted({fact.canonical_key for fact in facts})
+        tiers = sorted({str(fact.source_type) for fact in facts})
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=address_id,
+                address_id=address_id,
+                correlation_id=correlation_id,
+                detail={
+                    "facts_written": str(written),
+                    "facts_deduped": str(deduped),
+                    "conflicts": str(conflicts),
+                    "keys": ",".join(keys) if keys else "none",
+                    "sources": ",".join(tiers) if tiers else "none",
+                },
+            )
+        )
 
     async def _audit_event(
         self,

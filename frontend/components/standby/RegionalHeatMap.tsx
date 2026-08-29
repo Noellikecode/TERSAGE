@@ -137,11 +137,23 @@ const TERRARIUM_DECODER = {
 /**
  * Zooms the mesh is built at.
  *
- * The floor keeps the whole region on one screenful of tiles. The ceiling is the
- * proxy's, and is deeper than this camera goes -- past it the squares are a
- * street map, which is a different product and somebody else's quota.
+ * **The floor is a cliff, not a preference.** `TileLayer` does not clamp *down*
+ * against its `minZoom` the way it clamps up against its ceiling: below the
+ * floor `getTileIndices` returns an empty set, so one notch under it the mesh
+ * does not coarsen, it vanishes, and the panel is the black rectangle it was
+ * before anything loaded. This used to be 5 against an opening camera near 6.5,
+ * which put the cliff about two wheel notches from where the map opens -- close
+ * enough that zooming out at all was how you found it. Three is a continental
+ * view, the proxy serves from zero, and the camera is floored at the same
+ * number below so it can never reach ground the mesh does not cover.
+ *
+ * The ceiling is the proxy's and is deeper than this camera goes -- past it the
+ * squares are a street map, which is a different product and somebody else's
+ * quota. It needs no matching camera limit: against the ceiling `TileLayer`
+ * clamps and keeps drawing, so zooming in past it costs resolution rather than
+ * the ground.
  */
-const TERRAIN_MIN_ZOOM = 5;
+const TERRAIN_MIN_ZOOM = 3;
 const TERRAIN_MAX_ZOOM = 11;
 
 /**
@@ -186,6 +198,14 @@ const RING_KM: readonly number[] = [25, 50, 100];
  */
 const PITCH_ZOOM_COMPENSATION = 0.78;
 
+/**
+ * How far the camera is tilted back, degrees.
+ *
+ * Steep enough that the relief reads as relief. Past about 55 the far edge of
+ * the region compresses into a band and the ridges stack.
+ */
+const CAMERA_PITCH = 50;
+
 /** Degrees of latitude per kilometre. Constant enough at any latitude. */
 const KM_PER_DEG_LAT = 110.574;
 
@@ -214,6 +234,49 @@ function ringPolygon(
 
 function centreOf(box: FireBBox): [number, number] {
   return [(box.west + box.east) / 2, (box.south + box.north) / 2];
+}
+
+/**
+ * A region's identity, by its corners rather than by its object.
+ *
+ * The fire-activity poll re-reads the whole payload every few minutes and hands
+ * back a freshly parsed bounding box each time -- same four numbers, new object.
+ * Anything that treats that as "the region changed" re-frames the camera, and
+ * re-framing the camera throws away wherever the officer had just panned to.
+ * Comparing the corners is the difference between a refetch and a move.
+ */
+export function regionKey(box: FireBBox): string {
+  return `${box.west},${box.south},${box.east},${box.north}`;
+}
+
+/**
+ * Whether the mesh has any tiles under a camera at this zoom.
+ *
+ * `TileLayer` rounds the camera's zoom to a tile row -- its tiles are 512 px,
+ * which is the viewport's own scale -- and answers with nothing at all below its
+ * floor. So this is the exact predicate for "is there ground under the heat
+ * field", and it is what the camera's own floor exists to keep true.
+ */
+export function terrainCoversZoom(zoom: number): boolean {
+  return Math.round(zoom) >= TERRAIN_MIN_ZOOM;
+}
+
+/**
+ * The ground the mesh is allowed to ask for, as `TileLayer` wants it.
+ *
+ * The proxy serves one region and refuses every square outside it before it
+ * contacts a provider -- that refusal is what stops the endpoint being an open
+ * relay onto the department's metered quota. Cheap to answer, and not cheap to
+ * *ask*: a camera tilted back 50 degrees sees ground well past the region on
+ * three sides, and every doomed square is a real trip through the gateway
+ * occupying one of the six connections the browser will open to this origin.
+ *
+ * The *region*, not the basemap's box. The basemap covers more ground than the
+ * region because an integer zoom always does, and the extra is exactly the
+ * ground the proxy will not serve.
+ */
+export function terrainExtent(box: FireBBox): [number, number, number, number] {
+  return [box.west, box.south, box.east, box.north];
 }
 
 /** Great-circle distance in kilometres. Used for the "nearest detection" line. */
@@ -521,7 +584,14 @@ export function RegionalHeatMap({
   // Memoised because `?? []` mints a new array every render, which would make
   // every downstream memo and every deck.gl layer rebuild on each frame.
   const detections = useMemo(() => activity?.detections ?? [], [activity]);
-  const districtCentre = activity?.cityBBox ? centreOf(activity.cityBBox) : null;
+  // Memoised for the same reason, and it matters more: an unmemoised centre is a
+  // new array on every render, so hovering a pin or opening a hotspot card --
+  // neither of which is new data -- invalidated the hotspot clustering and every
+  // deck.gl layer underneath it.
+  const districtCentre = useMemo(
+    () => (activity?.cityBBox ? centreOf(activity.cityBBox) : null),
+    [activity],
+  );
   const nearest = useMemo(
     () => nearestDetection(detections, districtCentre),
     [detections, districtCentre],
@@ -614,9 +684,20 @@ export function RegionalHeatMap({
         )}
       </p>
 
+      {/* **The frame takes what is left, and the key is what is left over
+          from.** It used to hold a 440 px floor at `lg`, which is taller than
+          the space the standby column can spare once a structure profile is
+          open below it -- so the panel's own content ran past the bottom of the
+          card, the card clips (`overflow-hidden`, and the column scrolls
+          outside it, so the overflow was unreachable), and the half that went
+          over the edge was the key. A map with no key is a picture of colours
+          nobody can read, so the map is the thing that gives way: the floor
+          here is only the point below which the frame is not worth drawing at
+          all, and it applies on the stacked layout, which has no ceiling to
+          overflow. */}
       <div
         ref={frameRef}
-        className="relative min-h-[300px] flex-1 overflow-hidden rounded-md border border-line bg-ground lg:min-h-[440px]"
+        className="relative min-h-[220px] flex-1 overflow-hidden rounded-md border border-line bg-ground"
         data-testid="regional-heat-canvas"
       >
         {drawable && deck && bounds && size ? (
@@ -784,8 +865,13 @@ function Row({ label, value, accent = false }: { label: string; value: string; a
 function Shell({ heading, children }: { heading: React.ReactNode; children: React.ReactNode }) {
   return (
     <section
+      // `flex-1 min-h-0`, so the panel is exactly as tall as the card that holds
+      // it. Sized by its content instead, it grew past the card's bottom edge
+      // and the card clipped the overflow -- which is how the key disappeared.
+      // Filling the card is what gives the frame a real height to divide with
+      // the key rather than a height it invents from its own minimums.
       aria-labelledby="regional-heat-heading"
-      className="flex min-h-0 flex-col bg-ground px-4 py-3"
+      className="flex min-h-0 flex-1 flex-col bg-ground px-4 py-3"
       data-testid="regional-heat"
     >
       {heading}
@@ -817,7 +903,7 @@ function MapKey({
   }, [detections]);
 
   return (
-    <div className="mt-2 shrink-0 space-y-1.5">
+    <div className="mt-2 shrink-0 space-y-1.5" data-testid="regional-heat-key">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-micro uppercase tracking-widest text-muted">Fire radiative power</span>
         <span className="flex items-center gap-1" aria-hidden="true">
@@ -915,6 +1001,57 @@ async function loadDeck(): Promise<DeckModules> {
 /** Draw over the mesh rather than inside it. See the module docstring. */
 const OVER_TERRAIN = { depthTest: false } as const;
 
+/**
+ * Where the camera is, as this panel owns it.
+ *
+ * deck.gl hands back a good deal more than this on every gesture -- the width
+ * and height it measured, the pivot a rotation started from, the constraints it
+ * applied. Keeping five fields and re-declaring the constraints is deliberate:
+ * the transient half of that object is about one gesture and has no business
+ * outliving it, and the width and height are the frame's to report, not the
+ * camera's to remember.
+ */
+interface Camera {
+  longitude: number;
+  latitude: number;
+  zoom: number;
+  pitch: number;
+  bearing: number;
+}
+
+/**
+ * The camera that frames a region on first sight of it.
+ *
+ * Computed once per region rather than per render -- see `regionKey`. Nothing
+ * here depends on the frame having settled at its final size: a later resize
+ * widens what the camera sees, which is what a resize should do, and re-solving
+ * for the new frame would move a camera the officer had already aimed.
+ */
+function frameRegion(
+  Viewport: DeckModules['WebMercatorViewport'],
+  bounds: FireBBox,
+  size: { width: number; height: number },
+): Camera {
+  const fitted = new Viewport({ width: size.width, height: size.height }).fitBounds(
+    [
+      [bounds.west, bounds.south],
+      [bounds.east, bounds.north],
+    ],
+    { padding: 24 },
+  );
+  return {
+    longitude: fitted.longitude,
+    latitude: fitted.latitude,
+    // `fitBounds` solves for a top-down camera. Tilting one back widens the
+    // ground it can see, so the region it just fitted shrinks into the middle
+    // of the frame with a margin all round. This is the compensation, and it is
+    // a constant because the pitch is.
+    zoom: fitted.zoom + PITCH_ZOOM_COMPENSATION,
+    pitch: CAMERA_PITCH,
+    bearing: 0,
+  };
+}
+
 function DeckScene({
   deck,
   bounds,
@@ -952,31 +1089,75 @@ function DeckScene({
     WebMercatorViewport,
   } = deck;
 
-  const initialViewState = useMemo(() => {
-    const viewport = new WebMercatorViewport({ width: size.width, height: size.height });
-    const fitted = viewport.fitBounds(
-      [
-        [bounds.west, bounds.south],
-        [bounds.east, bounds.north],
-      ],
-      { padding: 24 },
-    );
-    return {
-      longitude: fitted.longitude,
-      latitude: fitted.latitude,
-      // `fitBounds` solves for a top-down camera. Tilting one back widens the
-      // ground it can see, so the region it just fitted shrinks into the middle
-      // of the frame with a margin all round. This is the compensation, and it
-      // is a constant because the pitch is.
-      zoom: fitted.zoom + PITCH_ZOOM_COMPENSATION,
-      // Steep enough that the relief reads as relief. Past about 55 the far
-      // edge of the region compresses into a band and the ridges stack.
-      pitch: 50,
-      bearing: 0,
-    };
-    // The camera is *initial* state: recomputing it as the user orbits would
-    // yank the view back. It is keyed on the region and the frame instead.
-  }, [WebMercatorViewport, bounds, size.width, size.height]);
+  /**
+   * **The camera is this component's state, not deck.gl's.**
+   *
+   * It was `initialViewState`, which reads as "set it once" and is not: deck
+   * re-reads that prop on every `setProps` and overwrites its internal camera
+   * whenever the value differs, and the value was solved from `bounds` and from
+   * the frame's measured size. Both of those move under a camera that is not
+   * moving. The region box arrives as a new object on every fire-activity poll,
+   * and the frame is `flex-1` between a lede and a key that both reflow when
+   * the detection count changes -- so a poll that added a line of text resized
+   * the frame by a few pixels, which re-solved the fit, which threw the camera
+   * back to the opening shot. An officer who had zoomed out was zoomed back in
+   * for them, and had to do it again.
+   *
+   * Owning it here inverts that. Deck reports where the gesture left the camera
+   * and this holds it; nothing else writes it except a genuine change of
+   * region, which is checked below by the corners rather than by the object.
+   */
+  const [camera, setCamera] = useState<Camera>(() =>
+    frameRegion(WebMercatorViewport, bounds, size),
+  );
+
+  const region = regionKey(bounds);
+  const [framed, setFramed] = useState(region);
+  if (framed !== region) {
+    // Re-framing during render rather than in an effect, so the first paint of
+    // a new region is already pointed at it -- an effect would show one frame
+    // of the old camera over the new ground. Only a genuine move gets here: a
+    // refetch of the same region compares equal and leaves the camera alone.
+    setFramed(region);
+    setCamera(frameRegion(WebMercatorViewport, bounds, size));
+  }
+
+  /**
+   * Whether any ground has been drawn yet.
+   *
+   * Latched on purpose: once a square of mesh has arrived the map is a map, and
+   * a later poll that re-reads the same region must not put a "loading" line
+   * back over ground the officer is already looking at.
+   */
+  const [groundLoaded, setGroundLoaded] = useState(false);
+  const onGroundLoad = useCallback(() => setGroundLoaded(true), []);
+
+  /**
+   * The region as the tile loader wants it, and stable across polls.
+   *
+   * Memoised on the four *numbers* rather than on `bounds`, because the
+   * fire-activity poll hands back a new box object with identical corners every
+   * few minutes -- see `regionKey`. Keyed on the object, this array would be new
+   * on every poll and would rebuild the mesh underneath a camera nobody moved.
+   */
+  const { west, south, east, north } = bounds;
+  const regionExtent = useMemo(
+    () => terrainExtent({ west, south, east, north }),
+    [west, south, east, north],
+  );
+
+  const viewState = useMemo(
+    () => ({
+      ...camera,
+      // The floor is the mesh's, not a taste in how far out a regional map
+      // should go: below it `TileLayer` has no tiles and the ground disappears
+      // entirely. Stopping the camera at the edge of the data is honest in a
+      // way that letting it slide off into black is not. With no mesh -- the
+      // flat-image fallback -- there is no such edge and no floor to impose.
+      minZoom: tileBase ? TERRAIN_MIN_ZOOM : undefined,
+    }),
+    [camera, tileBase],
+  );
 
   const layers = useMemo(() => {
     const built: unknown[] = [];
@@ -997,9 +1178,34 @@ function DeckScene({
           // Flat-lit rather than shaded by a light this scene does not have.
           // A specular hillside under an orange heat field reads as more fire.
           material: false,
+          /**
+           * **The proxy's region, told to the tile loader instead of discovered.**
+           *
+           * The backend serves one region and refuses every square outside it
+           * before it contacts a provider -- that refusal is what stops the
+           * endpoint being an open relay onto the department's metered quota.
+           * It is cheap to answer and it is not cheap to *ask*: a camera tilted
+           * back 50 degrees sees a frustum whose ground footprint runs well past
+           * the region on three sides, so without this the mesh requested a pile
+           * of squares whose only possible answer was 404, two per square
+           * because height and skin are separate grids. Each one is a real trip
+           * through the gateway and each one occupies one of the six connections
+           * the browser will open to this origin -- which is to say they were
+           * queued ahead of the tiles the officer is actually waiting on.
+           *
+           * `extent` makes the tile loader skip them. It is the region box
+           * rather than the basemap's, deliberately: the basemap covers more
+           * ground than the region (an integer zoom always does) and the extra
+           * is exactly the ground the proxy will not serve.
+           */
+          extent: regionExtent,
           // A square that 404s is a hole, not a failure: the heat field, the
           // rings and the key are all drawn regardless.
           onTileError: () => {},
+          // The one signal that ground has arrived. `onViewportLoad` would read
+          // better and is not available: `TerrainLayer` binds that prop to its
+          // own z-range bookkeeping and never calls a caller's.
+          onTileLoad: onGroundLoad,
         }),
       );
     } else if (basemap?.available && basemap.data_url && basemap.bounds) {
@@ -1164,21 +1370,55 @@ function DeckScene({
     detections,
     districtCentre,
     hotspots,
+    onGroundLoad,
     onHover,
     onSelect,
+    regionExtent,
     selected,
     tileBase,
   ]);
 
   return (
-    <DeckGL
-      initialViewState={initialViewState}
-      controller={{ dragRotate: true }}
-      layers={layers as never}
-      style={{ position: 'absolute', inset: '0px' }}
-      getCursor={({ isDragging }: { isDragging: boolean }) =>
-        isDragging ? 'grabbing' : 'crosshair'
-      }
-    />
+    <>
+      {/* **The frame says what it is doing rather than sitting black.** The
+          heat field, the rings and the numbered hotspots are all up by now --
+          they need no network -- but the mesh is scores of tiles and the ground
+          under them is empty until the first of those lands. Without a line
+          here that gap reads as "the map is broken", which is the reading this
+          console refuses everywhere else. It states the wait and nothing more:
+          no progress bar over a count nobody has, and no placeholder terrain. */}
+      {tileBase && !groundLoaded && (
+        <p
+          className="pointer-events-none absolute inset-x-0 top-2 z-10 text-center font-mono text-micro text-muted"
+          role="status"
+          data-testid="regional-heat-terrain-status"
+        >
+          Loading terrain…
+        </p>
+      )}
+      <DeckGL
+        viewState={viewState}
+        onViewStateChange={(params) => {
+          // Deck types this as the union of every view state any view could
+          // report; the only view here is a map view, whose camera is these five
+          // fields. It has already been clamped against the constraints above,
+          // so what lands here is a camera the mesh can be drawn under.
+          const next = params.viewState as unknown as Camera;
+          setCamera({
+            longitude: next.longitude,
+            latitude: next.latitude,
+            zoom: next.zoom,
+            pitch: next.pitch,
+            bearing: next.bearing,
+          });
+        }}
+        controller={{ dragRotate: true }}
+        layers={layers as never}
+        style={{ position: 'absolute', inset: '0px' }}
+        getCursor={({ isDragging }: { isDragging: boolean }) =>
+          isDragging ? 'grabbing' : 'crosshair'
+        }
+      />
+    </>
   );
 }

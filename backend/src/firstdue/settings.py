@@ -513,6 +513,33 @@ class Settings(BaseSettings):
     #: database. Refused at startup rather than degraded silently.
     central_database_enabled: bool = False
 
+    #: Let the synthetic drone sweep run against a live vision model.
+    #:
+    #: Off by default and never inferred from the mode, on exactly the rule the
+    #: simulated 911 call follows: a deployment that wants generated frames read
+    #: by a real model has to say so at launch. Every frame, log entry and audit
+    #: record the sweep then produces is marked `synthetic-drone`, which is the
+    #: disclosure `firstdue.incident.drone.sweep_permitted` is really asking for.
+    #:
+    #: Setting this on a real deployment would put simulated wall readings in a
+    #: real incident's record. It exists for a demo, and `make live-demo` is the
+    #: only thing that sets it.
+    demo_synthetic_sweep: bool = False
+
+    # ---------------------------------------------------- incident autonomy --
+    #: Let the incident loop compose the entry package without being asked.
+    #:
+    #: On by default, which is the whole point: the fleet holds the judgement
+    #: and a commander driving to a fire cannot press a button. It composes and
+    #: stages only -- both approval halves and the send stay human whatever this
+    #: says -- so the worst a deployment that leaves it on gets is a document it
+    #: did not ask for, carrying its own account of what it could not settle.
+    #:
+    #: Off is for a department that wants the console to be the only thing that
+    #: ever starts a composition, and for a test that is asserting on the
+    #: button rather than on the loop.
+    entry_package_autonomy: bool = True
+
     # ------------------------------------------------------- referral email --
     #: Resend delivers the inter-agency referral once a captain has approved it.
     #: Absent, the referral is still drafted, staged, and filed -- it simply is

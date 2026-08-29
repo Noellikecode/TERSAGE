@@ -44,6 +44,12 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     # nothing, so it carries the same scope as the stats and queue it sits
     # beside on the same screen.
     Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/fire-activity", Role.VIEWER),
+    # Why the fleet panel is drawing what it is drawing: correlation ids, per
+    # agent event counts, and the newest instant in the audit log. Viewer,
+    # because it carries no fact value and no record contents -- only counts and
+    # ids the audit sink had already redacted -- and because the person who
+    # needs it is the person watching the console say nothing.
+    Endpoint("GET", f"{PREFIX}/districts/{DISTRICT}/slow-loop/diagnostics", Role.VIEWER),
     # The ground plane under that map is the same awareness at the same scope.
     # It carries map imagery rather than department records, and the box it
     # covers is read off the fire-activity answer rather than supplied by the
@@ -76,6 +82,16 @@ READ_ENDPOINTS: tuple[Endpoint, ...] = (
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/log/stream", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/stream", Role.VIEWER),
     Endpoint("GET", f"{PREFIX}/incidents/inc-x/brief/stream-enriched", Role.VIEWER),
+    # Entry packages are documents in the incident log. Reading one -- as JSON
+    # or as the printed sheet -- carries the same scope as reading the log it
+    # lives in; composing one and signing it are writes, below.
+    Endpoint("GET", f"{PREFIX}/incidents/inc-x/entry-packages", Role.VIEWER),
+    # Why the loop has or has not composed one. A viewer, because it reports
+    # decisions about the fleet -- switches, timers, counts, an error type --
+    # and nothing about the building or the people in it.
+    Endpoint("GET", f"{PREFIX}/incidents/inc-x/entry-packages/diagnostics", Role.VIEWER),
+    Endpoint("GET", f"{PREFIX}/incidents/inc-x/entry-packages/pkg-1", Role.VIEWER),
+    Endpoint("GET", f"{PREFIX}/incidents/inc-x/entry-packages/pkg-1/pdf", Role.VIEWER),
 )
 
 WRITE_ENDPOINTS: tuple[Endpoint, ...] = (
@@ -148,6 +164,22 @@ WRITE_ENDPOINTS: tuple[Endpoint, ...] = (
         {"kind_id": "water-supply"},
     ),
     Endpoint("POST", f"{PREFIX}/incidents/inc-x/approvals/apr-1", Role.CAPTAIN),
+    # Assessing readiness and solving a path both write to the incident log --
+    # every criterion and every solve leaves a line under the agent that did it,
+    # which is what the console's activity stream reads. A viewer may read those
+    # lines; only a captain may put them there.
+    Endpoint("POST", f"{PREFIX}/incidents/inc-x/readiness", Role.CAPTAIN),
+    Endpoint("POST", f"{PREFIX}/incidents/inc-x/entry-path", Role.CAPTAIN, {}),
+    Endpoint("POST", f"{PREFIX}/incidents/inc-x/entry-packages", Role.CAPTAIN, {}),
+    # Signing a half and sending the package are the two human decisions. Same
+    # scope as approving a staged resource request, which is the other place in
+    # this API where a person takes responsibility for what an agent drafted.
+    Endpoint(
+        "POST",
+        f"{PREFIX}/incidents/inc-x/entry-packages/pkg-1/approvals/entry-path",
+        Role.CAPTAIN,
+    ),
+    Endpoint("POST", f"{PREFIX}/incidents/inc-x/entry-packages/pkg-1/dispatch", Role.CAPTAIN),
     Endpoint("POST", f"{PREFIX}/incidents/inc-x/benchmarks/ARRIVAL", Role.CAPTAIN),
     Endpoint(
         "POST",

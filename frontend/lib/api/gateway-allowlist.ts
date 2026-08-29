@@ -96,6 +96,14 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     // NASA FIRMS regional fire activity plus NASA POWER fire weather.
     // Read-only; both provider keys stay on the backend.
     new RegExp(`^/api/v1/districts/${ID}/fire-activity$`),
+    // Why the fleet panel is drawing what it is drawing: when the slow loop
+    // last ran, under which correlation id, which agents recorded it and how
+    // much, and what the newest audit event in the store is. Read-only, counts
+    // and ids only, and reachable from a browser on purpose -- the moment
+    // somebody needs it is the moment the console is the thing that looks
+    // broken, and telling them to go and curl the backend directly is telling
+    // them to reproduce a live-mode credential first.
+    new RegExp(`^/api/v1/districts/${ID}/slow-loop/diagnostics$`),
     new RegExp(`^/api/v1/buildings/${ID}$`),
     new RegExp(`^/api/v1/buildings/${ID}/timeline$`),
     new RegExp(`^/api/v1/buildings/${ID}/geometry$`),
@@ -120,6 +128,23 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     // on the brief stream above.
     new RegExp(`^/api/v1/incidents/${ID}/brief/stream-enriched$`),
     new RegExp(`^/api/v1/incidents/${ID}/log$`),
+    // Entry packages: the list a commander reviews, one package in full, and
+    // the printed sheet. All three are reads of the incident log, which is
+    // where a package lives -- there is no separate store to widen.
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages$`),
+    // Why the loop has not composed one yet: autonomy on or off, whether this
+    // backend holds the incident, when the fallback deadline fires, and the
+    // type and message of the last composition that failed. Listed explicitly
+    // even though the id-shaped pattern below already admits the literal
+    // `diagnostics` -- the day that pattern is tightened to real package ids
+    // this must not silently stop being reachable, because the moment somebody
+    // needs it is the moment nothing else is working.
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages/diagnostics$`),
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages/${ID}$`),
+    // The PDF. Seven segments, inside `MAX_PATH_SEGMENTS`, and the only route
+    // here whose response is bytes rather than JSON -- see the gateway's own
+    // `application/pdf` branch, which pipes it instead of decoding it as text.
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages/${ID}/pdf$`),
     // The log as it is written, one frame per entry. Read-only and resumable
     // by sequence; it carries the same ids, keys and reasons the document does.
     new RegExp(`^/api/v1/incidents/${ID}/log/stream$`),
@@ -133,6 +158,14 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     // may reach it at all.
     new RegExp(`^/api/v1/districts/${ID}/poll$`),
     new RegExp(`^/api/v1/incidents/${ID}/brief/enrich$`),
+    // The 911 transcript, read after the incident is already open.
+    //
+    // The console used to send the narrative on the open itself, so this route
+    // was never reached from the browser and was never listed. Splitting them
+    // -- so the instant brief is not stuck behind a Gemini call -- meant the
+    // console started calling a route the gateway does not know, and every
+    // dispatch ended in `The call was not read: no such route`.
+    new RegExp(`^/api/v1/incidents/${ID}/intake$`),
     new RegExp(`^/api/v1/incidents/${ID}/resolutions$`),
     new RegExp(`^/api/v1/incidents/${ID}/resources$`),
     new RegExp(`^/api/v1/incidents/${ID}/thermal$`),
@@ -141,6 +174,18 @@ const PATTERNS: Readonly<Record<GatewayMethod, readonly RegExp[]>> = {
     new RegExp(`^/api/v1/incidents/${ID}/drone-sweep$`),
     new RegExp(`^/api/v1/incidents/${ID}/close$`),
     new RegExp(`^/api/v1/incidents/${ID}/approvals/${ID}$`),
+    // Compose a package: readiness, path and brief in one pass. A write, and
+    // listed as one -- it stages two approval cards and sends nothing.
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages$`),
+    // One human tap on one half. The trailing segment is `entry-path` or
+    // `crew-brief` and is bounded to those two here rather than left as a
+    // generic id: this proxy has no business forwarding a half the backend
+    // does not have, and the backend's own 422 is not a reason to relay it.
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages/${ID}/approvals/(entry-path|crew-brief)$`),
+    // The send. Eight segments would not fit, and this is seven; the backend
+    // refuses with 422 unless both halves are granted, which is the check that
+    // matters and it is not this file's.
+    new RegExp(`^/api/v1/incidents/${ID}/entry-packages/${ID}/dispatch$`),
     new RegExp(`^/api/v1/conflicts/${ID}/referral$`),
     new RegExp(`^/api/v1/referrals/${ID}/approve$`),
   ],

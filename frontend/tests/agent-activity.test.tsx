@@ -14,8 +14,8 @@
  * every action and make half the stream recorder rows.
  */
 
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { act, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   actorFor,
@@ -24,6 +24,7 @@ import {
   describeEntry,
   facetsForEntry,
   identityFor,
+  releaseDelayFor,
   splitAgentRef,
 } from '@/components/incident/AgentActivity';
 import type { IncidentLogEntryFrame } from '@/lib/api/stream';
@@ -365,14 +366,138 @@ describe('per-message structure', () => {
   });
 });
 
+describe('how fast the queue is dealt', () => {
+  it('holds the caught-up pace at a length a single arrival is legible at', () => {
+    // One message waiting is work arriving live, and it gets the full beat.
+    expect(releaseDelayFor(1)).toBe(260);
+    expect(releaseDelayFor(0)).toBe(260);
+  });
+
+  it('deals faster the further behind it is, down to a floor', () => {
+    // The rate is the whole replacement for the bulk dump: a deep queue is
+    // drained by shortening the wait, never by putting several on screen at
+    // once. Monotonic so a queue that grew always speeds up.
+    const delays = [1, 2, 4, 8, 20, 40].map(releaseDelayFor);
+    expect(delays).toEqual([...delays].sort((a, b) => b - a));
+    expect(releaseDelayFor(4)).toBe(65);
+    // The floor is roughly three frames. Below it two arrivals begin on the
+    // same paint and read as one motion, which is the dump wearing an
+    // animation.
+    expect(releaseDelayFor(40)).toBe(45);
+    expect(releaseDelayFor(500)).toBe(45);
+  });
+
+  it('drains a forty-deep backlog in a couple of seconds, not a minute', async () => {
+    // The reason the bulk dump existed. A reconnect replays from Last-Event-ID
+    // and forty messages at the caught-up pace is ten seconds of watching
+    // history; the adaptive rate covers it without grouping any of them.
+    let total = 0;
+    for (let queued = 40; queued >= 1; queued -= 1) total += releaseDelayFor(queued);
+    expect(total).toBeLessThan(2500);
+    // And the tail slows back down, so the last messages land at the pace of
+    // work happening rather than at the pace of a replay.
+    expect(releaseDelayFor(1)).toBeGreaterThan(releaseDelayFor(40) * 4);
+  });
+});
+
 describe('the panel', () => {
+  // The column starts blank and releases one message per timer tick, so nothing
+  // a render puts on screen is there synchronously. The clock is fake and never
+  // advances on its own, which keeps every wait below exactly what the code
+  // asked for rather than what the machine running the test managed.
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /**
+   * One step of the clock, shorter than the release floor.
+   *
+   * Every wait the panel asks for is at least 45ms, so a step this size can
+   * only ever cover one of them: a step that lands two messages is the code
+   * grouping them and not the clock jumping over them. Advancing by a beat
+   * longer than the slowest wait would prove nothing, because several releases
+   * fall inside one such jump.
+   */
+  const STEP_MS = 20;
+
+  async function step() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STEP_MS);
+    });
+  }
+
+  /**
+   * How many messages are on screen.
+   *
+   * By card rather than by list item: a handoff's references are themselves a
+   * list, so counting `listitem` counts a message's pointers as arrivals and
+   * reads a single card landing as three.
+   */
+  function dealt(): number {
+    return screen.queryAllByTestId(/^activity-message-/).length;
+  }
+
+  /** The column's length after each step, for as long as asked. */
+  async function sampleWhileDealing(steps: number): Promise<number[]> {
+    const counts: number[] = [];
+    for (let i = 0; i < steps; i += 1) {
+      await step();
+      counts.push(dealt());
+    }
+    return counts;
+  }
+
+  /** Run the clock until exactly one more message has landed. */
+  async function landOne() {
+    const before = dealt();
+    for (let i = 0; i < 40; i += 1) {
+      await step();
+      if (dealt() > before) return;
+    }
+  }
+
+  /** Let `count` messages land, one at a time. */
+  async function landAll(count: number) {
+    for (let i = 0; i < count; i += 1) await landOne();
+  }
+
+  /** A sweep's worth of one agent's actions, oldest first. */
+  function burst(count: number, from = 600) {
+    return Array.from({ length: count }, (_, i) =>
+      entry({
+        sequence: from + i,
+        entry_type: 'AGENT_ANALYSIS',
+        content: { agent_ref: 'sensor-fusion@1.0.0', headline: `step ${i}` },
+      }),
+    );
+  }
+
   it('says nothing has been recorded rather than rendering an empty box', () => {
     render(<AgentActivity entries={[]} />);
     expect(screen.getByText(/Nothing recorded yet/i)).toBeInTheDocument();
   });
 
-  it('renders a message per action, newest first, with what it was handed', () => {
+  it('starts blank even when the incident already had entries at mount', async () => {
+    // The column is watched, not consulted. An admin who opens it onto a
+    // running incident cannot tell which messages predated them, so priming the
+    // panel with "what was already there" was just the whole history landing in
+    // one frame -- the grouping this panel exists to avoid.
     render(<AgentActivity entries={[FOCUS, HANDOFF]} />);
+    expect(dealt()).toBe(0);
+    expect(screen.getByText(/Nothing recorded yet/i)).toBeInTheDocument();
+
+    await landOne();
+    expect(dealt()).toBe(1);
+    await landAll(3);
+    expect(dealt()).toBe(4);
+  });
+
+  it('renders a message per action, newest first, with what it was handed', async () => {
+    render(<AgentActivity entries={[FOCUS, HANDOFF]} />);
+    await landAll(4);
     const stream = screen.getByTestId('activity-stream');
     const rows = within(stream).getAllByRole('listitem');
     // The handoff is sequence 3 and the composition sequence 2, so the wake is
@@ -382,23 +507,98 @@ describe('the panel', () => {
     expect(within(stream).getAllByText(/from the slow loop/i).length).toBeGreaterThan(0);
   });
 
-  it('scrolls the stream rather than growing the column', () => {
+  it('scrolls the stream rather than growing the column', async () => {
     // Every action is kept, so the list is unbounded and something has to give.
     // It is the list that scrolls, not the page.
     render(<AgentActivity entries={[FOCUS, HANDOFF]} />);
+    await landAll(4);
     expect(screen.getByTestId('activity-stream').className).toMatch(/overflow-y-auto/);
   });
 
-  it('animates only the messages that are new to this render', () => {
+  it('deals a burst one message at a time rather than in a single frame', async () => {
+    // Four faces of a sweep, or seven agencies notified together, arrive in one
+    // render. Put on screen at once they read as a list that changed; dealt one
+    // at a time they read as agents working.
+    const faces = ['ALPHA', 'BRAVO', 'CHARLIE', 'DELTA'].map((face, i) =>
+      entry({
+        sequence: 60 + i,
+        entry_type: 'AGENT_ANALYSIS',
+        content: { agent_ref: 'sensor-fusion@1.0.0', headline: `registered ${face}` },
+      }),
+    );
+    const { rerender } = render(<AgentActivity entries={[]} />);
+    rerender(<AgentActivity entries={faces} />);
+    expect(dealt()).toBe(0);
+
+    await landOne();
+    // The oldest first, so the burst stacks up the way the agent acted.
+    expect(dealt()).toBe(1);
+    expect(screen.getByText(/registered ALPHA/)).toBeInTheDocument();
+
+    await landAll(3);
+    expect(dealt()).toBe(4);
+    // And newest on top once they have all landed.
+    expect(screen.getAllByRole('listitem')[0]).toHaveTextContent(/DELTA/);
+  });
+
+  it('lands a burst of twenty one at a time, never a group', async () => {
+    // The bug the admin reported: a burst over the old catch-up threshold was
+    // put on screen in one frame, and bursts are routine now. The count may
+    // only ever climb by one, however deep the queue gets.
+    render(<AgentActivity entries={burst(20)} />);
+    const counts = await sampleWhileDealing(200);
+    let previous = 0;
+    for (const count of counts) {
+      expect(count - previous).toBeLessThanOrEqual(1);
+      previous = count;
+    }
+    expect(previous).toBe(20);
+    // Every intermediate count was on screen at some point, which is what
+    // "individually" means from the chair in front of it.
+    expect(new Set(counts).size).toBe(21);
+  });
+
+  it('drains a forty-deep backlog in seconds without ever grouping it', async () => {
+    // A reconnect replays from Last-Event-ID, and that whole replay used to be
+    // dumped on screen at once. Forty now arrive one by one and it still costs
+    // a couple of seconds, because the queue's depth is what sets the rate.
+    render(<AgentActivity entries={burst(40, 900)} />);
+    const counts = await sampleWhileDealing(150);
+    let previous = 0;
+    for (const count of counts) {
+      expect(count - previous).toBeLessThanOrEqual(1);
+      previous = count;
+    }
+    // The clock only moves when a step moves it, so steps-to-drain is the time
+    // the panel actually asked for rather than the machine's own pace.
+    const drainedAfter = (counts.indexOf(40) + 1) * STEP_MS;
+    expect(counts.indexOf(40)).toBeGreaterThan(-1);
+    expect(drainedAfter).toBeLessThan(3000);
+  });
+
+  it('animates each arrival on its own rather than several sharing one', async () => {
+    // The stagger is only worth its seconds if each landing is its own motion.
+    // Exactly one row carries the arrival class per release: the one that just
+    // landed, and never the ones already sitting there.
+    const { container } = render(<AgentActivity entries={burst(6, 700)} />);
+    for (let i = 0; i < 6; i += 1) {
+      await landOne();
+      expect(container.querySelectorAll('.activity-message-arrived')).toHaveLength(1);
+    }
+  });
+
+  it('animates only the messages that are new to this render', async () => {
     // Without this every row re-animates whenever any agent acts, and a stream
     // of twenty flashes in full each time one message lands.
     const { rerender } = render(<AgentActivity entries={[HANDOFF]} />);
+    await landOne();
     rerender(<AgentActivity entries={[HANDOFF, FOCUS]} />);
+    await landAll(3);
     const settled = screen.getByTestId('activity-message-3:sensor-fusion');
     expect(settled.className).not.toMatch(/activity-message-arrived/);
   });
 
-  it('names a scope the incident grant could not cover', () => {
+  it('names a scope the incident grant could not cover', async () => {
     // "Nobody told the recorder" is only answerable if the reason is beside it.
     render(
       <AgentActivity
@@ -416,6 +616,7 @@ describe('the panel', () => {
         ]}
       />,
     );
+    await landOne();
     expect(screen.getByText(/write:utility-shutoff/)).toBeInTheDocument();
   });
 });

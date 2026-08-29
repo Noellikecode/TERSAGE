@@ -362,3 +362,117 @@ async def test_the_draft_report_counts_the_narratives_and_the_handoffs(
     assert closed.neris_draft is not None
     assert closed.neris_draft.intake_reads == 1
     assert closed.neris_draft.agent_handoffs >= 1
+
+
+# ------------------------------------------------- the interceptor's own name
+
+
+def _analyses(entries, agent_id: str) -> list:
+    """Every analysis one agent filed under its own id."""
+    return [
+        e
+        for e in entries
+        if e.entry_type is LogEntryType.AGENT_ANALYSIS
+        and str((e.content or {}).get("agent_ref", "")).startswith(agent_id)
+    ]
+
+
+async def test_reading_the_narrative_is_recorded_under_the_agent_that_read_it(
+    container: Container, session: IncidentSession
+) -> None:
+    """Screening a transcript and binding six fields off it is the largest thing
+    this agent does, and it was filed under whoever wrote the entry.
+
+    ``INTAKE_READ`` names the recorder, because the recorder wrote it. So the
+    console's per-agent stream had the interceptor doing nothing between opening
+    the incident and the handoffs appearing -- through the model call, the
+    screen, and the span binding that is the entire reason a caller's words are
+    allowed anywhere near the brief.
+    """
+    await run_slow_loop(container, approve=False)
+    opened = await _open(session)
+    await session.emit_instant(opened)
+    result = await _intercept(session, opened)
+
+    entries = (await container.incident_log.get_log(opened.incident.incident_id)).entries
+    read = [e for e in _analyses(entries, "incident-interceptor") if "read the" in str(e.content)]
+    assert read, "the intake was read and the agent that read it left no entry"
+    content = read[0].content or {}
+    assert str(content["headline"]).startswith("read the")
+    # Counts and screen names. Never the call.
+    assert result.reading.screen and result.reading.screen in str(content["detail"])
+    assert "delivery truck" not in str(content)
+    assert "propane" not in str(content)
+    assert set(result.reading.reported_keys) <= set(content["refs"])
+
+
+async def test_a_rule_that_wakes_nobody_says_so_in_the_incidents_own_record(
+    container: Container, session: IncidentSession
+) -> None:
+    """A stated gap that no incident could see.
+
+    The plan has always carried ``unmatched_rule_ids`` -- a rule that fired and
+    matched no catalogued agent -- and nothing wrote it down. A department
+    finding out that "reported hazardous material" is checked against the Tier
+    II filings by nobody should find it out from the record of the incident
+    where it happened, not from reading the rule table afterwards.
+    """
+    await run_slow_loop(container, approve=False)
+    opened = await _open(session)
+    await session.emit_instant(opened)
+    result = await _intercept(session, opened)
+    assert result.plan.unmatched_rule_ids, "this call is supposed to fire the Tier II rule"
+
+    entries = (await container.incident_log.get_log(opened.incident.incident_id)).entries
+    analyses = _analyses(entries, "incident-interceptor")
+
+    routed = [
+        e for e in analyses if "routed the incident" in str((e.content or {}).get("headline"))
+    ]
+    assert len(routed) == 1
+    assert str(len(result.plan.fired_rule_ids)) in str(routed[0].content["detail"])
+    assert set(result.plan.fired_rule_ids) <= set(routed[0].content["refs"])
+
+    for rule_id in result.plan.unmatched_rule_ids:
+        declined = [e for e in analyses if rule_id in str((e.content or {}).get("headline"))]
+        assert declined, f"{rule_id} fired, matched nobody, and left no trace"
+        # The rule's own sentence, so the record and the table cannot drift.
+        assert "read:tier-ii-metadata" in str(declined[0].content["detail"])
+
+
+async def test_a_briefing_that_could_not_be_written_says_so(
+    container: Container, session: IncidentSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The focus is optional and its absence is not.
+
+    A deployment that wired a bank and a model has asked its head agent to
+    reason about attention on every incident. Losing that is survivable by
+    construction -- every other agent falls back to its own rules -- but an
+    incident where the thing that points at everything did not run reads on the
+    console exactly like an incident where nothing needed pointing at.
+    """
+
+    def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("the planner is unreachable")
+
+    monkeypatch.setattr(
+        type(session.interceptor), "composes_focus", property(lambda _: True), raising=False
+    )
+    monkeypatch.setattr(session.interceptor, "compose_focus", _boom, raising=False)
+
+    await run_slow_loop(container, approve=False)
+    opened = await _open(session)
+    await session.emit_instant(opened)
+    # The incident is unaffected: the intake still reads and still routes.
+    result = await _intercept(session, opened)
+    assert result.woken_agent_ids
+
+    entries = (await container.incident_log.get_log(opened.incident.incident_id)).entries
+    assert not [e for e in entries if e.entry_type is LogEntryType.FOCUS_COMPOSED]
+    carried = [
+        e
+        for e in _analyses(entries, "incident-interceptor")
+        if "without a focus" in str((e.content or {}).get("headline"))
+    ]
+    assert carried, "the head agent tried to brief the fleet, failed, and left no trace"
+    assert "RuntimeError" in str(carried[0].content["detail"])

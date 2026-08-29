@@ -36,9 +36,221 @@ import { useEffect, useRef, useState } from 'react';
 
 import type * as ThreeNS from 'three-r128';
 
-import type { FaceView, GeometryView } from '@/lib/api/types';
+import type { FaceView, GeometryView, RouteView } from '@/lib/api/types';
 
 export type ViewAngle = 'ALPHA' | 'BRAVO' | 'CHARLIE' | 'DELTA' | 'ISO';
+
+/**
+ * A computed route, drawn over the massing model.
+ *
+ * **Only ever passed once a package exists.** A route on screen from the moment
+ * an incident opens says nothing: the point of this drawing is that it is the
+ * *outcome* of the interceptor deciding the record was good enough to compute
+ * one. Before that the structure view is what it always was, and the caller
+ * gates on the package rather than on the incident.
+ *
+ * Drawn in footprint-local metres, which is the frame the waypoints already
+ * carry and the same frame the measured footprint is in -- so the two land on
+ * each other with no transform either side invented. The waypoints' WGS-84
+ * fields are deliberately unused here: they are null whenever the city could
+ * not place the parcel, and a renderer that filled in an origin would be
+ * putting a crew's route at coordinates nobody surveyed.
+ */
+export interface RouteOverlay {
+  entry: RouteView | null;
+  egress: RouteView | null;
+  /** The leg under the cursor or under selection, drawn brighter than the rest. */
+  highlight: { route: 'entry' | 'egress'; leg: number } | null;
+  /**
+   * Which computed route this is -- the package id, in practice.
+   *
+   * The progressive draw restarts when this changes and **never** when the
+   * highlight does. Without it, hovering the leg list would replay the walk
+   * from the staging point on every pointer move, because a highlight change
+   * hands this component a new overlay object exactly the way a new package
+   * does. The identity of the route is a fact the caller has; asking the
+   * renderer to infer it from deep-equal waypoints would be guessing.
+   */
+  drawKey: string;
+}
+
+/** Entry is `live`, egress is `confirmed` -- and both carry a label as well. */
+const ROUTE_COLORS = { entry: 0x38bdf8, egress: 0x4ade80, highlight: 0xe8edf4 } as const;
+
+// ------------------------------------------------------- the route's draw --
+
+/**
+ * How long the whole route may take to draw, entry and egress together.
+ *
+ * **Charged against the two minutes the rest of the system is racing.** This
+ * animation lands at the culmination of an incident: the fleet has composed a
+ * package and a human is about to be asked to sign it. A draw that took ten
+ * seconds would be spending the officer's decision time on a transition, and
+ * an officer who has to wait for a picture learns to tap through it.
+ *
+ * 1.6 s is about the length of one held glance -- long enough to follow a line
+ * from the kerb through a door and up a stair and understand it as a walk,
+ * short enough that nobody reaches for the mouse before it lands.
+ */
+export const ROUTE_DRAW_BUDGET_MS = 1600;
+
+/**
+ * The pace one leg would take if the route were short enough to afford it.
+ *
+ * 220 ms is where a stroke still reads as *travel*. Much below that and
+ * consecutive legs blur into a single wipe, which says "a line appeared"
+ * rather than "a crew goes this way"; much above and a five-leg route alone
+ * eats the budget.
+ *
+ * The budget wins over the pace. A four-leg route takes 880 ms at the full
+ * pace; a twenty-leg route compresses to 80 ms a leg and still finishes at
+ * 1.6 s. That is the whole point of having both numbers: **the officer's wait
+ * is fixed and the leg count moves the pace**, never the other way round. A
+ * route computed through a deep building must not cost more of a commander's
+ * attention than a route into a shopfront.
+ */
+export const ROUTE_LEG_MS = 220;
+
+/**
+ * The beat between the entry route finishing and the egress starting.
+ *
+ * The second way out is a separate answer to a separate question, and drawing
+ * it continuously off the end of the entry route would read as one long walk
+ * that doubles back. The pause is what makes the green a second statement
+ * rather than more of the blue.
+ */
+export const ROUTE_EGRESS_GAP_MS = 160;
+
+/** The tail of a leg over which the waypoint it reaches comes up. */
+const MARKER_LAND_FRACTION = 0.34;
+
+export interface RouteDrawSchedule {
+  /** Legs in the entry route: one fewer than its waypoints, never negative. */
+  entryLegs: number;
+  egressLegs: number;
+  /** What one leg takes here. Below `ROUTE_LEG_MS` on a long route. */
+  legMs: number;
+  /** The beat before the egress. Zero unless both routes are present. */
+  gapMs: number;
+  /** When the sequence is over. **Zero means there is nothing to draw** --
+      an empty overlay, a refusal, or a reader who asked for no motion. */
+  totalMs: number;
+}
+
+/** Legs in a route: the walk between consecutive waypoints, and no more. */
+function legCount(drawn: RouteView | null): number {
+  if (!drawn || drawn.waypoints.length < 2) return 0;
+  return drawn.waypoints.length - 1;
+}
+
+/**
+ * The timetable for drawing one overlay, derived and never authored.
+ *
+ * Pure, and exported, because two clocks read it: the frame loop below, which
+ * decides how much of each leg is on screen, and the console, which decides
+ * when the approval card may interrupt. They agree because they compute the
+ * same number from the same overlay rather than because one tells the other.
+ *
+ * The order is the order the waypoints arrived in -- staging, approach, door,
+ * interior, core, and up through the levels -- because that is the order the
+ * search returned them in and it is the order a crew walks them. Nothing here
+ * sorts, and nothing here interpolates a leg the plan did not contain.
+ */
+export function routeDrawSchedule(
+  overlay: RouteOverlay | null,
+  options: { reducedMotion?: boolean } = {},
+): RouteDrawSchedule {
+  const entryLegs = legCount(overlay?.entry ?? null);
+  const egressLegs = legCount(overlay?.egress ?? null);
+  const legs = entryLegs + egressLegs;
+  // Reduced motion is not a faster animation, it is no animation: the whole
+  // route is already there and the card may be raised on the same tick.
+  if (legs === 0 || options.reducedMotion) {
+    return { entryLegs, egressLegs, legMs: 0, gapMs: 0, totalMs: 0 };
+  }
+  const gapMs = entryLegs > 0 && egressLegs > 0 ? ROUTE_EGRESS_GAP_MS : 0;
+  const legMs = Math.min(ROUTE_LEG_MS, (ROUTE_DRAW_BUDGET_MS - gapMs) / legs);
+  // Clamped as well as derived: `legs * (budget / legs)` lands a floating-point
+  // hair over the budget, and "at most 1.6 s" has to be true of the number the
+  // console gates on, not merely of the arithmetic that produced it.
+  const totalMs = Math.min(ROUTE_DRAW_BUDGET_MS, legs * legMs + gapMs);
+  return { entryLegs, egressLegs, legMs, gapMs, totalMs };
+}
+
+export interface RouteDrawState {
+  /** `legs` is fractional: 2.4 is two whole legs and a fifth of a third. */
+  entry: { begun: boolean; legs: number };
+  egress: { begun: boolean; legs: number };
+  /** True once the egress -- or the entry, when there is no egress -- is whole. */
+  complete: boolean;
+}
+
+/**
+ * Where the draw has got to at `elapsedMs`, as legs rather than as pixels.
+ *
+ * Separated from the renderer so the schedule can be checked without a GPU,
+ * and so the console can gate the approval card on the same arithmetic the
+ * drawing obeys instead of on a duration copied into a second place.
+ */
+export function routeDrawState(
+  schedule: RouteDrawSchedule,
+  elapsedMs: number,
+): RouteDrawState {
+  const { entryLegs, egressLegs, legMs, gapMs, totalMs } = schedule;
+  // Whole once the clock is past the total, stated rather than left to fall
+  // out of the division: the total is clamped to the budget above, so on a
+  // long route the last leg would otherwise finish a floating-point hair short
+  // of its own waypoint and stay there.
+  if (totalMs <= 0 || legMs <= 0 || elapsedMs >= totalMs) {
+    return {
+      entry: { begun: true, legs: entryLegs },
+      egress: { begun: true, legs: egressLegs },
+      complete: true,
+    };
+  }
+  const elapsed = Math.max(0, elapsedMs);
+  const entryEnds = entryLegs * legMs;
+  const egressBegins = entryEnds + gapMs;
+  return {
+    entry: { begun: true, legs: Math.min(entryLegs, elapsed / legMs) },
+    egress: {
+      begun: elapsed >= egressBegins,
+      legs: Math.min(egressLegs, Math.max(0, (elapsed - egressBegins) / legMs)),
+    },
+    complete: elapsed >= totalMs,
+  };
+}
+
+/**
+ * One leg as a mesh that can be *extended*, rather than as finished geometry.
+ *
+ * A cylinder's local +Y is its own length, so growing it means scaling Y and
+ * sliding the mesh half the new length along its own direction -- otherwise it
+ * grows from its middle in both directions at once, which is a leg appearing,
+ * not a crew walking. The start and the unit direction are kept for exactly
+ * that sum; they are the waypoints the API returned, not a resampled curve.
+ */
+interface DrawnLeg {
+  mesh: ThreeNS.Mesh;
+  /** The leg's place in the *plan*, which is not its place in this array: a
+      degenerate leg draws no mesh and the schedule still spends a beat on it. */
+  index: number;
+  from: ThreeNS.Vector3;
+  direction: ThreeNS.Vector3;
+  length: number;
+}
+
+interface DrawnMarker {
+  mesh: ThreeNS.Mesh;
+  /** How many legs of this route must be walked before it lands. 0 is the start. */
+  at: number;
+}
+
+interface DrawnRoute {
+  kind: 'entry' | 'egress';
+  legs: DrawnLeg[];
+  markers: DrawnMarker[];
+}
 
 /**
  * The four ground faces, in the order the backend labels them.
@@ -413,13 +625,19 @@ export function StructureModel({
   geometry,
   view = 'ISO',
   forceFallback = false,
+  route = null,
 }: {
   geometry: GeometryView | null;
   view?: ViewAngle;
   forceFallback?: boolean;
+  route?: RouteOverlay | null;
 }) {
   const mount = useRef<HTMLDivElement | null>(null);
   const [fallback, setFallback] = useState(false);
+  /** Redraws the route group without tearing the scene down. Set once the
+      scene exists, for the same reason `aim` below is: a highlight changing
+      under the cursor must not replay the storey-by-storey build-up. */
+  const applyRoute = useRef<((overlay: RouteOverlay | null) => void) | null>(null);
   /** Where the camera is heading. Written by the pointer and by the view
       buttons; read by the frame loop, which eases the camera toward it. */
   const wanted = useRef<Orbit | null>(null);
@@ -434,6 +652,13 @@ export function StructureModel({
   useEffect(() => {
     aim.current?.(view, true);
   }, [view]);
+
+  // The route arriving is an event, not a camera move: it means a package was
+  // composed. It still does not rebuild the scene, because a hover over the
+  // leg list would then rebuild it forty times a second.
+  useEffect(() => {
+    applyRoute.current?.(route);
+  }, [route]);
 
   useEffect(() => {
     if (!geometry || forceFallback) return;
@@ -464,7 +689,10 @@ export function StructureModel({
         node.appendChild(renderer.domElement);
 
         const spec = geometry.spec;
-        const { edges } = edgesOf(spec.footprint);
+        // The centroid the footprint was shifted by, kept: route waypoints are
+        // in the *unshifted* footprint frame, and drawing them without the same
+        // offset would put the route beside the building rather than through it.
+        const { edges, cx: footprintCx, cz: footprintCz } = edgesOf(spec.footprint);
         const bearings = faceBearings(spec.footprint);
 
         /** The wall a labelled face refers to, by nearest outward normal. */
@@ -553,6 +781,210 @@ export function StructureModel({
 
         const building = new THREE.Group();
         scene.add(building);
+
+        // ---- the computed route, when there is one -------------------------
+        //
+        // Its own group, added to the scene rather than to `building`, because
+        // the building animates storey by storey on first draw and a route
+        // scaled up out of the floor would read as the route being built.
+        //
+        // Drawn with `depthTest: false` so a leg inside the structure stays
+        // visible through the mass. That is an overlay convention, not a claim
+        // about seeing through walls, and the caption says so -- a route hidden
+        // by the very building it goes into would be a drawing of nothing.
+        const routeGroup = new THREE.Group();
+        routeGroup.renderOrder = 999;
+        scene.add(routeGroup);
+        const routeRadius = Math.max(0.12, span * 0.014);
+
+        // Read once, here, rather than at every use: this is the same
+        // preference the storey build-up below obeys, and one reading of it
+        // keeps the two from disagreeing halfway down a single frame.
+        const reduced = prefersReducedMotion();
+
+        /** One leg, as a solid the eye can follow. Lines are 1px on most GPUs. */
+        const buildLeg = (
+          index: number,
+          from: ThreeNS.Vector3,
+          to: ThreeNS.Vector3,
+          material: ThreeNS.Material,
+        ): DrawnLeg | null => {
+          const direction = new THREE.Vector3().subVectors(to, from);
+          const length = direction.length();
+          // A degenerate leg -- two nodes at one point -- is skipped rather than
+          // drawn as a zero-height cylinder, which renders as a disc.
+          if (length < 1e-3) return null;
+          const mesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(routeRadius, routeRadius, length, 8, 1, true),
+            material,
+          );
+          mesh.quaternion.setFromUnitVectors(
+            new THREE.Vector3(0, 1, 0),
+            direction.clone().normalize(),
+          );
+          mesh.renderOrder = 999;
+          // Placed by `growLeg` on the first painted frame, never here: a leg
+          // that existed at full length for one frame before the schedule got
+          // to it would flash the whole route and then take it away again.
+          mesh.visible = false;
+          routeGroup.add(mesh);
+          return {
+            mesh,
+            index,
+            from: from.clone(),
+            direction: direction.clone().normalize(),
+            length,
+          };
+        };
+
+        /** Extend one leg to `extent` of its own length, from its own start. */
+        const growLeg = (leg: DrawnLeg, extent: number) => {
+          const shown = clamp01(extent);
+          leg.mesh.visible = shown > 0;
+          // A cylinder is centred on its origin, so a scaled one has to slide
+          // forward by half of what it grew to keep its tail on the waypoint
+          // it left. Without this the leg opens outward from its midpoint.
+          leg.mesh.scale.y = Math.max(1e-3, shown);
+          leg.mesh.position
+            .copy(leg.from)
+            .addScaledVector(leg.direction, (leg.length * shown) / 2);
+        };
+
+        /** Bring a waypoint up as the leg that reaches it arrives. */
+        const landMarker = (marker: DrawnMarker, extent: number) => {
+          const eased = easeOut(clamp01(extent));
+          marker.mesh.visible = eased > 0.02;
+          marker.mesh.scale.setScalar(Math.max(1e-3, eased));
+        };
+
+        const routeMaterial = (color: number) =>
+          new THREE.MeshBasicMaterial({
+            color,
+            depthTest: false,
+            transparent: true,
+            opacity: 0.95,
+          });
+
+        /** The meshes the schedule below moves, rebuilt whenever a route lands. */
+        let drawnRoutes: DrawnRoute[] = [];
+        let routeSchedule = routeDrawSchedule(null);
+        /** Which route is being drawn, and when its walk started. */
+        let routeKey = '';
+        let routeStartedAt = performance.now();
+
+        /**
+         * The route as the schedule says it stands at `elapsed`.
+         *
+         * Every frame, because the route has to grow while the camera is still
+         * orbiting under the officer's finger -- a draw that only advanced on
+         * a React render would stutter against the pointer.
+         */
+        const paintRoute = (elapsed: number) => {
+          if (drawnRoutes.length === 0) return;
+          const state = routeDrawState(routeSchedule, elapsed);
+          for (const drawn of drawnRoutes) {
+            const phase = drawn.kind === 'entry' ? state.entry : state.egress;
+            const legs = phase.begun ? phase.legs : 0;
+            // Keyed on the leg's place in the plan, never on its place in this
+            // array: a degenerate leg is skipped as a mesh and still spends its
+            // beat, so indexing by position would slide every later leg forward
+            // and land the waypoints ahead of the walk.
+            drawn.legs.forEach((leg) => growLeg(leg, legs - leg.index));
+            drawn.markers.forEach((marker) => {
+              // The first waypoint is where the crew already is, so it is there
+              // as soon as its route begins. Every other one comes up over the
+              // last third of the leg that reaches it, which is what makes the
+              // sphere read as being arrived at rather than as being announced.
+              const extent =
+                marker.at === 0
+                  ? 1
+                  : (legs - marker.at + 1 - (1 - MARKER_LAND_FRACTION)) / MARKER_LAND_FRACTION;
+              landMarker(marker, phase.begun ? extent : 0);
+            });
+          }
+        };
+
+        applyRoute.current = (overlay: RouteOverlay | null) => {
+          // Dispose before clearing: the scene-wide traverse in `cleanup` only
+          // ever sees the *last* route, so a replaced one leaks without this.
+          routeGroup.children.forEach((child) => {
+            const mesh = child as ThreeNS.Mesh;
+            mesh.geometry?.dispose();
+            const material = mesh.material as ThreeNS.Material | undefined;
+            material?.dispose();
+          });
+          routeGroup.clear();
+          drawnRoutes = [];
+          if (!overlay) {
+            routeSchedule = routeDrawSchedule(null);
+            routeKey = '';
+            return;
+          }
+
+          routeSchedule = routeDrawSchedule(overlay, { reducedMotion: reduced });
+          // A *different* route restarts the walk; the same route redrawn --
+          // which is what a hover over the leg list is -- keeps its clock, so
+          // the highlight changes under a draw already in progress instead of
+          // sending the crew back to the kerb.
+          if (overlay.drawKey !== routeKey) {
+            routeKey = overlay.drawKey;
+            routeStartedAt = performance.now();
+          }
+
+          for (const kind of ['entry', 'egress'] as const) {
+            const drawn = overlay[kind];
+            if (!drawn || drawn.waypoints.length === 0) continue;
+            const points = drawn.waypoints.map(
+              (waypoint) =>
+                new THREE.Vector3(
+                  waypoint.x_m - footprintCx,
+                  waypoint.z_m,
+                  waypoint.y_m - footprintCz,
+                ),
+            );
+            const plain = routeMaterial(ROUTE_COLORS[kind]);
+            const lit = routeMaterial(ROUTE_COLORS.highlight);
+            const highlighted =
+              overlay.highlight?.route === kind ? overlay.highlight.leg : -1;
+            const legs: DrawnLeg[] = [];
+            for (let index = 0; index + 1 < points.length; index += 1) {
+              const leg = buildLeg(
+                index,
+                points[index]!,
+                points[index + 1]!,
+                index === highlighted ? lit : plain,
+              );
+              // A degenerate leg contributes no mesh, and the schedule spends
+              // its beat regardless: the pace is derived from what the plan
+              // contains, not from what happened to be drawable. The leg
+              // carries its own plan index so the omission costs no ordering.
+              if (leg) legs.push(leg);
+            }
+            // A node the route passes through, marked. The door is larger
+            // because "which wall do we go in" is the first question asked of
+            // this drawing, and it should be findable without reading a label.
+            const markers: DrawnMarker[] = drawn.waypoints.map((waypoint, index) => {
+              const mesh = new THREE.Mesh(
+                new THREE.SphereGeometry(
+                  routeRadius * (waypoint.kind === 'door' ? 3.1 : 1.9),
+                  10,
+                  8,
+                ),
+                plain,
+              );
+              mesh.position.copy(points[index]!);
+              mesh.renderOrder = 999;
+              mesh.visible = false;
+              routeGroup.add(mesh);
+              return { mesh, at: index };
+            });
+            drawnRoutes.push({ kind, legs, markers });
+          }
+          // Painted once here as well as in the frame loop, so a route that
+          // arrives between frames is never on screen at full length first.
+          paintRoute(reduced ? Number.MAX_SAFE_INTEGER : performance.now() - routeStartedAt);
+        };
+        applyRoute.current(route);
 
         // ---- the footprint, as a reusable shape -------------------------
         const shape = new THREE.Shape();
@@ -978,7 +1410,8 @@ export function StructureModel({
         canvas.addEventListener('contextmenu', onContextMenu);
 
         // ---- the build-up --------------------------------------------------
-        const reduced = prefersReducedMotion();
+        // `reduced` is read once, up with the route group, and covers both this
+        // and the route's walk.
         const startedAt = performance.now();
         const massDone = storeys.length * LEVEL_RISE_MS;
 
@@ -999,6 +1432,12 @@ export function StructureModel({
           thermalMaterials.forEach((material) => {
             (material as ThreeNS.MeshBasicMaterial).opacity = fade * THERMAL_OPACITY;
           });
+
+          // The route walks on its own clock, started when the route arrived
+          // rather than when the scene was built: a package composed four
+          // minutes into an incident must draw from its own first frame, not
+          // arrive already finished because the storeys went up long ago.
+          paintRoute(reduced ? Number.MAX_SAFE_INTEGER : performance.now() - routeStartedAt);
 
           // Ease toward where the pointer (or a named view) put the camera.
           const next = wanted.current;
@@ -1035,6 +1474,7 @@ export function StructureModel({
 
         cleanup = () => {
           aim.current = null;
+          applyRoute.current = null;
           canvas.removeEventListener('pointerdown', onPointerDown);
           canvas.removeEventListener('pointermove', onPointerMove);
           canvas.removeEventListener('pointerup', endPointer);
@@ -1117,6 +1557,22 @@ export function StructureModel({
           </span>
         )}
         <span className="block">{describeGeometry(geometry, view)}</span>
+        {/* The route in words, because the drawing is not the record. Under the
+            static elevation it is the *only* account of it: the fallback is a
+            pre-rendered SVG of the structure and nothing can be added to it, so
+            saying nothing there would leave a route the console has and does
+            not mention. Both branches also state the overlay convention -- legs
+            are drawn through the mass, which is a drawing choice and not a
+            claim that anything sees through a wall. */}
+        {route && (route.entry || route.egress) && (
+          <span className="block" data-testid="route-caption">
+            {showFallback
+              ? 'The computed route is not on the static elevation: it is drawn on the interactive model only. Every leg of it, with what it was weighed against, is listed in the entry package.'
+              : `Route drawn over the mass: entry in blue${
+                  route.egress ? ', second way out in green' : ''
+                }. Legs are drawn through the structure so an interior leg stays visible; that is an overlay, not a sightline.`}
+          </span>
+        )}
         {showFallback && (
           <span className="block text-disputed">
             {forceFallback

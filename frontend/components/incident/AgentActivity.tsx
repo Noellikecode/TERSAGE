@@ -49,7 +49,7 @@
  */
 'use client';
 
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { IncidentLogEntryFrame } from '@/lib/api/stream';
 
@@ -78,7 +78,7 @@ import type { IncidentLogEntryFrame } from '@/lib/api/stream';
  * neutral rather than a generated hue -- and so do the superseded ones, which
  * is not a leftover but the right answer: a retired agent should look retired.
  */
-interface AgentIdentity {
+export interface AgentIdentity {
   color: string;
   glyph: string;
   /** What this agent is for, in one line, for the card's subtitle. */
@@ -517,15 +517,134 @@ function clockOf(at: string): string {
   return parsed.toISOString().slice(11, 19);
 }
 
+/**
+ * How long between one message landing and the next, when the panel is caught up.
+ *
+ * The log arrives in bursts -- four faces of a sweep, seven agencies notified
+ * together -- and a burst delivered as a single render put four cards on screen
+ * in one frame, which reads as a list that changed rather than as agents
+ * working. Released one at a time they land the way they happened.
+ *
+ * 260ms is long enough for a single arrival to register as its own event rather
+ * than as the list having grown.
+ */
+const RELEASE_INTERVAL_MS = 260;
+
+/**
+ * The fastest the queue is ever dealt, however far behind it is.
+ *
+ * Roughly three frames. Closer than this and two arrivals begin on the same
+ * paint and read as one motion -- which is the bulk dump this replaced, wearing
+ * an animation. A message that was never separately visible was not shown, and
+ * an admin seeing the fleet work is the entire purpose of the column, so the
+ * floor is what a deep backlog costs seconds against rather than something to
+ * lower when one shows up.
+ */
+const MIN_RELEASE_INTERVAL_MS = 45;
+
+/**
+ * The wait before the next message lands, given how many are still queued.
+ *
+ * Adaptive because the two things a fixed interval must choose between are both
+ * required: 260ms is the pace at which one arrival is legible, and forty
+ * messages at 260ms is ten seconds of watching history before the panel says
+ * where the incident currently stands. The old answer was to dump any burst
+ * over eight on screen at once, which -- now that a sweep, seven agency
+ * notifications and the interceptor's own entries land together -- fired on
+ * almost every burst and is exactly the grouping this is meant to end.
+ *
+ * So the wait is the caught-up pace divided by the depth of the queue: one
+ * waiting message waits 260ms, four wait 65ms each, six or more run at the
+ * floor. Forty pending drain in about 2.2s -- 35 at the 45ms floor, then the
+ * tail slowing back through 52, 65, 87, 130 to 260ms as the panel catches up,
+ * so the last few messages arrive at the pace of work actually happening rather
+ * than at the pace of a replay.
+ */
+export function releaseDelayFor(pendingCount: number): number {
+  if (pendingCount <= 1) return RELEASE_INTERVAL_MS;
+  return Math.max(MIN_RELEASE_INTERVAL_MS, Math.round(RELEASE_INTERVAL_MS / pendingCount));
+}
+
 export function AgentActivity({ entries }: { entries: readonly IncidentLogEntryFrame[] }) {
   const messages = useMemo(() => activityStreamFrom(entries), [entries]);
+
+  /**
+   * Which messages have been dealt onto the screen, by id.
+   *
+   * By id rather than by count: a count means "show the oldest N", and an entry
+   * that arrives out of order then pushes a newer message back off the screen.
+   * Entries mostly arrive in order -- but the stream replays from
+   * `Last-Event-ID` on a reconnect, which is exactly when they do not.
+   */
+  const [released, setReleased] = useState<ReadonlySet<string>>(() => new Set());
+
+  /**
+   * What has not been dealt yet, oldest first.
+   *
+   * `messages` is newest-first, so this walks it backwards and the queue drains
+   * in the order the agents acted rather than upside down.
+   *
+   * There is deliberately no mount shortcut. Priming the panel with whatever
+   * was already there treated a backlog as "state, not news", but the column is
+   * watched rather than consulted: an admin who opens it onto a running
+   * incident cannot tell which messages predated their arrival, so a primed
+   * mount was simply the whole history appearing in one frame. Starting empty
+   * and dealing everything costs the adaptive rate a couple of seconds and buys
+   * back the only thing the column is for.
+   */
+  const pending = useMemo(() => {
+    const ids: string[] = [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const id = messages[i]!.id;
+      if (!released.has(id)) ids.push(id);
+    }
+    return ids;
+  }, [messages, released]);
+
+  /**
+   * When the message at the head of the queue is due to land.
+   *
+   * Held across renders because every new entry re-runs the effect below, and a
+   * timer restarted from zero each time would let a steady arrival of entries
+   * starve the release it is already waiting on. The deadline only ever moves
+   * earlier: a queue that just got deeper is further behind, and being behind
+   * is the whole trigger for dealing faster.
+   */
+  const dueRef = useRef<{ id: string; at: number } | null>(null);
+
+  useEffect(() => {
+    const next = pending[0];
+    if (next === undefined) {
+      dueRef.current = null;
+      return;
+    }
+    const now = Date.now();
+    const soonest = now + releaseDelayFor(pending.length);
+    const held = dueRef.current;
+    const at = held !== null && held.id === next ? Math.min(held.at, soonest) : soonest;
+    dueRef.current = { id: next, at };
+    const timer = setTimeout(() => {
+      dueRef.current = null;
+      // Exactly one id per tick, never a slice of the queue: two ids added in
+      // one callback land in one render, share a single `arrived` set, and are
+      // therefore one visual arrival of two cards -- a small dump. Speed comes
+      // from the interval alone.
+      setReleased((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
+    }, Math.max(0, at - now));
+    return () => clearTimeout(timer);
+  }, [pending]);
+
+  const visible = useMemo(
+    () => messages.filter((m) => released.has(m.id)),
+    [messages, released],
+  );
   const agentCount = useMemo(
-    () => new Set(messages.map((m) => m.agentId)).size,
-    [messages],
+    () => new Set(visible.map((m) => m.agentId)).size,
+    [visible],
   );
 
   /**
-   * Which messages are new since the last render, so only those animate.
+   * Which messages are new to this render, so only those animate.
    *
    * A ref rather than state: this is read during render to decide a class and
    * must not itself cause one. Without it every message re-animates whenever
@@ -534,12 +653,12 @@ export function AgentActivity({ entries }: { entries: readonly IncidentLogEntryF
    */
   const seenRef = useRef<Set<string>>(new Set());
   const arrived = new Set<string>();
-  for (const message of messages) {
+  for (const message of visible) {
     if (!seenRef.current.has(message.id)) arrived.add(message.id);
   }
   useEffect(() => {
-    for (const message of messages) seenRef.current.add(message.id);
-  }, [messages]);
+    for (const message of visible) seenRef.current.add(message.id);
+  }, [visible]);
 
   return (
     <section
@@ -559,15 +678,15 @@ export function AgentActivity({ entries }: { entries: readonly IncidentLogEntryF
           Agent activity
         </h2>
         <span className="font-mono text-micro text-muted">
-          {messages.length === 0
+          {visible.length === 0
             ? 'waiting for the first entry'
-            : `${messages.length} action${messages.length === 1 ? '' : 's'} · ${agentCount} agent${
+            : `${visible.length} action${visible.length === 1 ? '' : 's'} · ${agentCount} agent${
                 agentCount === 1 ? '' : 's'
               }`}
         </span>
       </div>
 
-      {messages.length === 0 ? (
+      {visible.length === 0 ? (
         <p className="mt-2 border border-dashed border-line px-3 py-2 text-micro text-muted">
           Nothing recorded yet. Messages appear as the log is written, not before —
           an empty panel here means no agent has acted, which is a fact rather
@@ -588,7 +707,7 @@ export function AgentActivity({ entries }: { entries: readonly IncidentLogEntryF
           aria-label="Agent actions, most recent first"
           data-testid="activity-stream"
         >
-          {messages.map((message) => {
+          {visible.map((message) => {
             const identity = identityFor(message.agentId);
             const isHandoff = message.kind === 'handoff';
             return (

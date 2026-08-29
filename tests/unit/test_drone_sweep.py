@@ -64,6 +64,30 @@ class TestTheRefusal:
     def test_and_permitted_against_the_deterministic_double(self) -> None:
         assert sweep_permitted(vision_model_ref="fake/vision-1") == ""
 
+    def test_a_declared_simulation_is_permitted_against_a_live_model(self) -> None:
+        """The refusal is about disclosure, and this is the disclosure.
+
+        Read the reason above: the objection is not that the frame is generated
+        -- every frame in fake mode is -- it is that an unlabelled real reading
+        of a generated building is indistinguishable from a real one. An
+        operator who declares the sweep a simulation has said the screen will
+        admit it, which is the same bargain the simulated 911 call makes.
+        """
+        assert sweep_permitted(vision_model_ref="gemini-3.5-flash", simulation_declared=True) == ""
+
+    def test_the_refusal_stands_by_default(self) -> None:
+        """Never inferred from the mode. A deployment has to ask for this."""
+        assert sweep_permitted(vision_model_ref="gemini-3.5-flash") != ""
+        from firstdue.settings import Settings
+
+        assert Settings().demo_synthetic_sweep is False
+
+    def test_the_refusal_says_how_to_proceed_honestly(self) -> None:
+        """A refusal an operator cannot act on gets worked around instead."""
+        reason = sweep_permitted(vision_model_ref="gemini-3.5-flash")
+        assert "/frames" in reason
+        assert "simulation" in reason
+
 
 class TestThePlan:
     def test_a_camera_bearing_resolves_back_to_the_face_it_aimed_at(self) -> None:

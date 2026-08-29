@@ -59,6 +59,15 @@ THERMAL_CAVEAT: Final[str] = (
 #: How long a frame counts as coverage. After this a face is UNSCANNED again.
 DEFAULT_COVERAGE_WINDOW: Final[timedelta] = timedelta(minutes=5)
 
+#: How long one vision call may take when nobody says otherwise -- a ground
+#: station posting a frame outside any run, a script, a test. A caller running
+#: inside a runtime run passes its own remaining budget instead: this number is
+#: four times the ``sensor-fusion`` descriptor's 2 s latency target, so a run
+#: that let it stand would be cancelled by the runtime long before the vision
+#: client gave up, and the reading and the reason for losing it would go
+#: together. See :func:`firstdue.incident.session._frame_deadline_ms`.
+DEFAULT_FRAME_DEADLINE_MS: Final[int] = 8_000
+
 #: Temperature difference between adjacent regions that registers as a void.
 #: A published threshold, stated so an officer can disagree with it.
 VOID_DELTA_C: Final[float] = 25.0

@@ -17,6 +17,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { FleetPanel } from '@/components/fleet/FleetPanel';
 import { AgentRail } from '@/components/standby/AgentRail';
 import type { AgentDescriptorView, AuditEventView, SubscriptionView } from '@/lib/api/types';
 
@@ -601,5 +602,495 @@ describe('the count on the heading matches the rows under it', () => {
     const rows = screen.getAllByTestId(/^fleet-row-/);
     expect(rows).toHaveLength(SLOW_IDS.length);
     expect(screen.getByTestId('superseded-agents')).toHaveTextContent('1 superseded');
+  });
+});
+
+describe('incident counters read this fire, not the session', () => {
+  const incidentAgent = FLEET.find((a) => a.loop === 'INCIDENT');
+
+  function eventFor(over: Partial<AuditEventView>): AuditEventView {
+    return {
+      audit_id: `audit_${Math.random().toString(36).slice(2)}`,
+      kind: 'agent_step',
+      occurred_at: '2026-08-28T09:00:00Z',
+      actor: incidentAgent!.agent_id,
+      target: null,
+      incident_id: null,
+      correlation_id: 'corr_1',
+      detail: {},
+      ...over,
+    };
+  }
+
+  it('ignores an earlier incident’s work when counting this one', () => {
+    // The console accumulates the audit log all session, which is what keeps a
+    // slow-loop agent active between passes. For agents that only exist during
+    // an incident it is wrong: their counters opened at whatever the last few
+    // fires had left behind, so the number was large before anything had
+    // happened and then barely moved while everything did.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="INCIDENT"
+        incident={{ ...INCIDENT, incident_id: 'inc_now' }}
+        events={[
+          eventFor({ incident_id: 'inc_earlier' }),
+          eventFor({ incident_id: 'inc_earlier' }),
+          eventFor({ incident_id: 'inc_now' }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText(/1 recorded/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/3 recorded/)).not.toBeInTheDocument();
+  });
+
+  it('keeps an event that names this incident only as its target', () => {
+    // `incident_id` is optional on the wire and older records do not carry it.
+    // Dropping those would lose real work over a missing field.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="INCIDENT"
+        incident={{ ...INCIDENT, incident_id: 'inc_now' }}
+        events={[eventFor({ target: 'inc_now' })]}
+      />,
+    );
+    expect(screen.getAllByText(/1 recorded/).length).toBeGreaterThan(0);
+  });
+
+  it('never scopes the slow-loop column to a fire', () => {
+    // A slow-loop pass is not attached to any incident, and scoping that column
+    // to one would empty it entirely. It has its own unit of work -- the pass --
+    // and the block below is about that.
+    const slow = FLEET.find((a) => a.loop === 'SLOW')!;
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        incident={{ ...INCIDENT, incident_id: 'inc_now' }}
+        events={[
+          eventFor({ actor: slow.agent_id, incident_id: null }),
+          eventFor({ actor: slow.agent_id, incident_id: null }),
+        ]}
+      />,
+    );
+    expect(screen.getAllByText(/2 recorded/).length).toBeGreaterThan(0);
+  });
+});
+
+describe('slow-loop counters read this pass, not the session', () => {
+  const CLERK = 'referral-clerk';
+  const WATCHER = 'records-watcher';
+
+  function passEvent(over: Partial<AuditEventView>): AuditEventView {
+    return {
+      audit_id: `audit_${Math.random().toString(36).slice(2)}`,
+      kind: 'agent_step',
+      occurred_at: '2026-08-28T09:00:00Z',
+      actor: WATCHER,
+      target: 'sffd-district-03',
+      incident_id: null,
+      correlation_id: 'corr_old',
+      detail: {},
+      ...over,
+    };
+  }
+
+  /** A finished pass: several steps and the line that closed it. */
+  const OLD_PASS: AuditEventView[] = [
+    passEvent({ occurred_at: '2026-08-28T09:00:00Z' }),
+    passEvent({ occurred_at: '2026-08-28T09:00:01Z' }),
+    passEvent({ occurred_at: '2026-08-28T09:00:02Z', actor: CLERK }),
+    passEvent({ occurred_at: '2026-08-28T09:00:03Z', actor: CLERK, kind: 'agent_pass' }),
+  ];
+
+  it('opens at what this pass has recorded, not at what the session has', () => {
+    // The user's report: "249 for structure watch" before the pass in flight
+    // had done anything. The console accumulates the audit log all session, so
+    // an unscoped counter starts at whatever earlier passes left behind and
+    // then barely moves while the fleet works.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={[
+          ...OLD_PASS,
+          passEvent({ occurred_at: '2026-08-28T09:05:00Z', correlation_id: 'corr_new' }),
+        ]}
+      />,
+    );
+
+    const clerk = screen.getByTestId(`fleet-row-${CLERK}`);
+    // The clerk's two events belong to the finished pass, so this pass has
+    // nothing of its own for it yet.
+    expect(clerk).toHaveTextContent('0 recorded');
+    expect(clerk).toHaveTextContent('idle');
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('1 recorded');
+  });
+
+  it('counts an event the pass minted its own correlation for', () => {
+    // A work order, a blocked injection and a rejected draft each stand alone
+    // in the log under a fresh correlation. Filtering on the pass's own id
+    // would drop them out of the pass that produced them, so the window is a
+    // timestamp instead.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={[
+          ...OLD_PASS,
+          passEvent({ occurred_at: '2026-08-28T09:05:00Z', correlation_id: 'corr_new' }),
+          passEvent({
+            occurred_at: '2026-08-28T09:05:01Z',
+            kind: 'injection_blocked',
+            correlation_id: 'corr_standalone',
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('2 recorded');
+  });
+
+  it('holds the last pass’s total between passes rather than falling to zero', () => {
+    // Blanking the column the moment a pass ends would draw five idle agents
+    // over a district they had just finished reading. The number stands until
+    // the next pass writes its first event and takes the window with it.
+    render(<FleetPanel agents={FLEET} subscriptions={[]} loop="SLOW" events={OLD_PASS} />);
+
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('2 recorded');
+    expect(screen.getByTestId(`fleet-row-${CLERK}`)).toHaveTextContent('2 recorded');
+  });
+
+  it('does not let an incident agent’s step move the slow loop’s window', () => {
+    // `incident-recorder` writes `agent_step` too, and during a fire its steps
+    // are the newest in the log. An unrestricted read would reset the slow
+    // loop's counters every time the recorder ticked.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={[
+          ...OLD_PASS,
+          passEvent({ occurred_at: '2026-08-28T09:09:00Z', actor: 'incident-recorder' }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('2 recorded');
+  });
+
+  it('counts the whole session when no pass has been recorded at all', () => {
+    // A log with no pass boundary in it cannot be cut into passes. Showing
+    // what is there beats showing a zero nothing supports.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={[
+          passEvent({ kind: 'injection_blocked', occurred_at: '2026-08-28T09:00:00Z' }),
+          passEvent({ kind: 'injection_blocked', occurred_at: '2026-08-28T09:04:00Z' }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('2 recorded');
+  });
+});
+
+describe('incident counters reset for a new fire', () => {
+  const RECORDER = 'incident-recorder';
+
+  function incidentEvent(over: Partial<AuditEventView>): AuditEventView {
+    return {
+      audit_id: `audit_${Math.random().toString(36).slice(2)}`,
+      kind: 'agent_step',
+      occurred_at: '2026-08-28T09:00:00Z',
+      actor: RECORDER,
+      target: null,
+      incident_id: 'inc_earlier',
+      correlation_id: 'corr_earlier',
+      detail: {},
+      ...over,
+    };
+  }
+
+  it('opens the second fire at zero, holding none of the first one’s work', () => {
+    const events = [incidentEvent({}), incidentEvent({}), incidentEvent({})];
+    const { rerender } = render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="INCIDENT"
+        incident={{ ...INCIDENT, incident_id: 'inc_earlier' }}
+        events={events}
+      />,
+    );
+    expect(screen.getByTestId(`fleet-row-${RECORDER}`)).toHaveTextContent('3 recorded');
+
+    // The same accumulated log, a different fire open. The console keeps the
+    // events across the incident boundary, so this is the state an officer
+    // actually arrives at on the second dispatch of a shift.
+    rerender(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="INCIDENT"
+        incident={{ ...INCIDENT, incident_id: 'inc_now' }}
+        events={events}
+      />,
+    );
+    const row = screen.getByTestId(`fleet-row-${RECORDER}`);
+    expect(row).toHaveTextContent('0 recorded');
+    expect(row).toHaveTextContent('idle');
+  });
+});
+
+/**
+ * The bug two previous fixes missed, because the fake-mode tests could not
+ * reach it.
+ *
+ * `make live-demo` runs against a real Firestore, and Firestore keeps the audit
+ * log across server restarts. So the log a freshly loaded console reads is full
+ * of the last run: whole finished passes, whole finished fires, hours of them.
+ * Both earlier fixes scoped a counter to a unit of work *read out of that log*
+ * -- the pass in flight, the fire in front of us -- and on a fresh restart the
+ * newest pass in the log is a previous run's, so the console anchored on it and
+ * displayed its totals. Every agent opened at a large number before this
+ * console had watched anything happen, which is exactly the complaint.
+ *
+ * Every test below hands the panel a log that already contains a complete
+ * previous run and a floor taken from it, which is the state a restarted live
+ * console actually arrives at and the one an empty in-memory log cannot
+ * produce.
+ */
+describe('a console counts only what it has watched happen', () => {
+  const WATCHER = 'records-watcher';
+  const CLERK = 'referral-clerk';
+  const RECORDER = 'incident-recorder';
+
+  function ev(over: Partial<AuditEventView>): AuditEventView {
+    return {
+      audit_id: `audit_${Math.random().toString(36).slice(2)}`,
+      kind: 'agent_step',
+      occurred_at: '2026-08-28T09:00:00+00:00',
+      actor: WATCHER,
+      target: 'sffd-district-03',
+      incident_id: null,
+      correlation_id: 'corr_last_run',
+      detail: {},
+      ...over,
+    };
+  }
+
+  /** A complete slow-loop pass from the run before this one. */
+  const LAST_RUN: AuditEventView[] = [
+    ev({ occurred_at: '2026-08-28T09:00:00+00:00' }),
+    ev({ occurred_at: '2026-08-28T09:00:01+00:00' }),
+    ev({ occurred_at: '2026-08-28T09:00:02+00:00', kind: 'agent_pass' }),
+    ev({ occurred_at: '2026-08-28T09:00:03+00:00', actor: CLERK }),
+    ev({ occurred_at: '2026-08-28T09:00:04+00:00', actor: CLERK, kind: 'agent_pass' }),
+  ];
+
+  /** The floor a console mounting onto that log takes. */
+  const FLOOR = '2026-08-28T09:00:04+00:00';
+
+  it('opens every slow agent at zero on a log that already holds a finished pass', () => {
+    // The stale anchor, stated: without a floor the newest `agent_pass` here is
+    // the *last run's*, `currentPass` anchors on it, and the column opens
+    // showing what a pass nobody in this room watched had recorded.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={LAST_RUN}
+        since={FLOOR}
+      />,
+    );
+
+    for (const id of SLOW_IDS) {
+      const row = screen.getByTestId(`fleet-row-${id}`);
+      expect(row).toHaveTextContent('0 recorded');
+      expect(row).toHaveTextContent('idle');
+    }
+  });
+
+  it('climbs as this session’s first pass writes, without inheriting the last one', () => {
+    const { rerender } = render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={LAST_RUN}
+        since={FLOOR}
+      />,
+    );
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('0 recorded');
+
+    // Two events from a pass that started after this console did. The console
+    // still holds the whole log -- that is what merging by id does -- so this
+    // is the accumulation the counter has to see past.
+    rerender(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={[
+          ...LAST_RUN,
+          ev({ occurred_at: '2026-08-28T09:10:00+00:00', correlation_id: 'corr_this_run' }),
+          ev({ occurred_at: '2026-08-28T09:10:01+00:00', correlation_id: 'corr_this_run' }),
+        ]}
+        since={FLOOR}
+      />,
+    );
+
+    const row = screen.getByTestId(`fleet-row-${WATCHER}`);
+    expect(row).toHaveTextContent('2 recorded');
+    expect(row).toHaveTextContent('active');
+    // The last run's two events for the clerk are still in the log and still
+    // not this session's.
+    expect(screen.getByTestId(`fleet-row-${CLERK}`)).toHaveTextContent('0 recorded');
+  });
+
+  it('opens every incident agent at zero on a fire that was burning before this console loaded', () => {
+    // The incident half of the same report. A fire left open across a restart
+    // comes back as *the* open incident, so scoping to it is no protection at
+    // all: every event of it is still in the log and still matches.
+    const burning = [
+      ev({
+        occurred_at: '2026-08-28T09:00:00+00:00',
+        actor: RECORDER,
+        incident_id: 'inc_before_restart',
+        target: 'inc_before_restart',
+      }),
+      ev({
+        occurred_at: '2026-08-28T09:00:01+00:00',
+        actor: RECORDER,
+        incident_id: 'inc_before_restart',
+        target: 'inc_before_restart',
+      }),
+    ];
+    const { rerender } = render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="INCIDENT"
+        incident={{ ...INCIDENT, incident_id: 'inc_before_restart' }}
+        events={burning}
+        since="2026-08-28T09:00:01+00:00"
+      />,
+    );
+    const row = screen.getByTestId(`fleet-row-${RECORDER}`);
+    expect(row).toHaveTextContent('0 recorded');
+    expect(row).toHaveTextContent('idle');
+
+    rerender(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="INCIDENT"
+        incident={{ ...INCIDENT, incident_id: 'inc_before_restart' }}
+        events={[
+          ...burning,
+          ev({
+            occurred_at: '2026-08-28T09:20:00+00:00',
+            actor: RECORDER,
+            incident_id: 'inc_before_restart',
+            target: 'inc_before_restart',
+          }),
+        ]}
+        since="2026-08-28T09:00:01+00:00"
+      />,
+    );
+    expect(screen.getByTestId(`fleet-row-${RECORDER}`)).toHaveTextContent('1 recorded');
+  });
+
+  it('prints no terminal line from before this console session', () => {
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={LAST_RUN}
+        since={FLOOR}
+      />,
+    );
+    select(WATCHER);
+    expect(screen.getByTestId(`fleet-terminal-${WATCHER}`)).toHaveTextContent(
+      'no activity this session',
+    );
+  });
+
+  it('does not count a policy decision the gateway recorded before this session', () => {
+    // Decisions were never scoped at all, so they carried a previous run's
+    // gateway traffic into every counter on the screen.
+    render(
+      <FleetPanel
+        agents={FLEET}
+        subscriptions={[]}
+        loop="SLOW"
+        events={[]}
+        decisions={[
+          {
+            decision_id: 'decision-before',
+            agent_id: CLERK,
+            target: 'building-referral-intake',
+            operation: 'WRITE',
+            classification: 'PUBLIC',
+            action: 'REQUIRE_APPROVAL',
+            rule_id: 'approval.required',
+            justification: 'a captain signs a referral',
+            policy_version: '1.0.0',
+            decided_at: '2026-08-28T09:00:02+00:00',
+            decided_by: 'deterministic-policy-engine',
+          },
+        ]}
+        since={FLOOR}
+      />,
+    );
+    const row = screen.getByTestId(`fleet-row-${CLERK}`);
+    expect(row).toHaveTextContent('0 recorded');
+    expect(row).toHaveTextContent('idle');
+  });
+
+  it('counts the whole log when no floor was ever taken, which is an empty first read', () => {
+    // A log that starts empty needs no floor: everything that lands in it
+    // landed while this console was watching. Passing no `since` must not
+    // silently mean "show nothing".
+    render(<FleetPanel agents={FLEET} subscriptions={[]} loop="SLOW" events={LAST_RUN} />);
+    expect(screen.getByTestId(`fleet-row-${CLERK}`)).toHaveTextContent('2 recorded');
+  });
+});
+
+describe('the terminal shows the work, not the cap', () => {
+  it('prints more than fourteen lines when an agent recorded more than fourteen', () => {
+    // One measured slow-loop pass wrote 36 audit events, 14 of them
+    // `records-watcher`'s; one incident puts around 38 recorder steps in the
+    // log. The tail was capped at 14, so the surface labelled *activity* went
+    // flat at exactly the moment the fleet got busy and an officer counting
+    // lines was counting the cap.
+    const lines: AuditEventView[] = Array.from({ length: 22 }, (_, index) => ({
+      audit_id: `audit-${index}`,
+      kind: 'agent_step',
+      occurred_at: `2026-08-28T09:00:${String(index).padStart(2, '0')}+00:00`,
+      actor: 'records-watcher',
+      target: 'sffd-district-03',
+      incident_id: null,
+      correlation_id: 'corr_this_run',
+      detail: {},
+    }));
+    render(<FleetPanel agents={FLEET} subscriptions={[]} loop="SLOW" events={lines} />);
+    select('records-watcher');
+    expect(
+      within(screen.getByTestId('fleet-terminal-records-watcher')).getAllByRole('listitem'),
+    ).toHaveLength(22);
   });
 });

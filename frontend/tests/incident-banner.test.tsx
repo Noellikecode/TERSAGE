@@ -54,3 +54,32 @@ describe('the street part of an address', () => {
     expect(streetPart('450 Hayes St')).toBe('450 Hayes St');
   });
 });
+
+describe('the close control during another write', () => {
+  const props = {
+    incidentId: 'inc_1',
+    addressId: 'sf-0450-hayes',
+    addressDisplay: '450 Hayes St, San Francisco, CA 94102',
+    alarmLevel: 2,
+    dispatchedAt: '2026-08-28T09:00:00Z',
+    coldStart: false,
+  };
+
+  it('says close, not closing, while some other write is in flight', () => {
+    // The bug this pair exists for: one `busy` flag drove both the disabled
+    // state and the word, so notifying an agency put "Closing…" at the top of a
+    // live incident. The word belongs to this button's own action.
+    render(<IncidentBanner {...props} onClose={() => {}} closing={false} busy />);
+    const button = screen.getByRole('button', { name: /close incident/i });
+    expect(button).toBeInTheDocument();
+    // Still refused, though: closing while another write is in flight is the
+    // race the single flag was also preventing, and that guard has to survive
+    // the word being separated from it.
+    expect(button).toBeDisabled();
+  });
+
+  it('says closing only when the close itself is running', () => {
+    render(<IncidentBanner {...props} onClose={() => {}} closing busy={false} />);
+    expect(screen.getByRole('button', { name: /closing/i })).toBeDisabled();
+  });
+});

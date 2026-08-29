@@ -197,6 +197,15 @@ class DocumentStore:
         index for every filter/order pair, and a prototype that silently returned
         an unordered page would be worse than one that sorts a small result set
         in memory. See ``docs/build-notes.md`` for the scale limit this carries.
+
+        **Do not add a server-side ``order_by`` here without checking what the
+        collection actually stores.** :func:`codec.encode` keeps the model as a
+        JSON string and promotes only the fields passed as index arguments, so
+        most of a model's fields are not document fields at all -- and Firestore
+        answers an ``order_by`` on a missing field by excluding the document
+        rather than by ignoring the clause. Ordering the audit log by
+        ``occurred_at`` returned zero rows for exactly that reason, and a console
+        whose only evidence is that log drew every agent in the fleet as idle.
         """
         from google.cloud.firestore_v1.base_query import FieldFilter
 

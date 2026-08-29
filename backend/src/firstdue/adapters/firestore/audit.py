@@ -93,6 +93,19 @@ class FirestoreAuditSink:
             filters.append(("incident_id", "==", incident_id))
         if kind is not None:
             filters.append(("kind", "==", str(kind)))
+        # Read whole, ordered in Python.
+        #
+        # Pushing the sort to Firestore looked like an easy win and silently
+        # returned *nothing*: `encode` stores the model as a JSON string and
+        # promotes only the fields named as index arguments -- `audit_id`,
+        # `incident_id`, `kind`, `correlation_id` -- so no audit document has a
+        # top-level `occurred_at` at all, and Firestore answers an `order_by` on
+        # a missing field by excluding the document rather than ignoring the
+        # clause. The console read an empty list and drew the whole fleet idle.
+        #
+        # Ordering could only be pushed down for a field `record_event` actually
+        # indexes, and adding one now would still exclude every document already
+        # written. The scale limit this carries is the one `stream` documents.
         documents = await self._events().list(filters)
         events = sorted(
             decode_all(AuditEvent, documents),

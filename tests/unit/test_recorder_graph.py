@@ -51,7 +51,9 @@ from firstdue.agents.graphs.recorder import (
 )
 from firstdue.domain.enums import Classification, Scope
 from firstdue.domain.incidents import Incident, IncidentStatus
+from firstdue.domain.logentries import IncidentLogEntry
 from firstdue.domain.memory import QuestionStatus
+from firstdue.errors import AppendOnlyViolationError, WriteContentionError
 from firstdue.incident.focus import (
     MAX_FOCUS_REASON,
     AgentFocus,
@@ -995,3 +997,99 @@ async def test_langgraph_runs_the_same_nodes_to_the_same_chain(log, clock, ids) 
     assert compiled.graph_stop == builtin.graph_stop
     assert compiled.graph_steps == builtin.graph_steps
     assert compiled.leading_refs == builtin.leading_refs
+
+
+# --------------------------------------------------- concurrent log appends
+
+
+class _ContendedLog(InMemoryIncidentLogRepository):
+    """A log where somebody else always gets the first claim on a sequence.
+
+    The real race is between two processes reading ``next_sequence`` before
+    either commits, which an in-memory repository cannot produce because
+    nothing interleaves between the read and the append. So this stands in for
+    the other writer: the first attempt at any sequence is refused exactly the
+    way Firestore refuses it, and a second attempt at a fresh number succeeds.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.refused: list[int] = []
+
+    async def append(self, entry: IncidentLogEntry) -> IncidentLogEntry:
+        if entry.sequence not in self.refused:
+            self.refused.append(entry.sequence)
+            raise AppendOnlyViolationError(
+                "log entries must be appended in sequence",
+                details={"expected": entry.sequence + 1, "found": entry.sequence},
+            )
+        return await super().append(entry)
+
+
+class _ContentiousLog(InMemoryIncidentLogRepository):
+    """A log whose transaction gives up the first time, then commits.
+
+    The other half of the same failure: the Firestore backend writes the
+    counter and the entry in one transaction, and a document several agents
+    are appending to can exhaust that transaction's own attempts. It arrives
+    as ``WriteContentionError``, and it means the same thing -- nothing
+    committed.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.contended = 0
+
+    async def append(self, entry: IncidentLogEntry) -> IncidentLogEntry:
+        if self.contended == 0:
+            self.contended += 1
+            raise WriteContentionError(entity="incident log", attempts=5)
+        return await super().append(entry)
+
+
+async def test_an_append_that_lost_its_sequence_takes_the_next_one() -> None:
+    """Losing a race is not a reason to lose the record of work that happened.
+
+    On a live incident three of ``agency-notifier``'s runs died with
+    ``APPEND_ONLY_VIOLATION`` for arriving in the same millisecond as another
+    writer. The entry is rebuilt at a fresh number rather than dropped.
+    """
+    log = _ContendedLog()
+    recorder = _recorder(log, FixedClock(NOW), DeterministicIdGenerator())
+
+    await recorder.record_analysis(
+        "inc-append", agent_id="agency-notifier", headline="notified public works", detail=""
+    )
+
+    stored = await log.get_log("inc-append")
+    assert [entry.sequence for entry in stored.entries] == [0]
+    assert log.refused == [0]
+
+
+async def test_an_append_the_transaction_gave_up_on_is_retried() -> None:
+    log = _ContentiousLog()
+    recorder = _recorder(log, FixedClock(NOW), DeterministicIdGenerator())
+
+    await recorder.record_analysis(
+        "inc-contend", agent_id="sensor-fusion", headline="read a frame", detail=""
+    )
+
+    stored = await log.get_log("inc-contend")
+    assert len(stored.entries) == 1
+    assert log.contended == 1
+
+
+async def test_a_sealed_log_is_not_retried() -> None:
+    """The one violation that is real. Retrying it is a writer hammering a
+    closed record, so it is re-raised on the first refusal."""
+    log = InMemoryIncidentLogRepository()
+    recorder = _recorder(log, FixedClock(NOW), DeterministicIdGenerator())
+    await recorder.record_analysis(
+        "inc-sealed", agent_id="sensor-fusion", headline="read a frame", detail=""
+    )
+    await log.seal("inc-sealed", at=NOW)
+
+    with pytest.raises(AppendOnlyViolationError):
+        await recorder.record_analysis(
+            "inc-sealed", agent_id="sensor-fusion", headline="read another", detail=""
+        )

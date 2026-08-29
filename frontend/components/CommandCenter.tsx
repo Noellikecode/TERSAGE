@@ -74,12 +74,22 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { StructureModel, type ViewAngle } from '@/components/StructureModel';
+import {
+  StructureModel,
+  prefersReducedMotion,
+  routeDrawSchedule,
+  type RouteOverlay,
+  type ViewAngle,
+} from '@/components/StructureModel';
 import { PhotorealisticModel, type GeometryState } from '@/components/PhotorealisticModel';
 import { AgentActivity } from '@/components/incident/AgentActivity';
 import { BriefPanel, announcementFor } from '@/components/incident/BriefPanel';
 import { BuildingImagery, type ImageryView } from '@/components/incident/BuildingImagery';
 import { CallAudio } from '@/components/incident/CallAudio';
+import { EntryPackageList } from '@/components/incident/EntryPackageList';
+import { EntryPackageModal } from '@/components/incident/EntryPackageModal';
+import { EntryPackageWatch } from '@/components/incident/EntryPackageWatch';
+import type { LegSelection } from '@/components/incident/EntryPackageParts';
 import { IncomingCall } from '@/components/incident/IncomingCall';
 import { IntakePanel } from '@/components/incident/IntakePanel';
 import { IncidentBanner } from '@/components/incident/IncidentBanner';
@@ -88,6 +98,7 @@ import { ThermalPanel } from '@/components/incident/ThermalPanel';
 import { AttributeGrid } from '@/components/profile/AttributeGrid';
 import { ConflictPanel, type ResolutionSubmission } from '@/components/profile/ConflictPanel';
 import { Timeline } from '@/components/profile/Timeline';
+import { sessionFloor } from '@/components/fleet/derive';
 import { AgentRail } from '@/components/standby/AgentRail';
 import { RecordsDisagree } from '@/components/standby/RecordsDisagree';
 import { DispatchPanel, SAMPLE_CALLS } from '@/components/standby/DispatchPanel';
@@ -100,6 +111,7 @@ import {
 import { PanelCard } from '@/components/standby/PanelCard';
 import { RegionalHeatMap } from '@/components/standby/RegionalHeatMap';
 import { browserGet, browserPost } from '@/lib/api/client';
+import { useEntryPackages } from '@/lib/api/entry-packages';
 import { useBriefStream, useIncidentLogStream, useNarrativeStream } from '@/lib/api/stream';
 import type {
   AgentDescriptorView,
@@ -109,6 +121,7 @@ import type {
   BuildingProfileView,
   CloseIncidentResponse,
   DistrictStatsView,
+  EntryPackageView,
   GeometryView,
   IntakeChannel,
   IntakeResponse,
@@ -132,6 +145,18 @@ const VIEWS: ViewAngle[] = ['ISO', 'ALPHA', 'BRAVO', 'CHARLIE', 'DELTA'];
 const READINESS_POLL_MS = 5000;
 
 /**
+ * How long the resolve sheet stays up while an incident hands back to standby.
+ *
+ * A floor, not a delay: the close call behind it usually returns faster than
+ * this, and a transition that flickered for 40ms would read as a glitch rather
+ * than as a conclusion. Deliberately well under a second -- this is punctuation
+ * between two screens, and an officer who has just released a package to a crew
+ * is not waiting on an animation to find out what happened. Reduced motion
+ * flattens the sheet's animation to nothing; the sheet and its words remain.
+ */
+const RESOLVE_TRANSITION_MS = 420;
+
+/**
  * How often standby re-reads the district while nothing is burning.
  *
  * Without this the console was static: the district counts, the ranked
@@ -146,6 +171,16 @@ const READINESS_POLL_MS = 5000;
  * telling the officer nothing the stream is not already saying.
  */
 const STANDBY_POLL_MS = 7000;
+
+/**
+ * How often the fleet's audit evidence is re-read.
+ *
+ * Faster than the standby tick because it is two small reads and it is the only
+ * thing that moves an agent from idle to active on screen. During an incident
+ * the fleet writes several events a second, and a seven-second gap made a burst
+ * of work look like one event.
+ */
+const FLEET_POLL_MS = 2500;
 
 /**
  * How stale regional fire activity is allowed to get before the standby poll
@@ -176,6 +211,14 @@ const FIRE_ACTIVITY_MAX_AGE_MS = 120000;
  * viewer sees the transition begin instead of the screen snapping.
  */
 const AUTO_PASS_MS = 25000;
+
+/**
+ * How long after load the choreography runs its first slow-loop pass.
+ *
+ * See the lead-in in the choreography effect for why this is not zero and not
+ * a full `AUTO_PASS_MS`.
+ */
+const FIRST_PASS_MS = 3000;
 /**
  * The same passes, slower, while an incident is open.
  *
@@ -225,6 +268,44 @@ const STANDBY_READ_TIMEOUT_MS = 20_000;
  * and one that is right.
  */
 const AUDIT_WINDOW = 300;
+
+/**
+ * How many audit events and decisions the console keeps across polls.
+ *
+ * The window above is what one read returns; this is what is remembered from
+ * all of them. Ten times the window, so a quiet agent's evidence survives a
+ * busy stretch by an order of magnitude, and bounded so a long session cannot
+ * grow this array without limit.
+ */
+const FLEET_MEMORY = 3000;
+
+/**
+ * Merge a freshly read page into what is already held, newest first.
+ *
+ * Deduplicated by the record's own id, so a poll that overlaps the last one --
+ * which every poll does -- adds only what is new. The order the backend
+ * returned is preserved: it sorts newest first and this keeps that, rather than
+ * re-sorting on a timestamp string the console would have to parse.
+ */
+function mergeById<T>(current: T[], incoming: T[], idOf: (item: T) => string): T[] {
+  // A body that is not a list is not an empty list.
+  //
+  // These are typed as arrays and the backend answers with arrays, but the
+  // console reads them over a gateway and through a proxy, and anything in that
+  // chain can answer with an object on a bad day. Writing one into this state
+  // used to crash the fleet panel on `.filter`; keeping what is already held is
+  // the honest response to a page that could not be read.
+  if (!Array.isArray(incoming)) return current;
+  const seen = new Set<string>();
+  const merged: T[] = [];
+  for (const item of [...incoming, ...current]) {
+    const id = idOf(item);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    merged.push(item);
+  }
+  return merged.length > FLEET_MEMORY ? merged.slice(0, FLEET_MEMORY) : merged;
+}
 
 /** How long between walls on the drone sweep.
  *
@@ -287,6 +368,47 @@ const DEMO_NOTIFICATIONS = [
   'building-department',
   'utility-conditions',
 ] as const;
+
+/**
+ * The writes this console makes, one member per action that holds the screen.
+ *
+ * These all used to be a single `busy` boolean, and the one control that put
+ * that flag into words said "Closing…" no matter which of them had set it --
+ * so asking `agency-notifier` to tell the water department made the top of a
+ * live incident announce that the incident was being closed. A union rather
+ * than a loose string because `IN_FLIGHT_LABEL` below is keyed by it: an
+ * action added later cannot reach the screen without being given a verb of its
+ * own, which is exactly the check that was missing when they all shared one.
+ */
+type InFlightAction =
+  | 'dispatch'
+  | 'draft-referral'
+  | 'file-referral'
+  | 'resolve'
+  | 'notify'
+  | 'approve'
+  | 'thermal'
+  | 'close';
+
+/**
+ * What each write is doing while it is still doing it.
+ *
+ * Present tense and nothing further: every one of these describes an open
+ * request, so none of them may claim the thing came back. "Notifying…" while
+ * the notifier is talking to the agency; whether the agency was reached, and
+ * under what reference, stays with the outcome cards in `ResourcePanel`, which
+ * are written from what the backend actually returned.
+ */
+const IN_FLIGHT_LABEL: Record<InFlightAction, string> = {
+  dispatch: 'Dispatching…',
+  'draft-referral': 'Drafting…',
+  'file-referral': 'Filing…',
+  resolve: 'Resolving…',
+  notify: 'Notifying…',
+  approve: 'Approving…',
+  thermal: 'Recording…',
+  close: 'Closing…',
+};
 
 /**
  * How long to let a slow-loop pass run before giving up on it.
@@ -531,6 +653,53 @@ export function CommandCenter({
   const [subscriptions, setSubscriptions] = useState<SubscriptionView[]>(initialSubscriptions);
   const [events, setEvents] = useState<AuditEventView[]>(initialEvents);
   const [decisions, setDecisions] = useState<PolicyDecisionView[]>(initialDecisions);
+
+  /**
+   * The instant this console session started watching the fleet, in the
+   * backend's clock. Everything at or before it belongs to a previous run.
+   *
+   * There is one of these for the whole console and it is set once, because
+   * `AgentRail` is mounted twice in either mode and the layout swaps those
+   * mounts when a fire starts -- a floor each panel captured for itself would
+   * re-anchor on that swap, mid-pass, and blank a fleet that was working.
+   *
+   * It is not `Date.now()`. The timestamps it is compared against are stamped
+   * by the backend and this browser's clock is a different clock, so a floor
+   * from here would hide live work or admit stale work by however far the two
+   * have drifted -- and would not even be the same string format. It is instead
+   * the newest instant in the *first audit read that answers*, which is a value
+   * the backend wrote, in the backend's format, naming the last thing that had
+   * already happened when we arrived. `null` while no read has answered and
+   * after one that came back empty; an empty log needs no floor.
+   *
+   * `initialEvents` is seeded into the floor for the same reason: a caller that
+   * hands the console a log has handed it a log from before it mounted.
+   */
+  const floorAnchored = useRef(initialEvents.length > 0 || initialDecisions.length > 0);
+  /**
+   * Whether this console has set the fleet working yet.
+   *
+   * The floor is only honest while it is a statement about a log this session
+   * did not write. The first fleet read is issued on mount and the choreography
+   * starts a pass three seconds later, which is fine until the read is slow --
+   * and against a live backend it is the slowest read on the screen, because
+   * `list_events` reads the whole audit collection and decodes it. When that
+   * read times out, the next one to answer arrives *after* the pass has been
+   * writing, `sessionFloor` anchors on the newest instant in it, and the
+   * console floors out the work it just commissioned: every agent `0 recorded`,
+   * every agent idle, for a pass that ran in full.
+   *
+   * So anchoring stops the moment a pass starts. What is lost by refusing to
+   * anchor is that the column counts from the whole session rather than from
+   * arrival -- and the slow loop's own `currentPass` scoping narrows that back
+   * to the pass in flight anyway, while the incident column scopes to the fire.
+   * Under-reporting a previous run is the failure this floor exists to prevent;
+   * showing a working fleet as idle is worse than either.
+   */
+  const passStarted = useRef(false);
+  const [since, setSince] = useState<string | null>(() =>
+    sessionFloor(initialEvents, initialDecisions),
+  );
   const [agentList, setAgentList] = useState<AgentDescriptorView[]>(initialAgents);
 
   const [selected, setSelected] = useState<string | null>(null);
@@ -561,7 +730,13 @@ export function CommandCenter({
 
   const [incident, setIncident] = useState<OpenIncidentResponse | null>(null);
   const [outcomes, setOutcomes] = useState<ResourceOutcomeView[]>([]);
-  const [busy, setBusy] = useState(false);
+  /** Which write is holding the console, or null when none is. Named rather
+      than counted, because the screen has to say which one -- see
+      `InFlightAction`. */
+  const [inFlight, setInFlight] = useState<InFlightAction | null>(null);
+  //: Everything that only needs "is a write running" still reads a boolean, so
+  //: naming the action changed which controls disable, and nothing else.
+  const busy = inFlight !== null;
   const [notice, setNotice] = useState<string | null>(null);
   const [announcement, setAnnouncement] = useState('');
 
@@ -663,6 +838,44 @@ export function CommandCenter({
   const incidentLog = useIncidentLogStream(incident?.incident_id ?? null);
   const announcedRef = useRef<number>(0);
 
+  /**
+   * Entry packages: off the log stream first, off the endpoint regardless.
+   *
+   * No second connection -- every package state change appends an
+   * `ENTRY_PACKAGE` entry carrying the whole document, so a package composed by
+   * the loop, a half signed by an officer and a send normally arrive on the
+   * same feed the agent cards are drawn from, and that stays the fast path.
+   *
+   * It is not the only path any more, and the reason is in
+   * `lib/api/entry-packages.ts`: the log stream is snapshot-and-close, so
+   * everything after the first frame really arrives on the browser's reconnect,
+   * and one non-SSE answer on that URL closes it permanently and silently. The
+   * hook polls the packages endpoint underneath for as long as the incident is
+   * open. Both sources fold into the same `package_id`-keyed state, so the card
+   * below is still raised exactly once however the package got here.
+   */
+  const entryPackages = useEntryPackages(incident?.incident_id ?? null, incidentLog.entries);
+  /** The package the modal is showing. `null` when it is closed. */
+  const [reviewing, setReviewing] = useState<EntryPackageView | null>(null);
+  /**
+   * Packages the modal has already come up for, so dismissing one is final.
+   *
+   * A modal that reopened on the next log frame would be a modal an officer
+   * cannot get out of -- and every approval writes a frame, so it would reopen
+   * on the officer's own tap.
+   */
+  const raisedFor = useRef<Set<string>>(new Set());
+  /** Which leg the leg list has under cursor or selection, for the model. */
+  const [legSelection, setLegSelection] = useState<LegSelection | null>(null);
+  /**
+   * The sheet that covers the console while a released incident resolves.
+   *
+   * Set only after a dispatch came back ok. Nothing here decides that an
+   * incident is over: the send returning is what does, and the close call
+   * behind this sheet is the same one the banner's close control makes.
+   */
+  const [resolving, setResolving] = useState<string | null>(null);
+
   // The brief the officer is looking at: whatever arrived last on the stream,
   // falling back to the instant brief the open call already returned.
   const emissions: BriefEmissionView[] = useMemo(() => {
@@ -728,6 +941,78 @@ export function CommandCenter({
     [districtId],
   );
 
+  /**
+   * The fleet's own evidence: the audit log and the gateway's decisions.
+   *
+   * **Its own function, and its own timer, because it is the one read that must
+   * not stop when an incident opens.** It used to ride the standby poll, and
+   * that poll is torn down by the state change that opens the incident stream
+   * -- so for the whole ninety seconds the incident agents were actually
+   * working, the console was still holding the audit log as it stood at
+   * dispatch. `incident-interceptor`, `incident-recorder` and `sensor-fusion`
+   * showed idle through an entire incident not because they recorded nothing,
+   * but because nobody asked again.
+   *
+   * **It accumulates rather than replaces.** The endpoint answers with the
+   * newest N events across the whole fleet, and during an incident a handful of
+   * agents write fast enough to push everyone else out of that window -- so an
+   * agent that did real work a minute ago would silently revert to idle. The
+   * panel's own words are that active means "it has recorded work this session",
+   * and a session is exactly what merging by id keeps. Nothing is invented: an
+   * event is only ever added by having been read from the audit log.
+   */
+  const refreshFleet = useCallback(
+    async (signal?: AbortSignal) => {
+      const [eventsResult, decisionsResult] = await Promise.all([
+        browserGet<AuditEventView[]>(`/api/v1/internal/audit/events?limit=${AUDIT_WINDOW}`, {
+          signal,
+          timeoutMs: STANDBY_READ_TIMEOUT_MS,
+        }),
+        browserGet<PolicyDecisionView[]>(`/api/v1/internal/audit/decisions?limit=${AUDIT_WINDOW}`, {
+          signal,
+          timeoutMs: STANDBY_READ_TIMEOUT_MS,
+        }),
+      ]);
+      // The floor, from the first read that answers and never again.
+      //
+      // Before the merge, and over the raw page rather than over the merged
+      // state, because the point of the floor is the log *as it stood when we
+      // arrived* -- a value taken after merging would be indistinguishable from
+      // a value taken after the fleet had written something.
+      //
+      // Anchored on whichever of the two reads answered. Requiring both would
+      // leave the console unfloored, and therefore counting a previous run's
+      // work, for as long as one endpoint stayed down.
+      if (!floorAnchored.current && passStarted.current) {
+        // Settled rather than deferred: once a pass has written, no later read
+        // can tell us what the log held before it. See `passStarted`.
+        floorAnchored.current = true;
+      }
+      if (!floorAnchored.current && (eventsResult.ok || decisionsResult.ok)) {
+        floorAnchored.current = true;
+        // Same guard `mergeById` carries, for the same reason: a gateway or a
+        // proxy can answer with something that is not a list, and an unfloored
+        // console is the failure this whole mechanism exists to prevent.
+        const floor = sessionFloor(
+          eventsResult.ok && Array.isArray(eventsResult.data) ? eventsResult.data : [],
+          decisionsResult.ok && Array.isArray(decisionsResult.data) ? decisionsResult.data : [],
+        );
+        if (floor !== null) setSince(floor);
+      }
+      // An aborted request comes back `ok: false`, so a torn-down poll writes
+      // no state: there is no unmount guard to forget.
+      if (eventsResult.ok) {
+        setEvents((current) => mergeById(current, eventsResult.data, (e) => e.audit_id));
+      }
+      if (decisionsResult.ok) {
+        setDecisions((current) =>
+          mergeById(current, decisionsResult.data, (d) => d.decision_id),
+        );
+      }
+    },
+    [],
+  );
+
   const refreshStandby = useCallback(
     async (signal?: AbortSignal, options: { forceFireActivity?: boolean } = {}) => {
       // The audit event and decision streams are no longer rendered as a console
@@ -753,7 +1038,7 @@ export function CommandCenter({
       // district read queues behind it. At 4s they aborted, the queue stayed
       // null, and the demo's 911 call had no address to dispatch against --
       // which is how a console that looked fine never placed a call.
-      const [statsResult, queueResult, eventsResult, decisionsResult] = await Promise.all([
+      const [statsResult, queueResult] = await Promise.all([
         browserGet<DistrictStatsView>(`/api/v1/districts/${districtId}/stats`, {
           signal,
           timeoutMs: STANDBY_READ_TIMEOUT_MS,
@@ -762,24 +1047,17 @@ export function CommandCenter({
           signal,
           timeoutMs: STANDBY_READ_TIMEOUT_MS,
         }),
-        browserGet<AuditEventView[]>(`/api/v1/internal/audit/events?limit=${AUDIT_WINDOW}`, {
-          signal,
-          timeoutMs: STANDBY_READ_TIMEOUT_MS,
-        }),
-        browserGet<PolicyDecisionView[]>(`/api/v1/internal/audit/decisions?limit=${AUDIT_WINDOW}`, {
-          signal,
-          timeoutMs: STANDBY_READ_TIMEOUT_MS,
-        }),
+        // The fleet's evidence rides along here so a standby tick is one round
+        // trip, but it has its own timer as well -- see `refreshFleet`.
+        refreshFleet(signal),
         fireIsStale ? refreshFireActivity(signal) : Promise.resolve(),
       ]);
       // An aborted request comes back `ok: false`, so a torn-down poll writes
       // no state: there is no unmount guard to forget.
       if (statsResult.ok) setStats(statsResult.data);
       if (queueResult.ok) setQueue(queueResult.data);
-      if (eventsResult.ok) setEvents(eventsResult.data);
-      if (decisionsResult.ok) setDecisions(decisionsResult.data);
     },
-    [districtId, refreshFireActivity],
+    [districtId, refreshFireActivity, refreshFleet],
   );
 
   useEffect(() => {
@@ -827,6 +1105,43 @@ export function CommandCenter({
   }, [incident, refreshStandby]);
 
   /**
+   * The fleet poll, which runs whether or not an incident is open.
+   *
+   * Deliberately not folded into the effect above. That one is torn down when
+   * an incident opens, because the district's standby numbers stop being the
+   * thing on screen -- but the fleet panel is on screen the whole time, and it
+   * is *during* an incident that its agents are busiest. Sharing that teardown
+   * is what left three incident agents reading idle through the ninety seconds
+   * they were doing all their work.
+   *
+   * Faster than the standby tick: two small reads, and they are what turns an
+   * agent from idle to active on screen.
+   */
+  useEffect(() => {
+    const controller = new AbortController();
+    let inFlight = false;
+
+    const tick = () => {
+      if (inFlight) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      inFlight = true;
+      void refreshFleet(controller.signal).finally(() => {
+        inFlight = false;
+      });
+    };
+    // Immediately, not one interval from now: on a fresh load the fleet is
+    // drawn from an empty list, and waiting to fill it shows every agent in the
+    // catalog as idle for the first few seconds of the demo.
+    tick();
+    const timer = setInterval(tick, FLEET_POLL_MS);
+
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [refreshFleet]);
+
+  /**
    * The first fire-activity read, and the one after an incident closes.
    *
    * One request, not a loop: the panel would otherwise sit empty until the
@@ -861,6 +1176,10 @@ export function CommandCenter({
   }, [passRunning]);
 
   const runSlowLoopPass = useCallback(async () => {
+    // Before the request goes out, not after it answers: the pass is writing
+    // from the moment the backend picks it up, and a floor anchored on a read
+    // that overlaps it hides exactly this work. See `passStarted`.
+    passStarted.current = true;
     setPassRunning(true);
     setPassElapsed(0);
     setPassNotice(null);
@@ -1048,7 +1367,7 @@ export function CommandCenter({
       setCallIn(null);
       setCallAudioSrc(audioSrc ?? null);
       if (audioSrc) setCallOnScreen(true);
-      setBusy(true);
+      setInFlight('dispatch');
       setNotice(null);
       // The narrative is kept so the intake panel can check a quote against
       // the offsets it claims. Without the source text, a span is unverifiable.
@@ -1076,7 +1395,7 @@ export function CommandCenter({
         },
         { timeoutMs: OPEN_INCIDENT_TIMEOUT_MS },
       );
-      setBusy(false);
+      setInFlight(null);
       if (!result.ok) {
         setNotice(`Could not open an incident: ${result.error.message}`);
         return;
@@ -1142,22 +1461,47 @@ export function CommandCenter({
     // Runs in both modes, slower during an incident. A pass is one HTTP request
     // that returns before it resolves; the brief arrives on its own SSE stream
     // and neither waits on the other.
+    const runPassIfIdle = () => {
+      // Skipped rather than queued: a pass still running means the work this
+      // tick would have done is already happening.
+      const now = demoRef.current;
+      if (!now.passRunning && !now.busy) void now.runPass();
+    };
     const passes = setInterval(
-      () => {
-        // Skipped rather than queued: a pass still running means the work this
-        // tick would have done is already happening.
-        const now = demoRef.current;
-        if (!now.passRunning && !now.busy) void now.runPass();
-      },
+      runPassIfIdle,
       incident ? AUTO_PASS_INCIDENT_MS : AUTO_PASS_MS,
     );
 
+    /**
+     * The choreography's first pass, shortly after load rather than a full
+     * interval later.
+     *
+     * `setInterval` alone left the console sitting still for the first
+     * twenty-five seconds with every slow-loop agent reading idle -- which is
+     * when somebody is looking at it hardest, and is the one moment where
+     * "nothing is happening yet" is indistinguishable from "this is broken".
+     *
+     * A lead-in rather than an immediate call, and only under the
+     * choreography. Firing on mount seizes the operator's own "run a pass"
+     * button before the page has finished arriving, and an unattended live
+     * console should not start a multi-minute job merely because someone opened
+     * it. Three seconds is long enough for the fleet's first audit read to land
+     * and the page to settle, and short enough that the loop is visibly running
+     * before anyone wonders whether it is.
+     */
+    const lead = choreographed && !incident ? setTimeout(runPassIfIdle, FIRST_PASS_MS) : undefined;
+
+    const stopTimers = () => {
+      clearInterval(passes);
+      if (lead !== undefined) clearTimeout(lead);
+    };
+
     if (incident) {
       setCallIn(null);
-      return () => clearInterval(passes);
+      return stopTimers;
     }
     if (!demo) {
-      return () => clearInterval(passes);
+      return stopTimers;
     }
 
     const warn = setTimeout(
@@ -1206,7 +1550,7 @@ export function CommandCenter({
     callTimer = setTimeout(placeCall, AUTO_CALL_MS);
 
     return () => {
-      clearInterval(passes);
+      stopTimers();
       clearInterval(tick);
       clearTimeout(warn);
       clearTimeout(callTimer);
@@ -1224,12 +1568,12 @@ export function CommandCenter({
   /** Draft a referral from a conflict. The agent stops here, by design. */
   const stageReferral = useCallback(
     async (conflictId: string) => {
-      setBusy(true);
+      setInFlight('draft-referral');
       setNotice(null);
       const result = await browserPost<{ referral_id: string; status: string }>(
         `/api/v1/conflicts/${conflictId}/referral`,
       );
-      setBusy(false);
+      setInFlight(null);
       if (!result.ok) {
         setNotice(`Could not draft a referral: ${result.error.message}`);
         return;
@@ -1251,13 +1595,13 @@ export function CommandCenter({
   /** The one human tap. This is the step an agent is not allowed to take. */
   const approveReferral = useCallback(
     async (referralId: string) => {
-      setBusy(true);
+      setInFlight('file-referral');
       setNotice(null);
       const result = await browserPost<{ case_number?: string }>(
         `/api/v1/referrals/${referralId}/approve`,
         { approved_by: 'captain' },
       );
-      setBusy(false);
+      setInFlight(null);
       if (!result.ok) {
         setNotice(`Could not file the referral: ${result.error.message}`);
         return;
@@ -1278,7 +1622,7 @@ export function CommandCenter({
   const resolve = useCallback(
     async (submission: ResolutionSubmission) => {
       if (!incident) return;
-      setBusy(true);
+      setInFlight('resolve');
       const result = await browserPost<ResolutionResponse>(
         `/api/v1/incidents/${incident.incident_id}/resolutions`,
         {
@@ -1288,7 +1632,7 @@ export function CommandCenter({
           note: submission.note,
         },
       );
-      setBusy(false);
+      setInFlight(null);
       if (!result.ok) {
         setNotice(`Could not record the observation: ${result.error.message}`);
         return;
@@ -1304,12 +1648,12 @@ export function CommandCenter({
   const requestResource = useCallback(
     async (kindId: string) => {
       if (!incident) return;
-      setBusy(true);
+      setInFlight('notify');
       const result = await browserPost<ResourceOutcomeView>(
         `/api/v1/incidents/${incident.incident_id}/resources`,
         { kind_id: kindId },
       );
-      setBusy(false);
+      setInFlight(null);
       if (!result.ok) {
         setNotice(`Request refused: ${result.error.message}`);
         return;
@@ -1322,11 +1666,11 @@ export function CommandCenter({
   const approve = useCallback(
     async (approvalId: string) => {
       if (!incident) return;
-      setBusy(true);
+      setInFlight('approve');
       const result = await browserPost<Record<string, unknown>>(
         `/api/v1/incidents/${incident.incident_id}/approvals/${approvalId}`,
       );
-      setBusy(false);
+      setInFlight(null);
       if (!result.ok) {
         setNotice(`Approval failed: ${result.error.message}`);
         return;
@@ -1349,7 +1693,7 @@ export function CommandCenter({
   const registerThermal = useCallback(
     async (face: string) => {
       if (!incident) return;
-      setBusy(true);
+      setInFlight('thermal');
       await browserPost(`/api/v1/incidents/${incident.incident_id}/thermal`, {
         face,
         // Recorded footage, never presented as a live flight.
@@ -1357,7 +1701,7 @@ export function CommandCenter({
         coverage: 0.8,
         source: 'recorded',
       });
-      setBusy(false);
+      setInFlight(null);
       await openProfile(incident.address_id);
     },
     [incident, openProfile],
@@ -1365,12 +1709,12 @@ export function CommandCenter({
 
   const closeIncident = useCallback(async () => {
     if (!incident) return;
-    setBusy(true);
+    setInFlight('close');
     const result = await browserPost<CloseIncidentResponse>(
       `/api/v1/incidents/${incident.incident_id}/close`,
       { closed_by: 'bc-09' },
     );
-    setBusy(false);
+    setInFlight(null);
     if (!result.ok) {
       setNotice(`Could not close the incident: ${result.error.message}`);
       return;
@@ -1385,6 +1729,139 @@ export function CommandCenter({
     await refreshStandby();
     await openProfile(incident.address_id);
   }, [incident, openProfile, refreshStandby]);
+
+  // ------------------------------------------------------- entry packages --
+
+  // A new incident is a new set of packages, and a modal an officer dismissed
+  // on the last fire must not stay dismissed for this one.
+  useEffect(() => {
+    raisedFor.current = new Set();
+    setReviewing(null);
+    setLegSelection(null);
+  }, [incident?.incident_id]);
+
+  /** Identity only: the object behind it is replaced on every log frame, and
+      depending on that would restart the draw below on an unrelated append. */
+  const awaitingId = entryPackages.awaiting?.package_id ?? null;
+
+  /**
+   * How long this package's route takes to draw itself over the model.
+   *
+   * Read from the same pure schedule the renderer obeys, off the *awaiting*
+   * package rather than off the overlay on screen: while an older package is
+   * still open the overlay is showing that one, and timing a new package's
+   * card against the old package's leg count would be gating one thing on the
+   * measurements of another. A refusal has no route and therefore no wait.
+   *
+   * Zero here means "there is nothing to watch", and the card goes up at once.
+   */
+  const routeDrawMs = useMemo(() => {
+    const waiting = entryPackages.awaiting;
+    if (!waiting || waiting.path.refused) return 0;
+    return routeDrawSchedule(
+      {
+        entry: waiting.path.entry,
+        egress: waiting.path.egress,
+        highlight: null,
+        drawKey: waiting.package_id,
+      },
+      { reducedMotion: prefersReducedMotion() },
+    ).totalMs;
+  }, [entryPackages.awaiting]);
+
+  /**
+   * Draw the route first, then ask.
+   *
+   * The package is never announced by a side channel: whether it arrived on an
+   * `ENTRY_PACKAGE` entry or on the endpoint poll, it arrived as the whole
+   * document, so "is one awaiting approval" is read from the package's own
+   * computed `status` and the console never re-derives it. Once per package id
+   * -- a dismissal is a decision, and the id is marked the moment the draw
+   * *starts*, so a card can never be raised twice by a frame landing mid-walk,
+   * nor by the poll and the stream both finding the same package.
+   *
+   * **The wait is a clock, not a callback from the renderer.** The obvious wire
+   * -- have the model report that it finished drawing -- fails closed on every
+   * device that has no WebGL, no measured geometry, or a GL context that died:
+   * the route would never finish, and the ask would be lost with it. An
+   * approval request that can be silently dropped by a graphics driver is not
+   * an approval request. So both ends compute the same duration from the same
+   * `routeDrawSchedule`, and the card arrives whether or not anything drew.
+   */
+  useEffect(() => {
+    const waiting = entryPackages.awaiting;
+    if (!waiting || raisedFor.current.has(waiting.package_id)) return;
+    raisedFor.current.add(waiting.package_id);
+    if (routeDrawMs <= 0) {
+      setReviewing(waiting);
+      return;
+    }
+    const timer = setTimeout(() => setReviewing(waiting), routeDrawMs);
+    // Cancelled by anything that ends the draw early -- the incident closing,
+    // a newer package superseding this one, the console unmounting. The card
+    // is not raised late for a fire that is already out.
+    return () => clearTimeout(timer);
+    // `entryPackages.awaiting` is deliberately absent: its identity changes on
+    // every log frame, and re-running would clear the timer of a draw that is
+    // still going and leave the card unraised.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [awaitingId, routeDrawMs]);
+
+  /** The package the modal is on, kept current as approvals land. */
+  const reviewingLive = reviewing
+    ? (entryPackages.packages.find((held) => held.package_id === reviewing.package_id) ??
+      reviewing)
+    : null;
+
+  /**
+   * The route drawn over the massing model, or nothing.
+   *
+   * **Gated on a package existing, never on an incident being open.** A route
+   * on screen from the moment the call lands says nothing; this drawing is the
+   * *outcome* of the interceptor deciding the record was good enough to compute
+   * one, and it has to arrive at that moment to mean that. A refused plan draws
+   * nothing either -- there is no fallback route in the backend and inventing
+   * one here would be drawing the thing the refusal withheld.
+   */
+  const routeOverlay = useMemo<RouteOverlay | null>(() => {
+    const shown = reviewingLive ?? entryPackages.packages[entryPackages.packages.length - 1];
+    if (!shown || shown.path.refused) return null;
+    if (!shown.path.entry && !shown.path.egress) return null;
+    return {
+      entry: shown.path.entry,
+      egress: shown.path.egress,
+      highlight: legSelection,
+      // The package id is the route's identity, so the model restarts the walk
+      // when a different package's route arrives and keeps walking when this
+      // memo simply recomputes under a hover.
+      drawKey: shown.package_id,
+    };
+  }, [reviewingLive, entryPackages.packages, legSelection]);
+
+  /**
+   * The send landed: resolve the incident and hand the screen back to standby.
+   *
+   * The teardown is `closeIncident`, unchanged -- the same call the banner's
+   * close control makes, revoking the grant and sealing the log. This adds the
+   * sheet over the top of it and a floor under how long the sheet is up, so the
+   * transition is visible even when the close returns in 40ms. It is not a
+   * separate notion of "resolved": nothing is claimed here that the close
+   * response did not.
+   */
+  const resolveAfterDispatch = useCallback(
+    async (sent: EntryPackageView) => {
+      setReviewing(null);
+      setLegSelection(null);
+      setResolving(sent.package_id);
+      const floor = new Promise<void>((done) => {
+        setTimeout(done, RESOLVE_TRANSITION_MS);
+      });
+      await closeIncident();
+      await floor;
+      setResolving(null);
+    },
+    [closeIncident],
+  );
 
   const railAgents = agents.length > 0 ? agents : agentList;
 
@@ -1457,6 +1934,10 @@ export function CommandCenter({
     subscriptions,
     events,
     decisions,
+    // The session floor, shared by both columns. Every counter and every
+    // terminal line in either loop is measured from it -- see `since` above and
+    // `sessionFloor` for why it is the backend's instant and not this tablet's.
+    since,
     incident,
     geometry,
     sources: stats?.sources ?? [],
@@ -1597,7 +2078,16 @@ export function CommandCenter({
           flying: a progress line for something visibly progressing is noise,
           and the faces filling in on the model are the progress. */}
       {sweepNotice && <p className="mb-2 text-body text-muted">{sweepNotice}</p>}
-      <StructureModel geometry={geometry} view={view} forceFallback={forceSvgGeometry} />
+      {/* `route` is null until the interceptor has composed a package. The
+          path appearing over the model is the visible outcome of that
+          decision, and a route drawn before one would be a picture of
+          nothing the fleet had committed to. */}
+      <StructureModel
+        geometry={geometry}
+        view={view}
+        forceFallback={forceSvgGeometry}
+        route={routeOverlay}
+      />
     </section>
   );
 
@@ -1769,7 +2259,26 @@ export function CommandCenter({
           <h1 className="text-base font-semibold tracking-widest text-ink">TERSAGE</h1>
           <span className="text-micro uppercase tracking-wide text-muted">Command Center</span>
         </div>
-        <BackendSignal initial={readiness} statusMissing={status === null} />
+        {/* The one place a write says what it is. It has to be a lookup on the
+            named action and not a fixed word: the shared flag used to be put
+            into words only by the banner's close control, which meant every
+            write on the screen -- a notification, an approval, a referral --
+            was reported to the officer as the incident being closed. Rendered
+            only while something is running, so it never leaves a stale verb
+            sitting beside the backend signal. */}
+        <div className="flex items-baseline gap-3">
+          {inFlight && (
+            <span
+              role="status"
+              aria-atomic="true"
+              data-testid="in-flight-status"
+              className="font-mono text-micro uppercase tracking-wide text-muted"
+            >
+              {IN_FLIGHT_LABEL[inFlight]}
+            </span>
+          )}
+          <BackendSignal initial={readiness} statusMissing={status === null} />
+        </div>
       </header>
 
       {incident && (
@@ -1781,7 +2290,20 @@ export function CommandCenter({
           dispatchedAt={incident.dispatched_at}
           coldStart={incident.cold_start}
           onClose={closeIncident}
-          closing={busy}
+          // The close control, not a general busy light. `closing` is the only
+          // input the banner has and it drives the word on the button, so
+          // handing it the shared flag made the button read "Closing…" through
+          // a resource request the officer had just fired -- a console
+          // announcing an action nobody took. It costs the button its disabled
+          // state during another write, which the backend refuses on its own
+          // anyway; a wrong verb on the incident header does not get refused
+          // by anything.
+          closing={inFlight === 'close'}
+          // Still disabled while any other write runs, which `closing` used to
+          // do as a side effect of being the only flag. Splitting the word from
+          // the disabled state fixed the wrong verb; passing this keeps the
+          // guard the single flag was also providing.
+          busy={busy}
         />
       )}
 
@@ -2000,6 +2522,16 @@ export function CommandCenter({
                 <h2 id="brief-heading" className="sr-only">
                   Incident brief
                 </h2>
+                {/* What the loop is doing about the entry package, while there
+                    is not one yet. Until this existed, a loop that was working,
+                    a loop whose composition had been cancelled mid-run, and a
+                    loop with autonomy off were all the same empty screen -- and
+                    that ambiguity is exactly what made the same live failure
+                    take several rounds to find. */}
+                <EntryPackageWatch
+                  incidentId={incident.incident_id}
+                  hasPackage={entryPackages.packages.length > 0}
+                />
                 {/* The call sits above the brief, not under it.
                     It was below the whole three-stage brief and rendered some
                     24,000px down a scrolling column -- playing to nobody, which
@@ -2085,6 +2617,19 @@ export function CommandCenter({
                     busy={busy}
                   />
                 </div>
+                {/* Every package this incident produced, and the sheet each
+                    one prints to. Beside the resources rather than inside the
+                    modal: a package that was declined is still a thing that
+                    happened, and it has to be reachable once the card that
+                    raised it is gone. */}
+                <div className="mt-4">
+                  <EntryPackageList
+                    incidentId={incident.incident_id}
+                    packages={entryPackages.packages}
+                    recoveredFromList={entryPackages.recoveredFromList}
+                    onReview={(held) => setReviewing(held)}
+                  />
+                </div>
               </section>
 
               {profileSection}
@@ -2109,6 +2654,46 @@ export function CommandCenter({
           </div>
         )}
       </main>
+
+      {/* The interceptor's approval card, over everything. Outside `main` so
+          it is not a second region inside a landmark whose other regions are
+          still tabbable behind it, and it manages its own focus. */}
+      {incident && reviewingLive && (
+        <EntryPackageModal
+          incidentId={incident.incident_id}
+          entryPackage={reviewingLive}
+          autonomyTrigger={entryPackages.triggers[reviewingLive.package_id] ?? ''}
+          onUpdated={(updated) => {
+            entryPackages.apply(updated);
+            setReviewing(updated);
+          }}
+          onClose={() => {
+            setReviewing(null);
+            setLegSelection(null);
+          }}
+          onDispatched={(held) => void resolveAfterDispatch(held)}
+          onSelectLeg={setLegSelection}
+        />
+      )}
+
+      {/* The sheet between the fireground and standby. `role="status"` rather
+          than `alert`: it reports a conclusion, and it is polite because the
+          officer who tapped release is the one reading it. */}
+      {resolving && (
+        <div
+          role="status"
+          data-testid="resolve-sheet"
+          className="resolve-sheet fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-ground px-6 text-center"
+        >
+          <p className="font-mono text-title uppercase tracking-widest text-live">
+            Package released to live dispatch units
+          </p>
+          <p className="max-w-xl text-body leading-6 text-muted">
+            {resolving} was sent to the crew. The incident is resolving: the grant is being
+            revoked and the log sealed, and the console is returning to the slow loop.
+          </p>
+        </div>
+      )}
 
       <footer className="shrink-0 border-t border-line bg-surface px-4 py-1.5 text-micro leading-5 text-muted">
         {status?.disclosure ??

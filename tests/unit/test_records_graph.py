@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from firstdue.adapters.clock import DeterministicIdGenerator
+from firstdue.adapters.memory.audit import InMemoryAuditSink
 from firstdue.adapters.memory.memory_bank import (
     InMemoryCheckpointRepository,
     InMemoryOpenQuestionRepository,
@@ -46,6 +47,7 @@ from firstdue.domain.profiles import BuildingProfile
 from firstdue.errors import SourceUnavailableError
 from firstdue.extraction.extractor import FactExtractor
 from firstdue.observability.tracing import TRACER
+from firstdue.ports.audit import AuditEventKind
 from firstdue.ports.city import NormalizedAddress
 from firstdue.ports.grounding import Resolution
 from firstdue.ports.sources import SourceHealth, SourceRecord, SourceSnapshot
@@ -636,3 +638,41 @@ async def test_langgraph_runs_the_same_nodes_to_the_same_chain() -> None:
     assert compiled.trace.decisions == builtin.trace.decisions
     assert compiled.trace.stop is builtin.trace.stop
     assert compiled.state.outstanding == builtin.state.outstanding
+
+
+async def test_the_fixed_pass_stops_reading_and_names_what_it_never_asked(
+    watcher_parts, clock, ids
+) -> None:
+    """Retrieval is bounded on the fixed pass too, and says what it skipped.
+
+    Only the graph half ever consulted a clock while fetching. The fixed pass
+    read all four feeds, fifty pages deep each, with nothing to stop it -- and
+    everything a pass records happens after that read, so a district big enough
+    to page spent its whole budget fetching and was cancelled by the runtime
+    before it wrote a single line about itself.
+
+    A feed the budget never reached is reported apart from one that refused.
+    They produce the same missing facts and they are opposite findings: one is
+    about the source, the other is about this pass.
+    """
+    watcher = _watcher(watcher_parts, clock, ids, audit=InMemoryAuditSink())
+
+    result = await watcher.poll(
+        district_id=DISTRICT,
+        sources=_feeds([_permit("2019-1")]),
+        correlation_id="corr-1",
+        deadline=clock.now() - timedelta(seconds=1),
+    )
+
+    assert not watcher.reasons  # the fixed pass, not the graph
+    assert set(result.sources_unread) == {PERMITS, VIOLATIONS, INSPECTIONS, ASSESSOR}
+    assert result.unavailable_sources == ()
+
+    # And the pass still put a line in the log, which is the whole point of
+    # stopping rather than being stopped.
+    events = await watcher._audit.list_events(limit=10)
+    summary = next(e for e in events if e.kind is AuditEventKind.AGENT_PASS)
+    assert summary.actor == AGENT_ID
+    # In the order they were skipped, which is the order they will be read in.
+    assert summary.detail["unread"] == ",".join(result.sources_unread)
+    assert "unavailable" not in summary.detail

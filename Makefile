@@ -181,6 +181,21 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	@#     reports, which is the truthful answer to "what did the web say" when
 	@#     nobody successfully asked the web.
 	@#
+	@#   DEMO_SYNTHETIC_SWEEP=true
+	@#     Lets `sensor-fusion` fly the generated drone sweep against the real
+	@#     vision model. Without it that sweep is refused -- the frames are
+	@#     generated, and an unlabelled real reading of a generated building is
+	@#     indistinguishable from a real reading of a real one -- so the agent
+	@#     that reads walls does nothing for the whole demo and reads as idle.
+	@#
+	@#     The refusal is about *disclosure*, not about the frame being
+	@#     generated, so this is the same bargain the simulated 911 call makes:
+	@#     opt-in at launch, never inferred from the mode, and every frame, log
+	@#     entry and audit record marked `synthetic-drone` with SIMULATED in the
+	@#     headline an officer actually reads. Do not set it on a real
+	@#     deployment: it would put simulated wall readings in a real fire's
+	@#     permanent record.
+	@#
 	@#   NEXT_PUBLIC_DEMO_DISPATCH=true (console)
 	@#     Runs the demo choreography against the live backend: slow-loop
 	@#     passes on an interval, then a simulated 911 call, then the drone
@@ -213,6 +228,7 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	   INTERNAL_PUSH_AUDIENCE=https://firstdue-incident \
 	   INTERNAL_PUSH_SERVICE_ACCOUNT=fd-pubsub-push@$(GCP_PROJECT).iam.gserviceaccount.com,fd-scheduler@$(GCP_PROJECT).iam.gserviceaccount.com \
 	   CENTRAL_DATABASE_ENABLED=false \
+	   DEMO_SYNTHETIC_SWEEP=true \
 	   PORT=$(API_PORT) $(UV) run firstdue serve ) & \
 	 echo "==> waiting for the API (it checks every seeded profile against Firestore)"; \
 	 for i in $$(seq 1 60); do \

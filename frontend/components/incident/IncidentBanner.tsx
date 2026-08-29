@@ -63,6 +63,7 @@ export function IncidentBanner({
   coldStart,
   onClose,
   closing = false,
+  busy = false,
   reducedMotion = false,
 }: {
   incidentId: string;
@@ -75,6 +76,19 @@ export function IncidentBanner({
   coldStart: boolean;
   onClose?: () => void;
   closing?: boolean;
+  /**
+   * Some other write is in flight.
+   *
+   * Separate from `closing` because the two answer different questions, and
+   * conflating them is what put `Closing…` at the top of a live incident every
+   * time an officer notified an agency: one flag drove both the disabled state
+   * and the word, so any of eight writes announced a close. `closing` now means
+   * only "this button's own action is running" and owns the label; this one
+   * means "a write is running" and owns nothing but the disabled state -- which
+   * still has to be honoured, because closing an incident while another write
+   * is in flight is the race that flag was there to prevent.
+   */
+  busy?: boolean;
   reducedMotion?: boolean;
 }) {
   const elapsed = useElapsed(dispatchedAt, reducedMotion);
@@ -118,7 +132,7 @@ export function IncidentBanner({
         <button
           type="button"
           onClick={onClose}
-          disabled={closing}
+          disabled={closing || busy}
           className="border border-line px-3 py-1 text-micro uppercase tracking-wide text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
         >
           {closing ? 'Closing…' : 'Close incident'}

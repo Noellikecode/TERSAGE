@@ -375,6 +375,13 @@ class AuditEventView(BaseModel):
     occurred_at: str
     actor: str
     target: str | None = None
+    #: Which fire this belongs to, where it belongs to one.
+    #:
+    #: Exposed so a console can total an agent's work *on the incident in front
+    #: of it* rather than across its whole session. Without it the incident
+    #: agents' counters opened at whatever previous incidents had left behind,
+    #: which reads as work already done on a fire nobody has fought yet.
+    incident_id: str | None = None
     correlation_id: str
     detail: dict[str, str]
 
@@ -410,6 +417,7 @@ async def list_audit_events(
             occurred_at=e.occurred_at.isoformat(),
             actor=e.actor,
             target=e.target,
+            incident_id=e.incident_id,
             correlation_id=e.correlation_id,
             detail=e.detail,
         )

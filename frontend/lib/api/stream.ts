@@ -243,6 +243,50 @@ export interface IncidentLogStream {
   started: boolean;
 }
 
+/**
+ * How long to wait before re-opening a stream the browser will not retry.
+ *
+ * The base sits at the browser's own reconnect cadence (~3s in Chrome, Safari
+ * and undici; 5s in Firefox), so a hand-rolled retry on a healthy feed is
+ * indistinguishable from the one the browser was already doing. It doubles from
+ * there and stops at the ceiling, because a gateway that is refusing every
+ * request must not be asked four times a second for the length of an incident.
+ */
+const RECONNECT_BASE_MS = 3000;
+const RECONNECT_CEILING_MS = 30_000;
+
+/**
+ * How soon a *healthy* snapshot is asked for again.
+ *
+ * This is the tempo of the whole panel, and it was the browser's: an ordinary
+ * end-of-snapshot was left to `EventSource`'s own reconnect, which is ~3s in
+ * Chrome and Safari and 5s in Firefox. The incident loop records something
+ * every few hundred milliseconds during a sweep, so what a commander saw was
+ * eight actions appearing at once, then nothing for three seconds, then eight
+ * more -- the fleet working in stop-motion, at a cadence set by a spec default
+ * that has nothing to do with this incident.
+ *
+ * So the ordinary close is taken back from the browser. It costs one request
+ * per interval and almost no bytes, because the reopen carries `after_sequence`
+ * and the backend answers with what has been appended since -- which is usually
+ * nothing at all.
+ */
+const SNAPSHOT_POLL_MS = 800;
+
+/**
+ * How far the healthy poll decays while the log is quiet, and how fast.
+ *
+ * An incident is bounded at two minutes but a console is not: the card stays on
+ * screen afterwards, and a fixed 800 ms poll would ask a closed incident for
+ * new entries a hundred thousand times overnight. Each empty snapshot slows the
+ * next one by a step until it reaches the browser's own cadence, which is where
+ * this started and is a perfectly good rate for a log nobody is writing to. One
+ * frame resets it -- the fleet has started working again, and that is exactly
+ * when the fast cadence is worth paying for.
+ */
+const SNAPSHOT_POLL_CEILING_MS = 3000;
+const SNAPSHOT_POLL_DECAY = 1.5;
+
 export function useIncidentLogStream(incidentId: string | null): IncidentLogStream {
   const [entries, setEntries] = useState<IncidentLogEntryFrame[]>([]);
   const [started, setStarted] = useState(false);
@@ -256,12 +300,86 @@ export function useIncidentLogStream(incidentId: string | null): IncidentLogStre
       return;
     }
 
-    const source = new EventSource(gatewayPath(`/api/v1/incidents/${incidentId}/log/stream`));
+    // Re-opened by hand, because `EventSource`'s own retry is fail-permanent.
+    //
+    // The backend's log stream is snapshot-and-close: it sends what the log
+    // holds and ends. The browser treats that as a disconnect and reconnects
+    // with `Last-Event-ID`, which is the polling loop this feed actually runs
+    // on -- so the retry is not an edge case here, it is the mechanism.
+    //
+    // But the spec only schedules a retry when the connection *drops*. A
+    // response that is non-2xx, or 2xx with the wrong MIME, **fails** the
+    // connection instead: `readyState` goes to CLOSED and the browser never
+    // tries again. This console's own gateway produces exactly that shape --
+    // a JSON error envelope -- on an unreachable backend, an unavailable
+    // credential, or any upstream non-200 such as a 401 on a grant that has
+    // not landed yet. One of those, once, and the feed is dead for the rest of
+    // the incident: no agent cards, no log, no entry package. And it looked
+    // identical to a quiet fireground, because the old handler could not tell
+    // the two apart and deliberately said nothing about either.
+    //
+    // So a close that the browser will not retry is retried here, on a backoff
+    // that starts near the browser's own ~3s cadence.
+    let source: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    let stopped = false;
+    // The highest sequence this console holds. Sent as `after_sequence` on
+    // every reopen, so a poll of a log that has not moved transfers nothing --
+    // which is what makes polling it four times a second affordable. It is
+    // *not* the same mechanism as `Last-Event-ID`: that is per-socket state the
+    // browser keeps for its own retries, and a socket this hook opens by hand
+    // starts with none. Both resume points mean the same thing to the backend.
+    let after = -1;
+    // Frames delivered by the socket currently open, so an empty snapshot can
+    // be told from a productive one without reaching into React state.
+    let delivered = 0;
+    let quiet = SNAPSHOT_POLL_MS;
 
+    const open = () => {
+      if (stopped) return;
+      delivered = 0;
+      const resume = after >= 0 ? `?after_sequence=${after}` : '';
+      source = new EventSource(
+        gatewayPath(`/api/v1/incidents/${incidentId}/log/stream${resume}`),
+      );
+      wire(source);
+    };
+
+    const reopen = () => {
+      if (stopped) return;
+      // Backed off, and capped: a gateway that is refusing every request must
+      // not be asked four times a second for the length of an incident.
+      const wait = Math.min(RECONNECT_CEILING_MS, RECONNECT_BASE_MS * 2 ** attempt);
+      attempt += 1;
+      retry = setTimeout(open, wait);
+    };
+
+    /** The ordinary end of a snapshot: ask again, soon, and cheaply. */
+    const poll = () => {
+      if (stopped) return;
+      // A snapshot that carried anything at all resets to the fast cadence,
+      // because the fleet is working and that is the whole reason for it. The
+      // decay is applied *after* scheduling, so the first re-ask following any
+      // close is always the fast one and only a run of empty ones slows down.
+      if (delivered) quiet = SNAPSHOT_POLL_MS;
+      retry = setTimeout(open, quiet);
+      if (!delivered) {
+        quiet = Math.min(SNAPSHOT_POLL_CEILING_MS, Math.round(quiet * SNAPSHOT_POLL_DECAY));
+      }
+    };
+
+    const wire = (source: EventSource) => {
     source.addEventListener('entry', (event) => {
       try {
         const frame = JSON.parse((event as MessageEvent).data) as IncidentLogEntryFrame;
         if (typeof frame.sequence !== 'number') return;
+        // A frame means the path is working again, so the next failure starts
+        // its backoff from the bottom rather than from where the last one
+        // ended -- otherwise one bad minute permanently slows a healthy feed.
+        attempt = 0;
+        delivered += 1;
+        if (frame.sequence > after) after = frame.sequence;
         setStarted(true);
         setEntries((current) => {
           // The stream reconnects and replays from `Last-Event-ID`, and a
@@ -278,12 +396,37 @@ export function useIncidentLogStream(incidentId: string | null): IncidentLogStre
     });
 
     source.onerror = () => {
-      // The generator ends when it has sent everything it has, which the
-      // browser sees as a close and retries with `Last-Event-ID`. That is the
-      // polling loop, and it is not an error worth surfacing.
+      // `readyState` separates the two completely different things that arrive
+      // on this one handler.
+      //
+      // CLOSED is the fail-permanent case -- a non-2xx, or 2xx with the wrong
+      // MIME, which this console's gateway produces on an unreachable backend
+      // or an unavailable credential. The browser will never try again, so the
+      // backoff above is the only thing that reopens it.
+      //
+      // CONNECTING is the ordinary end of a snapshot, and the browser *has*
+      // scheduled its own retry -- in ~3s, a spec default that has nothing to
+      // do with how fast this incident is recording. `close()` cancels that
+      // retry before anything is scheduled beside it, so there is exactly one
+      // socket at a time and no frame arrives twice; then it is reopened on
+      // this hook's own cadence instead of the browser's.
+      if (source.readyState === EventSource.CLOSED) {
+        source.close();
+        reopen();
+        return;
+      }
+      source.close();
+      poll();
+    };
     };
 
-    return () => source.close();
+    open();
+
+    return () => {
+      stopped = true;
+      if (retry !== undefined) clearTimeout(retry);
+      source?.close();
+    };
   }, [incidentId]);
 
   return { entries, started };

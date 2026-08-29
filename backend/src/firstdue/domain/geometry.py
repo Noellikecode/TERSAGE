@@ -260,7 +260,7 @@ class FaceGeometry(BaseModel):
     length_m: float = Field(gt=0.0)
 
 
-def _bearing_of_edge(start: Point2D, end: Point2D) -> float:
+def edge_normal_bearing(start: Point2D, end: Point2D) -> float:
     """Outward normal of an edge, in degrees clockwise from north.
 
     The footprint is in local ENU metres (x east, y north) and wound
@@ -305,7 +305,7 @@ def face_geometries(footprint: tuple[Point2D, ...]) -> tuple[FaceGeometry, ...]:
         length = math.hypot(end[0] - start[0], end[1] - start[1])
         if length <= 0.0:
             continue
-        edges.append((_bearing_of_edge(start, end), length))
+        edges.append((edge_normal_bearing(start, end), length))
 
     if not edges:
         raise ValidationError("a footprint of zero-length edges has no faces")

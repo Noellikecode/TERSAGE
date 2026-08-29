@@ -21,6 +21,7 @@ and writes none of it again.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Final
 
@@ -33,9 +34,11 @@ from firstdue.agents.hazard_watcher import HazardWatcher, HazardWatchResult
 from firstdue.agents.records_watcher import RecordsWatcher, WatchResult
 from firstdue.agents.structure_watch import StructureWatch, StructureWatchResult
 from firstdue.container import Container
+from firstdue.domain.enums import AgentRunStatus
 from firstdue.errors import ConfigurationError
 from firstdue.extraction.extractor import FactExtractor
 from firstdue.observability.logging import get_logger
+from firstdue.ports.audit import AuditEvent, AuditEventKind
 from firstdue.ports.runtime import AgentHandler, AgentInput, AgentOutcome
 from firstdue.ports.sources import SourceAdapter
 from firstdue.services.grants import GrantService
@@ -173,6 +176,18 @@ async def _run_hazards(payload: AgentInput, _grant: object) -> AgentOutcome:
         district_id=current.district,
         sources=current.sources,
         correlation_id=payload.correlation_id,
+        # The runtime's deadline, as its three siblings above and below already
+        # pass. This was the one handler that did not, and the omission is not
+        # cosmetic: with no deadline the cross-check graph's `graph_budget`
+        # falls back to the agent's *whole* 180-second descriptor budget --
+        # which is the same number `ADKRuntime` is counting down from outside,
+        # with nothing reserved for the apply loop or for `_record_pass`. So a
+        # graph that used its budget legally was cancelled before this agent
+        # wrote a single audit event, and the console, whose only evidence is
+        # that log, drew `hazard-watcher` idle through a pass it had run in
+        # full. Fixtures answer in microseconds and fake mode wires no memory
+        # bank, so the graph never runs there and fake mode never saw it.
+        deadline=payload.deadline,
     )
     return outcome(facts=current.hazard.written_fact_ids)
 
@@ -186,7 +201,16 @@ async def _run_structure_watch(payload: AgentInput, _grant: object) -> AgentOutc
     """
     current = _pass_for(payload)
     current.queue = await current.structure_watch.watch(
-        current.district, correlation_id=payload.correlation_id
+        current.district,
+        correlation_id=payload.correlation_id,
+        # The runtime's deadline. Detection is a profile read, a rule sweep and
+        # a versioned write per structure, which over a real district is
+        # minutes against a 60-second budget -- so without this the agent was
+        # cancelled mid-district, `watch` never returned, and two things
+        # followed. It recorded no pass; and `current.queue` stayed `None`, so
+        # the caller below substituted an empty queue and never dispatched
+        # `referral-clerk` at all. One missing argument drew two agents idle.
+        deadline=payload.deadline,
     )
     return outcome(events=current.queue.published_event_ids)
 
@@ -220,6 +244,52 @@ SLOW_LOOP_HANDLERS: Final[dict[str, AgentHandler]] = {
 }
 
 
+async def _record_unfinished(container: Container, run: FleetRun, *, district_id: str) -> None:
+    """Say that an agent ran, when the agent itself did not get to say it.
+
+    Every slow-loop agent closes its own pass with an ``AGENT_PASS``, and that
+    is the record the console reads. But the runtimes enforce the deadline from
+    *outside*, by cancelling the coroutine -- so the one pass that most needs a
+    line in the log, the one that ran out of budget, is exactly the pass whose
+    own closing line never executes. The guards inside each agent are what keep
+    a pass off that path; this is what keeps the console honest about the ones
+    that still land on it, along with the denied and the failed.
+
+    Nothing is invented here. The status, the error code and the version are
+    read off the run record the fleet runner already wrote and stored; this
+    republishes them where the console looks. Only for a run that did *not*
+    complete, because a completed run has already written its own.
+    """
+    if run.result.status is AgentRunStatus.COMPLETED:
+        return
+    detail = {"status": str(run.result.status), "run_id": run.record.run_id}
+    if run.result.error_code:
+        detail["error_code"] = run.result.error_code
+    try:
+        await container.audit.record_event(
+            AuditEvent(
+                audit_id=container.ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_PASS,
+                occurred_at=container.clock.now(),
+                actor=run.agent_id,
+                actor_version=run.version,
+                target=district_id,
+                correlation_id=run.record.correlation_id,
+                detail=detail,
+            )
+        )
+    except Exception:
+        # Logged rather than raised, and this is the one place in this file
+        # where that is right: the run it describes is already durable in the
+        # run repository, so nothing is lost that cannot be read back -- while
+        # letting a diagnostic append end the pass would mean a report about an
+        # agent that failed taking the four that did not down with it.
+        logger.warning(
+            "unfinished_run_not_recorded",
+            extra={"agent_id": run.agent_id, "status": str(run.result.status)},
+        )
+
+
 def build_fleet_runner(container: Container) -> FleetRunner:
     """The runner every catalogued agent goes through."""
     return FleetRunner(
@@ -245,6 +315,16 @@ class SlowLoopReport(BaseModel):
 
     district_id: str
     ran_at: datetime
+    #: The id every agent in this pass ran under, and every `AGENT_PASS` and
+    #: `AGENT_STEP` it wrote carries.
+    #:
+    #: Here because the report was the one thing a caller got back from a pass
+    #: that could not say *which* pass it was. A console scoping a counter to
+    #: the pass in flight has to read that id out of the audit log instead --
+    #: newest pass-or-step event wins -- which is right for the passes a
+    #: scheduler drives and unnecessarily indirect for the one the console
+    #: triggered itself. Naming it closes the second case.
+    correlation_id: str = ""
 
     facts_written: int = Field(default=0, ge=0)
     facts_deduped: int = Field(default=0, ge=0)
@@ -335,6 +415,11 @@ def build_agents(
         clock=container.clock,
         ids=container.ids,
         bus=container.bus,
+        # The detection and the ranking, in this agent's own name. Its work
+        # landed on profiles, in the conflict log, in the queue and on the bus,
+        # and the console reads none of those -- so the one agent that decides
+        # which building a company is sent to next was the one drawn idle.
+        audit=container.audit,
     )
     actions = ActionFlow(
         profiles=container.profiles,
@@ -364,6 +449,13 @@ def build_agents(
     return records, geometry, hazards, structure_watch, actions
 
 
+#: The pass in flight for a district, so a second caller joins it instead of
+#: starting a second one. Keyed by the district and by ``approve``, because a
+#: pass that grants the staged referral and one that leaves it waiting are two
+#: different passes and a joiner must not be handed the wrong one.
+_IN_FLIGHT: Final[dict[tuple[str, bool], asyncio.Task[SlowLoopReport]]] = {}
+
+
 async def run_slow_loop(
     container: Container,
     *,
@@ -372,7 +464,35 @@ async def run_slow_loop(
     company: str = DEFAULT_COMPANY,
     crew_email: str = DEFAULT_CREW_EMAIL,
 ) -> SlowLoopReport:
-    """Run one complete slow-loop pass over a district.
+    """Run one complete slow-loop pass over a district, or join the one running.
+
+    **A district has one pass at a time.** A live pass is minutes long -- the
+    records read alone measured 95 s and the hazard cross-check 165 s -- and
+    every caller into this module is a timer somebody else set: the console's
+    own choreography, a second console tab, a reload that abandoned the request
+    and not the work behind it, a scheduler. Each of those used to start its
+    own pass, so five ran at once against one district, and everything that
+    followed came from that:
+
+    * every agent contended for the same profiles, so ``structure-watch``
+      spent its whole 60 s budget losing version checks and timed out on every
+      pass, which also meant ``referral-clerk`` was never reached;
+    * the incident loop's own writes lost those races too, which is how a
+      composing run died with ``STALE_VERSION`` and staged no entry package;
+    * and each pass minted its own correlation id, so the console -- which
+      scopes the slow-loop column to the pass in flight, found in the audit log
+      -- re-anchored on whichever pass had written most recently and drew every
+      other agent ``0 recorded`` and idle through work they were doing.
+
+    Joining rather than queueing, and rather than refusing. A queue would run
+    the same duplicate passes in series and merely spread the contention out;
+    a refusal would make the console report a failure for a pass that is
+    running perfectly well. The joiner gets the report of the pass that was
+    already in flight, which is the answer it would have computed itself.
+
+    A caller that goes away does not take the pass with it: the pass is a task,
+    and cancelling the request that started it cancels the *await*, not the
+    work. That is the behaviour the console already relies on.
 
     Args:
         container: the wired process.
@@ -382,6 +502,40 @@ async def run_slow_loop(
             the case-number write-back is visible in one command.
     """
     district = district_id or container.settings.default_district_id
+    key = (district, approve)
+    running = _IN_FLIGHT.get(key)
+    if running is not None and not running.done():
+        logger.info("slow_loop_joined", extra={"district_id": district})
+        return await asyncio.shield(running)
+    task = asyncio.ensure_future(
+        _run_one_pass(
+            container,
+            district=district,
+            approve=approve,
+            company=company,
+            crew_email=crew_email,
+        )
+    )
+    _IN_FLIGHT[key] = task
+    # Cleared when the pass ends rather than when this caller stops waiting.
+    # A `finally` here would drop the entry the moment an abandoned request
+    # unwound, leaving the next tick free to start a second pass against the
+    # first one still running -- which is the bug this function exists to fix.
+    task.add_done_callback(
+        lambda done: _IN_FLIGHT.pop(key, None) if _IN_FLIGHT.get(key) is done else None
+    )
+    return await asyncio.shield(task)
+
+
+async def _run_one_pass(
+    container: Container,
+    *,
+    district: str,
+    approve: bool,
+    company: str,
+    crew_email: str,
+) -> SlowLoopReport:
+    """The pass itself. Always reached through :func:`run_slow_loop`."""
     correlation_id = container.ids.new_id("corr")
     records, geometry, hazards, structure_watch, actions = build_agents(container)
     sources = list(container.source_adapters)
@@ -412,26 +566,26 @@ async def run_slow_loop(
             "hazard-watcher",
             "structure-watch",
         ):
-            runs.append(
-                await fleet.run(
-                    agent_id,
-                    correlation_id=correlation_id,
-                    parameters={"district_id": district},
-                )
+            run = await fleet.run(
+                agent_id,
+                correlation_id=correlation_id,
+                parameters={"district_id": district},
             )
+            runs.append(run)
+            await _record_unfinished(container, run, district_id=district)
 
         queue: StructureWatchResult = current.queue or StructureWatchResult(district_id=district)
         if queue.entries:
-            runs.append(
-                await fleet.run(
-                    "referral-clerk",
-                    correlation_id=correlation_id,
-                    parameters={
-                        "district_id": district,
-                        "entry_id": queue.entries[0].entry_id,
-                    },
-                )
+            run = await fleet.run(
+                "referral-clerk",
+                correlation_id=correlation_id,
+                parameters={
+                    "district_id": district,
+                    "entry_id": queue.entries[0].entry_id,
+                },
             )
+            runs.append(run)
+            await _record_unfinished(container, run, district_id=district)
     finally:
         _PASSES.pop(correlation_id, None)
 
@@ -467,6 +621,7 @@ async def run_slow_loop(
     return SlowLoopReport(
         district_id=district,
         ran_at=container.clock.now(),
+        correlation_id=correlation_id,
         facts_written=(
             watch.facts_written + geometry_result.facts_written + hazard_result.facts_written
         ),

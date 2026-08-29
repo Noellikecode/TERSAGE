@@ -129,7 +129,19 @@ MAX_REPORTED_CHARS: Final[int] = 300
 #: the intake is not on the instant path -- stage one is persisted and streamed
 #: before this is asked for, and a slow read here costs an amendment arriving
 #: later rather than a brief arriving later.
-INTAKE_DEADLINE_MS: Final[int] = 6_000
+#:
+#: **Strictly inside the run that wraps it**, which is what the second is for.
+#: This was 6 s against the ``incident-interceptor`` descriptor's 6 s latency
+#: target, so a model that spent its whole deadline and *then* refused -- the
+#: good failure, the one this module turns into a stated ``accepted=False``
+#: reading -- lost the race to the runtime's own timeout by microseconds. The
+#: run was cancelled instead, and everything downstream of the extraction went
+#: with it: the reading was never recorded, no amendment landed, and the
+#: routing table never fired, so **no agent was woken on that incident at all**.
+#: A second of reserve buys the screen, the record, the amendment, the routing
+#: and the wakes, and turns the worst case back into an intake nobody could
+#: read on an incident whose fleet is running.
+INTAKE_DEADLINE_MS: Final[int] = 5_000
 
 #: Alarm levels the department runs. A reported level outside this is recorded
 #: as text and contributes no signal, because there is no such alarm.

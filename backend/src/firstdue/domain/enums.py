@@ -260,6 +260,18 @@ class LogEntryType(StrEnum):
     #: Ids, keys and one-line summaries, like every other entry type here. An
     #: analysis that carried a source document would be a second copy of it.
     AGENT_ANALYSIS = "AGENT_ANALYSIS"
+    #: One entry package -- a readiness assessment, a computed entry path and a
+    #: synthesised crew brief -- at one point in its life.
+    #:
+    #: The package lives in the log rather than in a collection of its own, for
+    #: the reason the focus does: the log is already append-only, gapless,
+    #: sealable, replayable and written through to the records system, and
+    #: "what was the crew handed, who approved it, and when" is exactly the
+    #: question it exists to answer afterwards. Every state change appends a
+    #: fresh entry rather than editing one -- staged, each half approved, sent
+    #: -- so the sequence of entries *is* the approval history and no version of
+    #: it can be overwritten by a later one.
+    ENTRY_PACKAGE = "ENTRY_PACKAGE"
     #: What each woken agent was pointed at, in ids and canonical keys. The
     #: second question after an incident, once "who was told" is answered:
     #: they were told, and what were they told to look at. Stored in the log

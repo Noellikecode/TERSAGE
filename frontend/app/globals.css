@@ -87,14 +87,22 @@ body {
 
    Newest-first, so a new message pushes the rest down and the eye needs a
    moment to know that happened -- the motion says "this one is new", which a
-   list that simply reordered itself would not. It is 200ms and it moves 6px:
-   long enough to notice, short enough that four landing at once do not read as
-   a cascade. Nothing is carried by the motion alone; every message states its
-   agent and its time in text. */
+   list that simply reordered itself would not. It drops in from above its own
+   place, briefly scaled back and dimmed, which reads as a card landing rather
+   than a row appearing. Nothing is carried by the motion alone; every message
+   states its agent and its time in text.
+
+   The overshoot easing is what makes it read as an arrival at this size. A row
+   two lines tall moving 6px linearly is a flicker; landing 18px with a small
+   settle at the end is the thing you cannot miss out of the corner of an eye,
+   which is the whole job during the ninety seconds this panel is for. */
 @keyframes tersage-message-in {
   from {
     opacity: 0;
-    transform: translateY(-6px);
+    transform: translateY(-18px) scale(0.97);
+  }
+  60% {
+    opacity: 1;
   }
   to {
     opacity: 1;
@@ -103,7 +111,34 @@ body {
 }
 
 .activity-message-arrived {
-  animation: tersage-message-in 200ms ease-out both;
+  animation: tersage-message-in 420ms cubic-bezier(0.16, 1.02, 0.3, 1.12) both;
+}
+
+/* The fireground handing back to standby.
+
+   A package released to live dispatch units ends the console's involvement in
+   this incident, and the screen changes wholesale -- three incident columns
+   out, two standby columns in. Without a transition that reads as a glitch:
+   the same pixels, rearranged, with no signal that anything concluded.
+
+   So a single sheet wipes across and the incident resolves behind it. It is
+   deliberately short and it carries nothing: the sheet states in text what has
+   happened, and the reduced-motion block below flattens the animation to
+   nothing while the sheet itself still appears and still says it. Motion here
+   is punctuation, never the message. */
+@keyframes tersage-resolve-sheet {
+  from {
+    opacity: 0;
+    transform: scale(1.015);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.resolve-sheet {
+  animation: tersage-resolve-sheet 220ms ease-out both;
 }
 
 @media (prefers-reduced-motion: reduce) {

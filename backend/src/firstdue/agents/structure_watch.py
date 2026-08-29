@@ -74,6 +74,7 @@ from firstdue.domain.profiles import BuildingProfile, ProfileEventType
 from firstdue.domain.work import QueueEntryStatus, RankReason, SurveyQueueEntry
 from firstdue.errors import AppendOnlyViolationError, StaleVersionError, ValidationError
 from firstdue.observability.logging import get_logger
+from firstdue.ports.audit import AuditEvent, AuditEventKind, AuditSink
 from firstdue.ports.bus import EventBus
 from firstdue.ports.clock import Clock, IdGenerator
 from firstdue.ports.repositories import ConflictRepository, ProfileRepository, QueueRepository
@@ -81,6 +82,22 @@ from firstdue.ports.repositories import ConflictRepository, ProfileRepository, Q
 logger = get_logger(__name__)
 
 AGENT_ID: Final[str] = "structure-watch"
+
+#: What detection keeps back so the ranking -- this agent's actual decision --
+#: is still reachable when a large district has eaten the budget.
+#:
+#: Both runtimes wrap the handler in ``asyncio.timeout``, so overrunning the
+#: catalogued sixty seconds is a *cancellation*: ``watch`` never returns, the
+#: pass record at the end of it never executes, and the caller is handed no
+#: queue -- which is how one agent running long drew two agents idle. Sized to
+#: cover the rank sweep, the wholesale queue replacement, the bus announcement
+#: and the record.
+_RANK_TAIL_MS: Final[int] = 20_000
+
+#: What the ranked-row lines keep back for the record of the pass itself. One
+#: audit append and nothing else, and the last thing standing between a pass
+#: that happened and a console that can see it.
+_RECORD_TAIL_MS: Final[int] = 5_000
 
 # ------------------------------------------------- structure rank weights
 
@@ -665,6 +682,7 @@ class StructureWatch:
         clock: Clock,
         ids: IdGenerator | None = None,
         bus: EventBus | None = None,
+        audit: AuditSink | None = None,
         registry: RuleRegistry | None = None,
         agent_version: str = "1.0.0",
         min_score: float = MIN_SCORE,
@@ -675,11 +693,25 @@ class StructureWatch:
         self._clock = clock
         self._ids = ids
         self._bus = bus
+        #: Optional, like ``bus`` and ``ids`` above, so every existing caller
+        #: and test constructs unchanged. With no sink this agent does exactly
+        #: what it always did -- detect, rank, store, publish -- and leaves no
+        #: trace of having done it, which is why the fleet panel drew it idle
+        #: while it was ranking a district. Its work reached the profile store,
+        #: the conflict log, the queue and the bus; the console reads none of
+        #: those. It reads this one.
+        self._audit = audit
         self._registry = registry
         self._agent_version = agent_version
         self._min_score = min_score
 
-    async def watch(self, district_id: str, *, correlation_id: str = "") -> StructureWatchResult:
+    async def watch(
+        self,
+        district_id: str,
+        *,
+        correlation_id: str = "",
+        deadline: datetime | None = None,
+    ) -> StructureWatchResult:
         """Read the district once, then detect, rank, and store what it found.
 
         The queue is recomputed wholesale rather than patched: a partly updated
@@ -690,6 +722,17 @@ class StructureWatch:
         this method, and every number below is derived from them. Adding a
         second read -- to "refresh" a profile before scoring it, say -- would
         reintroduce the split this agent was merged to close.
+
+        ``deadline`` is the caller's, and the runtime that invoked this agent is
+        the caller that has one. Persisting detection is a versioned write per
+        structure and over a real district that is minutes against a catalogued
+        sixty seconds, so without a deadline this method did not return: the
+        runtime cancelled it, no pass was recorded, and the caller got no queue
+        to hand the referral clerk. Ranking is deliberately *not* skipped when
+        the budget runs short -- deciding which building a company is sent to is
+        the decision this agent exists to make, it is arithmetic over a reading
+        already in hand, and a conflict not persisted this pass is re-derived
+        next pass from facts that are already stored.
         """
         now = self._clock.now()
         profiles = await self._profiles.list_by_district(district_id)
@@ -703,17 +746,48 @@ class StructureWatch:
 
         new_conflicts: list[Conflict] = []
         contended: list[str] = []
-        for reading in district.readings:
+        unpersisted = 0
+        for position, reading in enumerate(district.readings):
+            if self._past(deadline, margin_ms=_RANK_TAIL_MS):
+                # Stop detecting, not stop working. What is left of the budget
+                # buys the ranking and the pass record, which are the two things
+                # this pass cannot leave behind if it is cancelled here.
+                unpersisted = len(district.readings) - position
+                break
             stored_cleanly = await self._persist(reading)
             new_conflicts.extend(reading.new_conflicts)
             if not stored_cleanly:
                 contended.append(reading.address_id)
+            # Recorded here, inside the loop, rather than accumulated and
+            # flushed after it. Detection is a profile read, a rule sweep and a
+            # versioned write per structure, which over a real district is
+            # minutes; a console whose only evidence is this log would show
+            # nothing at all until the last building was committed and then
+            # show everything at once, which is a report rather than work in
+            # progress.
+            await self._record_step(reading, correlation_id, contended=not stored_cleanly)
 
         entries, skipped = rank_structures(
             district, agent_version=self._agent_version, min_score=self._min_score
         )
         ranked_conflicts = rank_conflicts(district)
         stored = await self._queue.replace_district_queue(district_id, entries)
+        for entry in stored:
+            if self._past(deadline, margin_ms=_RECORD_TAIL_MS):
+                # The rows are already in the queue; these are the lines that
+                # narrate them. Dropping the narration to keep the pass record
+                # is the right way round -- the record is what says the agent
+                # ran, and the rows are readable from the queue either way.
+                break
+            # As soon as the row exists, not once the whole pass is over. This
+            # is the half of the merge that usually has something to say: by
+            # the time a district reaches this agent the watchers' own
+            # materialization has normally already recorded the disagreements,
+            # so detection re-derives ids that are all already stored and the
+            # loop above records nothing -- while the ranking still decides
+            # which building a company is sent to, which is the decision this
+            # agent exists to make.
+            await self._record_ranked(entry, correlation_id)
 
         published = await self._announce(
             district,
@@ -734,6 +808,18 @@ class StructureWatch:
                 "contended": len(contended),
             },
         )
+        await self._record_pass(
+            district_id,
+            correlation_id,
+            profiles=len(district.readings),
+            detected=len(new_conflict_ids),
+            open_conflicts=len(ranked_conflicts),
+            entries=tuple(stored),
+            skipped=skipped,
+            contended=len(contended),
+            published=len(published),
+            unpersisted=unpersisted,
+        )
         return StructureWatchResult(
             district_id=district_id,
             read_at=now,
@@ -746,6 +832,173 @@ class StructureWatch:
         )
 
     # ------------------------------------------------------------ internals
+
+    def _past(self, deadline: datetime | None, *, margin_ms: int) -> bool:
+        """Whether the budget is spent down to the tail this step still needs.
+
+        ``margin_ms`` is what has to be left for everything after the check,
+        which is why the two callers pass different numbers -- detection must
+        leave room for the ranking, and the ranked lines must leave room for the
+        record of the pass.
+
+        The injected clock, never the wall clock. A deadline derived from a
+        ``SteppingClock`` and compared against ``datetime.now()`` reads as spent
+        before the first structure, and every district would rank nothing.
+        """
+        if deadline is None:
+            return False
+        return self._clock.now() >= deadline - timedelta(milliseconds=margin_ms)
+
+    async def _record_pass(
+        self,
+        district_id: str,
+        correlation_id: str,
+        *,
+        profiles: int,
+        detected: int,
+        open_conflicts: int,
+        entries: Sequence[SurveyQueueEntry],
+        skipped: int,
+        contended: int,
+        published: int,
+        unpersisted: int = 0,
+    ) -> None:
+        """One line saying what this pass read, found, and put in front of whom.
+
+        Both halves of the merge, because both are this agent's work and either
+        one alone misreads it: a pass that detected nothing new but re-ranked a
+        district did work, and so did a pass that detected four disagreements on
+        structures that all scored below the floor.
+
+        ``skipped`` beside ``ranked`` for the same reason ``deferred`` sits
+        beside ``measured`` on the geometry pass -- a district where nothing was
+        worth a company's morning and a district nobody looked at produce the
+        same empty queue and are not the same statement.
+
+        Counts and derived ids only. A rank reason is a sentence this agent
+        composed about a building, and it belongs on the queue row where an
+        officer reads it with the rule id that produced it, not restated here
+        with neither.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        detail = {
+            "profiles": str(profiles),
+            "conflicts_detected": str(detected),
+            "open_conflicts": str(open_conflicts),
+            "ranked": str(len(entries)),
+            "skipped": str(skipped),
+            "contended": str(contended),
+            "events_published": str(published),
+        }
+        if unpersisted:
+            # A district the budget did not finish detecting on is not a
+            # district with nothing to detect, and the queue below was ranked
+            # over the whole reading either way. Saying so is the difference.
+            detail["unpersisted"] = str(unpersisted)
+        if entries:
+            # Which row a company is actually sent to. The entry id, not the
+            # score: the score is on the row, derived from reasons that are also
+            # on the row, and a second copy here would be a number nobody could
+            # re-derive from what this record carries.
+            detail["entry_id"] = entries[0].entry_id
+            detail["address_id"] = entries[0].address_id
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_PASS,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=district_id,
+                # A slow-loop pass belongs to no incident, and stamping one on
+                # it would put a district sweep inside a fire's counters.
+                correlation_id=correlation_id or self._ids.new_id("corr"),
+                detail=detail,
+            )
+        )
+
+    async def _record_step(
+        self, reading: ProfileReading, correlation_id: str, *, contended: bool
+    ) -> None:
+        """One structure, as this pass finishes with it.
+
+        Only where the reading produced something the store did not already
+        hold. A district is hundreds of profiles and most passes change none of
+        them, so a line per profile read would be hundreds of lines saying
+        nothing and would bury the four that say something -- the same
+        discipline the other watchers keep, where a step is an address that was
+        written rather than an address that was considered.
+
+        A lost version check still counts. Another writer ran the same
+        deterministic engine over the same facts, so the finding stands; what
+        did not happen is this pass's write, and that is worth one word here
+        rather than silence indistinguishable from success.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        if not reading.new_conflicts and not reading.changed:
+            return
+        keys = sorted({str(conflict.canonical_key) for conflict in reading.new_conflicts})
+        rules = sorted({conflict.rule_id for conflict in reading.new_conflicts})
+        detail = {
+            "conflicts_detected": str(len(reading.new_conflicts)),
+            "open_conflicts": str(len(reading.open_conflicts)),
+            # The engine's own vocabulary -- the attribute in dispute and the
+            # rule that fired -- never what either source said it was.
+            "keys": ",".join(keys) if keys else "none",
+            "rules": ",".join(rules) if rules else "none",
+            "profile_version": str(reading.profile.profile_version),
+        }
+        if contended:
+            detail["contended"] = "true"
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=reading.address_id,
+                address_id=reading.address_id,
+                # The pass's own id, so a structure's step groups under the
+                # pass that produced it instead of floating loose in the log.
+                correlation_id=correlation_id or self._ids.new_id("corr"),
+                detail=detail,
+            )
+        )
+
+    async def _record_ranked(self, entry: SurveyQueueEntry, correlation_id: str) -> None:
+        """One structure, as it lands on the queue a company works from.
+
+        The rank and the rules that produced it, never the reason text. A
+        :class:`RankReason` detail is a sentence this agent composed about a
+        building; it is already on the row, beside the rule id, the weight and
+        the fact ids that support it, and a copy here would read as a finding
+        with none of that behind it.
+        """
+        if self._audit is None or self._ids is None:
+            return
+        rules = sorted({reason.rule_id for reason in entry.reasons})
+        await self._audit.record_event(
+            AuditEvent(
+                audit_id=self._ids.new_id("audit"),
+                kind=AuditEventKind.AGENT_STEP,
+                occurred_at=self._clock.now(),
+                actor=AGENT_ID,
+                actor_version=self._agent_version,
+                target=entry.address_id,
+                address_id=entry.address_id,
+                correlation_id=correlation_id or self._ids.new_id("corr"),
+                detail={
+                    "entry_id": entry.entry_id,
+                    "rank": str(entry.rank),
+                    "reasons": str(len(entry.reasons)),
+                    "rules": ",".join(rules),
+                    "status": str(entry.status),
+                },
+            )
+        )
 
     async def _persist(self, reading: ProfileReading) -> bool:
         """Store what one reading derived. False means another writer won.

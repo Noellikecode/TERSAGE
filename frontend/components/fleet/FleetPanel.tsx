@@ -38,7 +38,14 @@ import {
   type FleetContext,
 } from '@/components/fleet/FleetDetail';
 import { FleetRow, type FleetState } from '@/components/fleet/FleetRow';
-import { agentDecisions, attributableEvents } from '@/components/fleet/derive';
+import {
+  agentDecisions,
+  attributableEvents,
+  compareAt,
+  currentPass,
+  decisionsSince,
+  eventsSince,
+} from '@/components/fleet/derive';
 import type {
   AgentDescriptorView,
   AuditEventView,
@@ -104,6 +111,22 @@ export interface FleetPanelProps {
   /** The reasoning terminals' data source. Filtered per agent by `actor`. */
   events?: AuditEventView[];
   decisions?: PolicyDecisionView[];
+  /**
+   * The backend instant this console session began watching, from
+   * `sessionFloor`. Nothing at or before it is counted or printed anywhere in
+   * this panel.
+   *
+   * It is a *prop* rather than a ref this component captures for itself
+   * because this component is mounted more than once and remounted often --
+   * two columns in either mode, and the layout swaps them when a fire starts.
+   * A floor captured per mount would re-anchor mid-pass on the column that
+   * survived the swap and blank a fleet that was working. One session has one
+   * floor, so the console owns it.
+   *
+   * Absent means no floor, which is what an empty first read deserves: on a log
+   * that starts empty everything in it arrived while we were watching.
+   */
+  since?: string | null;
   /** The open incident, if any. Feeds the interceptor's fan-out glyph. */
   incident?: OpenIncidentResponse | null;
   /**
@@ -125,6 +148,7 @@ export function FleetPanel({
   loop,
   events = [],
   decisions = [],
+  since = null,
   incident = null,
   geometry = null,
   sources = [],
@@ -137,16 +161,87 @@ export function FleetPanel({
   const live = scoped.filter((agent) => !agent.deprecated_at);
   const superseded = scoped.filter((agent) => agent.deprecated_at);
 
+  /**
+   * Nothing older than this session, before anything else is asked.
+   *
+   * This is the floor, and it is the layer the two scopings below sit on rather
+   * than a replacement for either. It has to come first because both of those
+   * scopings are *read out of the log*, and a log that outlived the last server
+   * restart answers them with a previous run's pass and a previous run's fire.
+   * See `sessionFloor`.
+   *
+   * Decisions get the floor and not the pass window. The window is a statement
+   * about an agent's activity, and a decision is also a statement about
+   * standing -- a `REQUIRE_APPROVAL` from the last pass is a referral still
+   * waiting for a captain, and cutting it at the pass boundary would empty the
+   * clerk's pipeline of work nobody has done anything about yet.
+   */
+  const sessionEvents = useMemo(() => eventsSince(events, since), [events, since]);
+  const sessionDecisions = useMemo(
+    () => decisionsSince(decisions, since),
+    [decisions, since],
+  );
+
+  /**
+   * The events this column may count: this fire's, or this pass's.
+   *
+   * The console accumulates the audit log across the whole session, and a
+   * counter over the whole of it is a counter that opens at whatever earlier
+   * work left behind -- "249 recorded" before this pass has read a single
+   * record, and then barely moving, because 249 to 261 does not read as
+   * anything happening. Neither loop wants that, and each has its own unit of
+   * work to scope to.
+   *
+   * **The incident loop scopes to the fire.** Those agents do not exist between
+   * incidents, so a count carried across them is a count of somebody else's
+   * emergency. An event with no incident of its own -- a grant minted for this
+   * incident's agents, say -- is kept when it names the incident as its target:
+   * it belongs to this fire by having happened in it, and the alternative is
+   * dropping real work because a field is optional.
+   *
+   * **The slow loop scopes to the pass.** It runs on nothing but a schedule, so
+   * its unit is the pass `run_slow_loop` mints a correlation id for, found in
+   * the log by `currentPass`. The counter opens at zero when a pass starts and
+   * climbs as the fleet works through the district, which is the thing an
+   * officer is actually watching for.
+   *
+   * Between passes it holds the last pass's total rather than falling to zero.
+   * A finished pass did the work it did, and blanking the column the moment it
+   * ends would say the opposite -- it would draw five idle agents over a
+   * district they had just finished reading. The number stands until the next
+   * pass writes its first event and takes the window with it.
+   */
+  const scopedEvents = useMemo(() => {
+    if (scope === 'INCIDENT') {
+      if (!incident) return sessionEvents;
+      return sessionEvents.filter(
+        (event) =>
+          event.incident_id === incident.incident_id ||
+          (!event.incident_id && event.target === incident.incident_id),
+      );
+    }
+    // Both the id and the versioned ref: an event is attributed by either.
+    const actors = new Set(
+      agents.filter((agent) => agent.loop === scope).flatMap((a) => [a.agent_id, a.ref]),
+    );
+    // Over `sessionEvents`, so the pass this anchors on is one this session
+    // watched run. Reading it out of the whole log is how a restarted console
+    // ended up displaying the totals of a pass that finished hours ago.
+    const pass = currentPass(sessionEvents, actors);
+    if (!pass) return sessionEvents;
+    return sessionEvents.filter((event) => compareAt(event.occurred_at, pass.since) >= 0);
+  }, [sessionEvents, scope, incident, agents]);
+
   const context: FleetContext = useMemo(
     () => ({
-      events,
-      decisions,
+      events: scopedEvents,
+      decisions: sessionDecisions,
       incident,
       geometry,
       sources,
       fleetIds: new Set((fleetRoster ?? agents).map((agent) => agent.agent_id)),
     }),
-    [events, decisions, incident, geometry, sources, fleetRoster, agents],
+    [scopedEvents, sessionDecisions, incident, geometry, sources, fleetRoster, agents],
   );
 
   /**
@@ -160,8 +255,8 @@ export function FleetPanel({
     () =>
       live.map((agent) => {
         const recorded =
-          attributableEvents(events, agent, context.fleetIds).length +
-          agentDecisions(decisions, agent).length;
+          attributableEvents(scopedEvents, agent, context.fleetIds).length +
+          agentDecisions(sessionDecisions, agent).length;
         const act = activity[agent.agent_id];
         const state: FleetState = act?.current ? 'running' : recorded > 0 ? 'active' : 'idle';
         return {
@@ -172,7 +267,7 @@ export function FleetPanel({
           metric: act ? `${act.throughput} runs` : `${recorded} recorded`,
         };
       }),
-    [live, events, decisions, activity, context.fleetIds],
+    [live, scopedEvents, sessionDecisions, activity, context.fleetIds],
   );
 
   /**

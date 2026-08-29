@@ -659,3 +659,149 @@ async def test_a_redraft_is_told_how_the_last_referral_ended() -> None:
         }
     ]
     assert prior.narrative not in json.dumps(model.fields, default=str)
+
+
+# ------------------------------------------------------- the clerk's own record
+
+
+class BrokenMailer:
+    """A crew mailer that is down, so a dispatch dies partway through."""
+
+    async def send(self, message: MailMessage, *, idempotency_key: str) -> MailMessage:
+        raise SourceUnavailableError("the crew mail transport is down")
+
+    async def sent(self) -> Sequence[MailMessage]:
+        return []
+
+
+async def _dispatch_once(harness: Harness, **kwargs: Any) -> Any:
+    entry = await harness.seed()
+    return await harness.flow.dispatch(
+        entry, company="E-05", crew_email=CREW, correlation_id="corr-1", **kwargs
+    )
+
+
+async def test_a_dispatch_with_no_budget_left_stops_itself_and_keeps_the_referral() -> None:
+    """The bug that drew this clerk idle, from the other end.
+
+    One dispatch is five external calls against a 60-second descriptor budget,
+    and both runtimes enforce that budget with ``asyncio.timeout`` -- so an
+    overrun is a cancellation, and the pass record at the end of ``dispatch``
+    never ran. Handed a deadline it cannot meet, the flow now drops the four
+    autonomous writes rather than being killed inside them, and keeps the one
+    thing that is this agent's own work.
+    """
+    harness = Harness(mailer=RecordingMailer())
+    result = await _dispatch_once(harness, deadline=NOW)
+
+    assert result.work_order_ref is None
+    assert result.calendar_event_ref is None
+    assert result.notification_ref is None
+    assert result.plan_object_id is None
+    # Nothing was attempted, so nothing was sent -- not "sent and lost".
+    assert harness.mailer.messages == []
+    # The referral is the clerk's job and the cheapest thing in the dispatch.
+    assert result.referral_id is not None
+
+    passes = await harness.audit_kinds(AuditEventKind.AGENT_PASS)
+    assert len(passes) == 1
+    assert passes[0].detail["referral"] == "staged"
+    assert passes[0].detail["skipped"] == "work_order,calendar,crew_mail,preplan"
+
+
+async def test_the_last_seconds_of_a_budget_are_not_spent_on_wording() -> None:
+    """Polish is the one thing a dispatch can drop without losing a fact."""
+    model = StubComposer("A polished draft nobody will read.")
+    harness = Harness(mailer=RecordingMailer(), model=model)
+    result = await _dispatch_once(harness, deadline=NOW)
+
+    assert model.calls == 0
+    rejected = await harness.audit_kinds(AuditEventKind.MODEL_OUTPUT_REJECTED)
+    assert [e.detail["reason"] for e in rejected] == ["out_of_budget"]
+
+    referral = await harness.referrals.get(result.referral_id)
+    assert referral is not None
+    profile = await harness.profiles.get(ADDRESS)
+    assert profile is not None
+    assert referral.narrative == ActionFlow._referral_narrative(profile, harness.conflict)
+
+
+async def test_a_dispatch_that_dies_partway_still_says_the_clerk_ran() -> None:
+    """A failure is a result, and an absence is not.
+
+    The pass record is this agent's only evidence on an ordinary pass, so it
+    cannot be the statement that a mail outage deletes.
+    """
+    harness = Harness(mailer=BrokenMailer())
+    entry = await harness.seed()
+    with pytest.raises(SourceUnavailableError):
+        await harness.flow.dispatch(entry, company="E-05", crew_email=CREW, correlation_id="corr-1")
+
+    passes = await harness.audit_kinds(AuditEventKind.AGENT_PASS)
+    assert len(passes) == 1
+    # Not an outcome about the building: the dispatch ended before the referral.
+    assert passes[0].detail["referral"] == "not_reached"
+
+
+async def test_a_second_pass_over_the_same_building_records_what_it_found() -> None:
+    """ "Nothing new to file" is a result of having looked.
+
+    Only the ``staged`` branch used to write a step, so every pass after the
+    first over a district -- a referral is derived from a conflict, and a
+    conflict is stable -- left one bare line and the console drew a clerk that
+    had gone quiet.
+    """
+    harness = Harness(mailer=RecordingMailer())
+    entry = await harness.seed()
+    for correlation_id in ("corr-1", "corr-2"):
+        await harness.flow.dispatch(
+            entry, company="E-05", crew_email=CREW, correlation_id=correlation_id
+        )
+
+    # `list_events` answers newest first; these read in the order they happened.
+    steps = list(reversed(await harness.audit_kinds(AuditEventKind.AGENT_STEP)))
+    assert [e.detail["status"] for e in steps] == ["awaiting_approval", "already_staged"]
+    # Each step under the pass that produced it, never a fresh correlation.
+    assert [e.correlation_id for e in steps] == ["corr-1", "corr-2"]
+
+    passes = list(reversed(await harness.audit_kinds(AuditEventKind.AGENT_PASS)))
+    assert [e.detail["referral"] for e in passes] == ["staged", "already_staged"]
+
+
+async def test_a_building_with_nothing_to_refer_still_leaves_a_line() -> None:
+    """A clerk that looked and found no open disagreement did work."""
+    harness = Harness(mailer=RecordingMailer())
+    await harness.profiles.create(BuildingProfile(address_id=ADDRESS, district_id=DISTRICT))
+    entry = _entry()
+    await harness.queue.replace_district_queue(DISTRICT, [entry])
+    result = await harness.flow.dispatch(
+        entry, company="E-05", crew_email=CREW, correlation_id="corr-1"
+    )
+
+    assert result.referral_id is None
+    steps = await harness.audit_kinds(AuditEventKind.AGENT_STEP)
+    assert [e.detail["status"] for e in steps] == ["no_open_conflict"]
+    passes = await harness.audit_kinds(AuditEventKind.AGENT_PASS)
+    assert passes[0].detail["referral"] == "none"
+
+
+async def test_the_clerks_own_records_carry_no_prose() -> None:
+    """Counts, ids and canonical keys, on the branches added here too."""
+    harness = Harness(mailer=RecordingMailer())
+    entry = await harness.seed()
+    await harness.flow.dispatch(entry, company="E-05", crew_email=CREW, correlation_id="corr-1")
+    await harness.flow.dispatch(entry, company="E-05", crew_email=CREW, correlation_id="corr-2")
+    await harness.flow.dispatch(
+        entry, company="E-05", crew_email=CREW, correlation_id="corr-3", deadline=NOW
+    )
+
+    written = [
+        e
+        for e in await harness.audit.list_events(limit=200)
+        if e.kind in (AuditEventKind.AGENT_PASS, AuditEventKind.AGENT_STEP)
+    ]
+    assert written
+    for event in written:
+        for key, value in event.detail.items():
+            assert isinstance(value, str), key
+            assert " " not in value, (key, value)

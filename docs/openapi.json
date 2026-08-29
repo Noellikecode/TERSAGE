@@ -249,6 +249,56 @@
         "title": "AgentListResponse",
         "type": "object"
       },
+      "AgentPassLine": {
+        "additionalProperties": false,
+        "description": "What one agent recorded in one pass.",
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "events": {
+            "minimum": 0.0,
+            "title": "Events",
+            "type": "integer"
+          },
+          "first_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First At"
+          },
+          "kinds": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Kinds",
+            "type": "object"
+          },
+          "last_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last At"
+          }
+        },
+        "required": [
+          "agent_id",
+          "events"
+        ],
+        "title": "AgentPassLine",
+        "type": "object"
+      },
       "ApprovalRequestBody": {
         "additionalProperties": false,
         "properties": {
@@ -301,6 +351,8 @@
           "circuit_opened",
           "circuit_closed",
           "rms_flushed",
+          "agent_pass",
+          "agent_step",
           "dead_lettered"
         ],
         "title": "AuditEventKind",
@@ -327,6 +379,17 @@
             },
             "title": "Detail",
             "type": "object"
+          },
+          "incident_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Incident Id"
           },
           "kind": {
             "$ref": "#/components/schemas/AuditEventKind"
@@ -356,6 +419,201 @@
           "detail"
         ],
         "title": "AuditEventView",
+        "type": "object"
+      },
+      "AutonomyDiagnostics": {
+        "additionalProperties": false,
+        "description": "What the loop has decided about one incident, and why there is no card.\n\nRead-only, and the reason it exists is that the three triggers above are\nthe only thing standing between a dispatch and an approval card, and every\none of them can decline silently and correctly. Autonomy switched off, an\nincident this process did not open, a deadline still sleeping, a\ncomposition that raised inside a shrug -- four completely different\nsituations that all look identical from a console showing nothing.\nGuessing between them from the outside took three failed incidents.\n\nIt reports decisions, never content. Ids, counts, canonical criterion keys,\nan exception type and a capped message; no claim, no prose, no fact value.\nA reader who needs the document reads the package.",
+        "properties": {
+          "age_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age S"
+          },
+          "assessment_error": {
+            "default": "",
+            "title": "Assessment Error",
+            "type": "string"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "autonomy_enabled": {
+            "title": "Autonomy Enabled",
+            "type": "boolean"
+          },
+          "composed_package_id": {
+            "default": "",
+            "title": "Composed Package Id",
+            "type": "string"
+          },
+          "composed_trigger": {
+            "default": "",
+            "title": "Composed Trigger",
+            "type": "string"
+          },
+          "composing": {
+            "title": "Composing",
+            "type": "boolean"
+          },
+          "deadline_armed": {
+            "title": "Deadline Armed",
+            "type": "boolean"
+          },
+          "deadline_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline At"
+          },
+          "deadline_in_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline In S"
+          },
+          "failed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failed At"
+          },
+          "failed_criteria": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Failed Criteria",
+            "type": "array"
+          },
+          "failed_error_message": {
+            "default": "",
+            "title": "Failed Error Message",
+            "type": "string"
+          },
+          "failed_error_type": {
+            "default": "",
+            "title": "Failed Error Type",
+            "type": "string"
+          },
+          "failed_trigger": {
+            "default": "",
+            "title": "Failed Trigger",
+            "type": "string"
+          },
+          "failures": {
+            "title": "Failures",
+            "type": "integer"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "opened_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Opened At"
+          },
+          "outstanding_criteria": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Outstanding Criteria",
+            "type": "array"
+          },
+          "packages": {
+            "default": 0,
+            "title": "Packages",
+            "type": "integer"
+          },
+          "tracked": {
+            "title": "Tracked",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "incident_id",
+          "autonomy_enabled",
+          "tracked",
+          "deadline_armed",
+          "composing",
+          "attempts",
+          "failures"
+        ],
+        "title": "AutonomyDiagnostics",
+        "type": "object"
+      },
+      "Barrier": {
+        "additionalProperties": false,
+        "description": "A leg that was not built, and why.\n\nRecorded rather than dropped. A face the arithmetic refused to cross is the\nsingle most useful thing on an entry plan, and an edge that simply does not\nexist explains nothing to the officer looking at the detour it caused.",
+        "properties": {
+          "from_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "From Id",
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "to_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "To Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_id",
+          "to_id",
+          "reason"
+        ],
+        "title": "Barrier",
         "type": "object"
       },
       "BenchmarkType": {
@@ -428,6 +686,45 @@
           "north"
         ],
         "title": "BoundingBox",
+        "type": "object"
+      },
+      "BriefClaim": {
+        "additionalProperties": false,
+        "description": "One thing the record says, and where it says it.",
+        "properties": {
+          "claim_id": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Claim Id",
+            "type": "string"
+          },
+          "refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "section": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Section",
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 600,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim_id",
+          "section",
+          "text"
+        ],
+        "title": "BriefClaim",
         "type": "object"
       },
       "BuildingImagery": {
@@ -739,6 +1036,204 @@
         "title": "ConflictView",
         "type": "object"
       },
+      "CostTerm": {
+        "additionalProperties": false,
+        "description": "One reason a leg costs more than its length.\n\nA term is a *multiplier contribution*, not an absolute penalty: it scales\nwith the distance travelled through the condition it describes, which is\nwhat makes a short hop past a hot wall cheaper than a long one and stops a\nfixed penalty from dominating the arithmetic on a small building.\n\n``refs`` are fact ids, canonical keys, face labels and conflict ids -- the\nsame rule the incident log keeps. A term that carried a measurement would be\na second, uncited copy of a reading that already has a provenance.",
+        "properties": {
+          "detail": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "term_id": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Term Id",
+            "type": "string"
+          },
+          "weight": {
+            "minimum": 0.0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "term_id",
+          "weight",
+          "detail"
+        ],
+        "title": "CostTerm",
+        "type": "object"
+      },
+      "CrewBrief": {
+        "additionalProperties": false,
+        "description": "One synthesised brief. Deterministic claims, optional model wording.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "brief_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Brief Id",
+            "type": "string"
+          },
+          "claim_refs": {
+            "description": "Every id and key the brief rests on, deduplicated in claim order.",
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Claim Refs",
+            "type": "array"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/BriefClaim"
+            },
+            "minItems": 1,
+            "title": "Claims",
+            "type": "array"
+          },
+          "composed_at": {
+            "format": "date-time",
+            "title": "Composed At",
+            "type": "string"
+          },
+          "composed_by": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Composed By",
+            "type": "string"
+          },
+          "composed_by_version": {
+            "default": "1.0.0",
+            "maxLength": 40,
+            "title": "Composed By Version",
+            "type": "string"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "model_ref": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Model Ref",
+            "type": "string"
+          },
+          "profile_snapshot_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Profile Snapshot Id",
+            "type": "string"
+          },
+          "prose": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Prose",
+            "type": "string"
+          },
+          "prose_rejection": {
+            "default": "",
+            "maxLength": 60,
+            "title": "Prose Rejection",
+            "type": "string"
+          },
+          "prose_source": {
+            "default": "deterministic",
+            "maxLength": 20,
+            "title": "Prose Source",
+            "type": "string"
+          },
+          "readiness_summary": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Readiness Summary",
+            "type": "string"
+          },
+          "unknowns": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Unknowns",
+            "type": "array"
+          }
+        },
+        "required": [
+          "brief_id",
+          "incident_id",
+          "address_id",
+          "composed_at",
+          "composed_by",
+          "profile_snapshot_id",
+          "claims",
+          "prose",
+          "readiness_summary",
+          "claim_refs"
+        ],
+        "title": "CrewBrief",
+        "type": "object"
+      },
+      "Criterion": {
+        "additionalProperties": false,
+        "description": "One named check, its verdict, and what it looked at.",
+        "properties": {
+          "criterion_id": {
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Criterion Id",
+            "type": "string"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "reason": {
+            "maxLength": 400,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          },
+          "refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Refs",
+            "type": "array"
+          },
+          "title": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "criterion_id",
+          "title",
+          "passed",
+          "reason"
+        ],
+        "title": "Criterion",
+        "type": "object"
+      },
       "DeadLetterListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -967,6 +1462,327 @@
           "sources"
         ],
         "title": "DistrictStatsView",
+        "type": "object"
+      },
+      "EntryPackage": {
+        "additionalProperties": false,
+        "description": "One assessment, one path, one brief, and what humans did about them.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "assessment": {
+            "$ref": "#/components/schemas/ReadinessAssessment"
+          },
+          "brief": {
+            "$ref": "#/components/schemas/CrewBrief"
+          },
+          "brief_approval_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Brief Approval Id",
+            "type": "string"
+          },
+          "brief_approved": {
+            "readOnly": true,
+            "title": "Brief Approved",
+            "type": "boolean"
+          },
+          "brief_approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brief Approved At"
+          },
+          "brief_approved_by": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Brief Approved By"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Created By",
+            "type": "string"
+          },
+          "created_by_version": {
+            "default": "1.0.0",
+            "maxLength": 40,
+            "title": "Created By Version",
+            "type": "string"
+          },
+          "disclaimer": {
+            "default": "Decision support. This package reports what the record holds and the cheapest traverse of a graph priced from it. It is not a tactical recommendation; every tactical decision belongs to the incident commander.",
+            "title": "Disclaimer",
+            "type": "string"
+          },
+          "dispatch_decision_id": {
+            "default": "",
+            "maxLength": 120,
+            "title": "Dispatch Decision Id",
+            "type": "string"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "outstanding_halves": {
+            "description": "Which halves are still waiting. Empty once both are granted.",
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Outstanding Halves",
+            "type": "array"
+          },
+          "package_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Package Id",
+            "type": "string"
+          },
+          "path": {
+            "$ref": "#/components/schemas/EntryPathPlan"
+          },
+          "path_approval_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Path Approval Id",
+            "type": "string"
+          },
+          "path_approved": {
+            "readOnly": true,
+            "title": "Path Approved",
+            "type": "boolean"
+          },
+          "path_approved_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Approved At"
+          },
+          "path_approved_by": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path Approved By"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "sent_by": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent By"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PackageStatus",
+            "readOnly": true
+          }
+        },
+        "required": [
+          "package_id",
+          "incident_id",
+          "address_id",
+          "created_at",
+          "created_by",
+          "assessment",
+          "path",
+          "brief",
+          "path_approval_id",
+          "brief_approval_id",
+          "path_approved",
+          "brief_approved",
+          "status",
+          "outstanding_halves"
+        ],
+        "title": "EntryPackage",
+        "type": "object"
+      },
+      "EntryPathPlan": {
+        "additionalProperties": false,
+        "description": "The whole answer: a route in, a route out, or a stated refusal.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "algorithm": {
+            "default": "A*",
+            "title": "Algorithm",
+            "type": "string"
+          },
+          "barriers": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/Barrier"
+            },
+            "title": "Barriers",
+            "type": "array"
+          },
+          "edge_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "egress": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Route"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "egress_note": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Egress Note",
+            "type": "string"
+          },
+          "entry": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Route"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "entry_face": {
+            "description": "The face the route makes entry through, or an empty string.",
+            "readOnly": true,
+            "title": "Entry Face",
+            "type": "string"
+          },
+          "heuristic": {
+            "default": "euclidean-3d",
+            "title": "Heuristic",
+            "type": "string"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "node_count": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "refusal_reason": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Refusal Reason",
+            "type": "string"
+          },
+          "refusal_refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Refusal Refs",
+            "type": "array"
+          },
+          "refused": {
+            "default": false,
+            "title": "Refused",
+            "type": "boolean"
+          },
+          "target_level": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Target Level",
+            "type": "integer"
+          },
+          "unscanned_faces": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Unscanned Faces",
+            "type": "array"
+          }
+        },
+        "required": [
+          "incident_id",
+          "address_id",
+          "entry_face"
+        ],
+        "title": "EntryPathPlan",
+        "type": "object"
+      },
+      "EntryPathRequest": {
+        "additionalProperties": false,
+        "description": "Which storey the route is solved to.\n\nZero-based, and defaulting to the ground floor -- the only storey a route\ncan reach without assuming a stairwell nobody surveyed. A caller that knows\nthe floor of origin (the intake binds one, marked as reported) passes it.",
+        "properties": {
+          "target_level": {
+            "default": 0,
+            "maximum": 199.0,
+            "minimum": 0.0,
+            "title": "Target Level",
+            "type": "integer"
+          }
+        },
+        "title": "EntryPathRequest",
         "type": "object"
       },
       "EnumValue": {
@@ -2100,6 +2916,41 @@
         "title": "NarrativeRecallResponse",
         "type": "object"
       },
+      "NewestAuditEvent": {
+        "additionalProperties": false,
+        "description": "The newest thing in the audit log, whoever wrote it.",
+        "properties": {
+          "actor": {
+            "title": "Actor",
+            "type": "string"
+          },
+          "audit_id": {
+            "title": "Audit Id",
+            "type": "string"
+          },
+          "correlation_id": {
+            "title": "Correlation Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "occurred_at": {
+            "title": "Occurred At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "audit_id",
+          "kind",
+          "actor",
+          "occurred_at",
+          "correlation_id"
+        ],
+        "title": "NewestAuditEvent",
+        "type": "object"
+      },
       "Obstruction": {
         "additionalProperties": false,
         "description": "Something on the roof a crew cannot cut through.",
@@ -2290,6 +3141,94 @@
           "event_id"
         ],
         "title": "OpenIncidentResponse",
+        "type": "object"
+      },
+      "PackageListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "incident_id": {
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/PackageSummary"
+            },
+            "title": "Packages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "incident_id",
+          "packages"
+        ],
+        "title": "PackageListResponse",
+        "type": "object"
+      },
+      "PackageStatus": {
+        "description": "Derived from the approvals and the send, never set independently.",
+        "enum": [
+          "AWAITING_APPROVAL",
+          "READY_TO_SEND",
+          "SENT"
+        ],
+        "title": "PackageStatus",
+        "type": "string"
+      },
+      "PackageSummary": {
+        "additionalProperties": false,
+        "description": "One row of the package list. Ids, statuses and counts, never a claim.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "outstanding": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outstanding",
+            "type": "array"
+          },
+          "package_id": {
+            "title": "Package Id",
+            "type": "string"
+          },
+          "path_refused": {
+            "title": "Path Refused",
+            "type": "boolean"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "sent_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sent At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "package_id",
+          "status",
+          "created_at",
+          "ready",
+          "path_refused",
+          "outstanding"
+        ],
+        "title": "PackageSummary",
         "type": "object"
       },
       "PolicyDecisionView": {
@@ -2595,6 +3534,88 @@
           "weight"
         ],
         "title": "RankReasonView",
+        "type": "object"
+      },
+      "ReadinessAssessment": {
+        "additionalProperties": false,
+        "description": "The whole verdict. Renderable whichever way it went.",
+        "properties": {
+          "address_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Address Id",
+            "type": "string"
+          },
+          "assessed_at": {
+            "format": "date-time",
+            "title": "Assessed At",
+            "type": "string"
+          },
+          "assessed_by": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Assessed By",
+            "type": "string"
+          },
+          "assessed_by_version": {
+            "default": "1.0.0",
+            "maxLength": 40,
+            "title": "Assessed By Version",
+            "type": "string"
+          },
+          "criteria": {
+            "items": {
+              "$ref": "#/components/schemas/Criterion"
+            },
+            "minItems": 1,
+            "title": "Criteria",
+            "type": "array"
+          },
+          "failed_ids": {
+            "items": {
+              "type": "string"
+            },
+            "readOnly": true,
+            "title": "Failed Ids",
+            "type": "array"
+          },
+          "incident_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Incident Id",
+            "type": "string"
+          },
+          "profile_snapshot_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Profile Snapshot Id",
+            "type": "string"
+          },
+          "ready": {
+            "description": "Every criterion passes. There is no partial readiness.",
+            "readOnly": true,
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "summary": {
+            "description": "One line, and it never rounds a failure to a pass.",
+            "readOnly": true,
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "address_id",
+          "assessed_at",
+          "assessed_by",
+          "profile_snapshot_id",
+          "criteria",
+          "ready",
+          "failed_ids",
+          "summary"
+        ],
+        "title": "ReadinessAssessment",
         "type": "object"
       },
       "ReadinessResponse": {
@@ -2932,6 +3953,116 @@
         "title": "RoofSegment",
         "type": "object"
       },
+      "Route": {
+        "additionalProperties": false,
+        "description": "A traversal of the graph, drawable and explainable.",
+        "properties": {
+          "expanded_nodes": {
+            "minimum": 0.0,
+            "title": "Expanded Nodes",
+            "type": "integer"
+          },
+          "legs": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/RouteLeg"
+            },
+            "title": "Legs",
+            "type": "array"
+          },
+          "total_cost": {
+            "minimum": 0.0,
+            "title": "Total Cost",
+            "type": "number"
+          },
+          "total_distance_m": {
+            "minimum": 0.0,
+            "title": "Total Distance M",
+            "type": "number"
+          },
+          "waypoints": {
+            "items": {
+              "$ref": "#/components/schemas/Waypoint"
+            },
+            "minItems": 1,
+            "title": "Waypoints",
+            "type": "array"
+          }
+        },
+        "required": [
+          "waypoints",
+          "total_cost",
+          "total_distance_m",
+          "expanded_nodes"
+        ],
+        "title": "Route",
+        "type": "object"
+      },
+      "RouteLeg": {
+        "additionalProperties": false,
+        "description": "One leg, as an officer reads it.",
+        "properties": {
+          "avoided": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Avoided",
+            "type": "array"
+          },
+          "chose_because": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Chose Because",
+            "type": "string"
+          },
+          "cost": {
+            "minimum": 0.0,
+            "title": "Cost",
+            "type": "number"
+          },
+          "distance_m": {
+            "minimum": 0.0,
+            "title": "Distance M",
+            "type": "number"
+          },
+          "from_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "From Id",
+            "type": "string"
+          },
+          "multiplier": {
+            "minimum": 1.0,
+            "title": "Multiplier",
+            "type": "number"
+          },
+          "terms": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CostTerm"
+            },
+            "title": "Terms",
+            "type": "array"
+          },
+          "to_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "To Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_id",
+          "to_id",
+          "distance_m",
+          "cost",
+          "multiplier",
+          "chose_because"
+        ],
+        "title": "RouteLeg",
+        "type": "object"
+      },
       "SchedulerTickRequest": {
         "additionalProperties": false,
         "description": "What Cloud Scheduler sends on each tick.",
@@ -2978,6 +4109,91 @@
         ],
         "title": "Scope",
         "type": "string"
+      },
+      "SlowLoopDiagnostics": {
+        "additionalProperties": false,
+        "description": "Why the fleet panel does or does not have anything to draw.",
+        "properties": {
+          "district_id": {
+            "title": "District Id",
+            "type": "string"
+          },
+          "events_read": {
+            "minimum": 0.0,
+            "title": "Events Read",
+            "type": "integer"
+          },
+          "last_pass_correlation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Correlation Id"
+          },
+          "last_pass_ended_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Ended At"
+          },
+          "last_pass_started_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Pass Started At"
+          },
+          "newest_event": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/NewestAuditEvent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recorded": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/AgentPassLine"
+            },
+            "title": "Recorded",
+            "type": "array"
+          },
+          "server_now": {
+            "title": "Server Now",
+            "type": "string"
+          },
+          "slow_loop_agents": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Slow Loop Agents",
+            "type": "array"
+          }
+        },
+        "required": [
+          "district_id",
+          "server_now",
+          "events_read"
+        ],
+        "title": "SlowLoopDiagnostics",
+        "type": "object"
       },
       "SourceHealthView": {
         "additionalProperties": false,
@@ -3783,6 +4999,85 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "Waypoint": {
+        "additionalProperties": false,
+        "description": "One point on the route, in every frame a renderer might want it in.",
+        "properties": {
+          "face": {
+            "default": "",
+            "maxLength": 40,
+            "title": "Face",
+            "type": "string"
+          },
+          "kind": {
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "latitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latitude"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "longitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Longitude"
+          },
+          "node_id": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "x_m": {
+            "title": "X M",
+            "type": "number"
+          },
+          "y_m": {
+            "title": "Y M",
+            "type": "number"
+          },
+          "z_m": {
+            "title": "Z M",
+            "type": "number"
+          }
+        },
+        "required": [
+          "node_id",
+          "kind",
+          "x_m",
+          "y_m",
+          "z_m"
+        ],
+        "title": "Waypoint",
+        "type": "object"
+      },
       "WithheldLine": {
         "additionalProperties": false,
         "properties": {
@@ -4473,6 +5768,61 @@
         ]
       }
     },
+    "/api/v1/districts/{district_id}/slow-loop/diagnostics": {
+      "get": {
+        "description": "The one question the fleet panel cannot answer about itself.\n\nThe panel's only evidence is the audit log, and it renders an agent that\nrecorded nothing exactly the same way whether the agent did nothing, did\nsomething and was cancelled before it could say so, or did something the\nconsole then filtered out under its session floor. Those are three different\nfaults with three different fixes and one appearance, which is what this\nendpoint separates.\n\nRead-only, viewer role, and counts and ids only -- no fact value, no record\ncontents, nothing the audit sink did not already redact on the way in::\n\n    curl -sS -H \"Authorization: Bearer $TOKEN\"           \"$BASE/api/v1/districts/$DISTRICT_ID/slow-loop/diagnostics\" | jq\n\n``last_pass_correlation_id: null`` means no slow-loop agent has ever\nrecorded a pass or a step here: the loop is not running, or it is being\ncancelled before it writes. A correlation id with ``recorded`` naming fewer\nagents than ``slow_loop_agents`` names the ones that ran out of budget.\nA full ``recorded`` list beside a console showing ``0 recorded`` is a\nconsole-side filter, and ``last_pass_ended_at`` against ``server_now`` and\nagainst the console's own floor is where that is settled.",
+        "operationId": "slow_loop_diagnostics_api_v1_districts__district_id__slow_loop_diagnostics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "district_id",
+            "required": true,
+            "schema": {
+              "title": "District Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlowLoopDiagnostics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "When the slow loop last ran, and which agents recorded it",
+        "tags": [
+          "console"
+        ]
+      }
+    },
     "/api/v1/districts/{district_id}/stats": {
       "get": {
         "operationId": "district_stats_api_v1_districts__district_id__stats_get",
@@ -4894,6 +6244,409 @@
         ]
       }
     },
+    "/api/v1/incidents/{incident_id}/entry-packages": {
+      "get": {
+        "description": "Ids and statuses, in the order the packages were composed.\n\nRead from the incident log, which is where a package lives: append-only,\ngapless, sealed at close, and holding every state each package passed\nthrough. This returns the latest state of each.",
+        "operationId": "list_entry_packages_api_v1_incidents__incident_id__entry_packages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List every entry package this incident produced",
+        "tags": [
+          "incident"
+        ]
+      },
+      "post": {
+        "description": "Assess, solve, synthesise, and stage both approval cards.\n\nRuns through the runtime under the incident's own grant, so the work carries\na durable run record naming the pinned version that produced it -- the same\ntreatment the enriched brief and the intake get.\n\nThe brief's prose is model-composed where a model is wired and the\ncomposition passes two screens: every number in it must appear in the claims\nit was composed from, and it must contain no tactical language. Otherwise\nthe deterministic rendering ships and ``prose_rejection`` says which screen\nrefused it. Both cases are a 201.\n\nNothing is sent. The response carries two approval ids, both ``STAGED``.",
+        "operationId": "compose_entry_package_api_v1_incidents__incident_id__entry_packages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryPathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryPackage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compose an entry package: readiness, path, synthesised brief, two approvals",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/entry-packages/diagnostics": {
+      "get": {
+        "description": "What the autonomous composer has decided so far, and why there is no card.\n\nA read, and the only one in this file whose subject is the fleet rather than\nthe incident. Composing a package is optional by design -- every failure on\nthat path is swallowed so an optional document can never cost a frame -- and\nthe cost of that design was that a package which never appeared appeared the\nsame way as one that was never due yet. This is the question that separates\nthem: is autonomy on, does this process hold the incident, is the fallback\ntimer armed and when does it fire, has a composition been attempted, and if\none failed, with what.\n\nIds, counts, canonical criterion keys, an exception type and a capped\nmessage. No claim, no prose, no fact value -- a reader who wants the\ndocument reads the package.\n\nWhen the card has not appeared::\n\n    curl -sS -H \"Authorization: Bearer $TOKEN\"           \"$BASE/api/v1/incidents/$INCIDENT_ID/entry-packages/diagnostics\" | jq\n\n``autonomy_enabled: false`` means only the console button will ever compose.\n``tracked: false`` means this process did not open the incident and holds no\ndeadline for it. ``failures > 0`` names what went wrong. Otherwise\n``deadline_in_s`` is how long until the fallback fires and\n``outstanding_criteria`` is what the ready trigger is still waiting on.",
+        "operationId": "entry_package_diagnostics_api_v1_incidents__incident_id__entry_packages_diagnostics_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutonomyDiagnostics"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Why the loop has or has not composed an entry package yet",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/entry-packages/{package_id}": {
+      "get": {
+        "description": "The whole document as it now stands: assessment, path, brief, approvals.",
+        "operationId": "read_entry_package_api_v1_incidents__incident_id__entry_packages__package_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "package_id",
+            "required": true,
+            "schema": {
+              "title": "Package Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryPackage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Fetch one entry package in full",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/entry-packages/{package_id}/approvals/{half}": {
+      "post": {
+        "description": "One human tap on one half. ``half`` is ``entry-path`` or ``crew-brief``.\n\nTwo separate judgements, so two separate taps: whether this is a route a\ncrew may be sent down, and whether this is an accurate account of what is\nknown. The approver is the authenticated caller -- there is no field for\nnaming somebody else.\n\nApproving a half that is already granted is idempotent in effect; the\npackage simply comes back with both stamps as they stand.",
+        "operationId": "approve_entry_package_half_api_v1_incidents__incident_id__entry_packages__package_id__approvals__half__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "package_id",
+            "required": true,
+            "schema": {
+              "title": "Package Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "half",
+            "required": true,
+            "schema": {
+              "title": "Half",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryPackage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approve one half of an entry package",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/entry-packages/{package_id}/dispatch": {
+      "post": {
+        "description": "Send it. Refuses with 422 unless **both** halves are approved.\n\nThe gateway is asked again with the path approval on the request, so the\npermission that allowed the send is a recorded decision rather than a check\nthis endpoint remembered to make. Dispatching an already-sent package\nreturns it unchanged rather than sending it twice.",
+        "operationId": "dispatch_entry_package_api_v1_incidents__incident_id__entry_packages__package_id__dispatch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "package_id",
+            "required": true,
+            "schema": {
+              "title": "Package Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryPackage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark an approved package sent to the crew",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/entry-packages/{package_id}/pdf": {
+      "get": {
+        "description": "The whole package on paper: verdict, prose, every claim with its refs.\n\nWritten by a hand-rolled encoder in ``incident/pdf.py`` rather than by a\ndependency, on the same argument as the PNG encoder in the fake tile\nadapter -- the credential-free path is the default path and the test suite,\nand a PDF is a header, a few objects and a cross-reference table.\n\nDownloadable at any state, including before either half is approved: the\napproval block prints what has and has not been signed, so a sheet nobody\napproved says so on its own face.",
+        "operationId": "entry_package_pdf_api_v1_incidents__incident_id__entry_packages__package_id__pdf_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "package_id",
+            "required": true,
+            "schema": {
+              "title": "Package Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/pdf": {}
+            },
+            "description": "The printed brief"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download an entry package as a PDF",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/entry-path": {
+      "post": {
+        "description": "A\\* over a graph derived from this building's own geometry.\n\nNodes come from the footprint the slow loop measured and the storeys it\nderived; edge costs come from measured thermal peaks, coverage voids,\nUNSCANNED faces, roof obstructions, the collapse zone and the structural\nfacts and conflicts on the profile. Every leg comes back with the terms that\npriced it and the alternatives it was priced against.\n\n``refused: true`` is a 200 with a stated reason -- no pre-incident geometry,\nno storeys, a storey the model does not have, or a graph the cost model\ndisconnected. There is no fallback route and no straight line.",
+        "operationId": "solve_entry_path_api_v1_incidents__incident_id__entry_path_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryPathRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryPathPlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Solve the optimal entry and egress route over the measured geometry",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
     "/api/v1/incidents/{incident_id}/frames": {
       "post": {
         "description": "The autonomous imagery path.\n\nThe agent resolves the face from the slow loop's footprint, reads the frame\nwith Gemini, turns the observations into a registered thermal frame, and\namends the brief. It refuses rather than guesses: no pre-incident geometry,\nor a bearing that resolves to no single wall, comes back with a stated\nreason and changes nothing.",
@@ -5049,7 +6802,7 @@
     },
     "/api/v1/incidents/{incident_id}/log/stream": {
       "get": {
-        "description": "Every entry the incident has recorded, in order, resumable.\n\n**The same record, pushed rather than polled.** ``GET /log`` already returns\nthis; it is a document, fetched when somebody asks. A commander watching the\nfleet work wants the entries as they land, and the log is the right thing to\nstream because it is monotonic and gapless -- ``sequence`` is a resume point\nthat cannot skip and cannot repeat, which is exactly what ``Last-Event-ID``\nneeds and what a version number on a brief already gives the other stream.\n\n``agent_versions`` travels with each frame, which the document endpoint does\nnot send. It is how a console attributes an entry to the agent that produced\nit: without it every card would have to be inferred from the entry type, and\ntwo agents that write the same type would be indistinguishable.\n\nCarries what the log carries and nothing else -- ids, keys, counts and\nreasons. The intake entry names attributes and outcomes, never the caller's\nwords; the focus entry carries references, never values. A stream that\nwidened either would be a second, looser copy of the log.",
+        "description": "Every entry the incident has recorded, in order, resumable.\n\n**The same record, pushed rather than polled.** ``GET /log`` already returns\nthis; it is a document, fetched when somebody asks. A commander watching the\nfleet work wants the entries as they land, and the log is the right thing to\nstream because it is monotonic and gapless -- ``sequence`` is a resume point\nthat cannot skip and cannot repeat, which is exactly what ``Last-Event-ID``\nneeds and what a version number on a brief already gives the other stream.\n\n``agent_versions`` travels with each frame, which the document endpoint does\nnot send. It is how a console attributes an entry to the agent that produced\nit: without it every card would have to be inferred from the entry type, and\ntwo agents that write the same type would be indistinguishable.\n\nCarries what the log carries and nothing else -- ids, keys, counts and\nreasons. The intake entry names attributes and outcomes, never the caller's\nwords; the focus entry carries references, never values. A stream that\nwidened either would be a second, looser copy of the log.\n\n**Finding a package that is waiting for two signatures.** Since the\nincident loop composes entry packages for itself, a console has to learn\nabout one without being told, and this stream is where it does. There is no\nsecond endpoint to poll: filter these frames for\n\n    ``entry_type == \"ENTRY_PACKAGE\"`` and ``content[\"status\"] ==\n    \"AWAITING_APPROVAL\"``\n\nand the newest such frame *for a given* ``content[\"package_id\"]`` is the\ncurrent state of that package. Every state change appends a fresh entry\ncarrying the whole document, so a later frame supersedes an earlier one\nwith the same id and a package that has been signed or sent stops matching\non its own.\n\nThe frame carries everything the approval card needs, flattened beside the\ndocument so nothing has to be re-derived:\n``package_id``; ``outstanding`` (which halves are unsigned);\n``path_approval_id`` and ``brief_approval_id``; ``ready`` and\n``failed_criteria`` (the readiness verdict, and what did not pass);\n``path_refused``; ``prose_source``; and ``autonomy_trigger`` -- empty when a\nhuman asked for the package, otherwise ``ready``, ``sweep-terminated`` or\n``deadline``. **Render the last three differently from the first**: a\npackage composed against a deadline states gaps that a ready one does not\nhave, and a card that showed them alike would be the one place this system\nlet a gap read as a verdict.\n\nApproving is two posts to\n``/incidents/{id}/entry-packages/{package_id}/approvals/{half}``, one per\nid above, and sending is a third to ``.../dispatch``. Nothing the loop does\non its own touches any of the three.",
         "operationId": "stream_incident_log_api_v1_incidents__incident_id__log_stream_get",
         "parameters": [
           {
@@ -5116,6 +6869,49 @@
           }
         },
         "summary": "Stream incident log entries over SSE",
+        "tags": [
+          "incident"
+        ]
+      }
+    },
+    "/api/v1/incidents/{incident_id}/readiness": {
+      "post": {
+        "description": "Evaluate six named criteria against what this incident has recorded.\n\nA write, not a read: every criterion leaves a line in the incident log under\nthe agent that evaluated it, and so does the verdict.\n\n``ready: false`` is a 200, not an error. Not ready is a finding about the\nrecord -- it names which criteria are outstanding and what each of them\nchecked -- and it does not stop anything: a commander may still compose,\napprove and send a package, with the verdict printed on it.",
+        "operationId": "assess_readiness_api_v1_incidents__incident_id__readiness_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "incident_id",
+            "required": true,
+            "schema": {
+              "title": "Incident Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessAssessment"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assess whether the record supports handing a crew an entry plan",
         "tags": [
           "incident"
         ]
@@ -6275,7 +8071,7 @@
     },
     "/api/v1/terrain/{layer}/{z}/{x}/{y}": {
       "get": {
-        "description": "Height, or the skin drawn over it, for one square of the region.\n\n**Not under ``/districts``, because it is not per-district.** The tile client\nis built once from ``FIRE_ACTIVITY_REGION``, which is a property of the\nprocess rather than of a district -- this municipality's two districts share\none region and would share every tile. A district id in the path would have\nbeen decorative, and a decorative path parameter is a claim that something\nvaries with it.\n\n**Bytes, not JSON.** Every other read on this API answers with a document;\na tile answers with an image, because the console asks for hundreds of them\nas a camera moves and base64 inside an envelope would cost a third more\nbandwidth for nothing. It is the same authorization and the same scope as\nthe fire-activity read it belongs to.\n\n**This is a proxy, and a narrow one.** The upstreams are AWS's public\n``terrarium`` grid for height and Google's Map Tiles API for imagery; the\nMaps key and the tile session live in this process and neither reaches a\nclient. A tile outside the configured fire-activity region, or outside the\nzoom range the terrain view uses, is refused before any upstream request is\nmade -- without that this endpoint is an open relay onto somebody else's\nmetered quota, reachable by anyone who can reach the console.\n\n**Elevation bytes are data.** A terrarium pixel encodes metres in its RGB\nchannels, so the payload is passed through untouched: re-encoding it would\nchange the terrain rather than the file size, and would do it invisibly.\n\n**404, not 200, for a refused tile.** This is the one read on this API that\ndoes not answer a refusal with a document, because its caller is a tile\nloader rather than a person: deck.gl reads a non-200 as \"no tile here\" and\ndraws the mesh with a gap, which is the correct rendering of a square that\nis missing. A 200 carrying an explanation would be decoded as terrain.",
+        "description": "Height, or the skin drawn over it, for one square of the region.\n\n**Not under ``/districts``, because it is not per-district.** The tile client\nis built once from ``FIRE_ACTIVITY_REGION``, which is a property of the\nprocess rather than of a district -- this municipality's two districts share\none region and would share every tile. A district id in the path would have\nbeen decorative, and a decorative path parameter is a claim that something\nvaries with it.\n\n**Bytes, not JSON.** Every other read on this API answers with a document;\na tile answers with an image, because the console asks for hundreds of them\nas a camera moves and base64 inside an envelope would cost a third more\nbandwidth for nothing. It is the same authorization and the same scope as\nthe fire-activity read it belongs to.\n\n**This is a proxy, and a narrow one.** The upstreams are AWS's public\n``terrarium`` grid for height and Google's Map Tiles API for imagery; the\nMaps key and the tile session live in this process and neither reaches a\nclient. A tile outside the configured fire-activity region, or outside the\nzoom range the terrain view uses, is refused before any upstream request is\nmade -- without that this endpoint is an open relay onto somebody else's\nmetered quota, reachable by anyone who can reach the console.\n\n**Elevation bytes are data.** A terrarium pixel encodes metres in its RGB\nchannels, so the payload is passed through untouched: re-encoding it would\nchange the terrain rather than the file size, and would do it invisibly.\n\n**404, not 200, for a refused tile.** This is the one read on this API that\ndoes not answer a refusal with a document, because its caller is a tile\nloader rather than a person: deck.gl reads a non-200 as \"no tile here\" and\ndraws the mesh with a gap, which is the correct rendering of a square that\nis missing. A 200 carrying an explanation would be decoded as terrain.\n\n**The caching here is the difference between a map that opens and one that\nreloads.** A screenful of mesh is two requests per square -- height and skin\n-- so a first paint is scores of them, and every later camera move re-asks\nfor squares it has already seen. Three things make that cheap:\n\n* ``max-age`` from the tile itself, which is what ``MapTile.max_age_s``\n  is for: a month for elevation, a week for imagery.\n* ``immutable``, because a square at a fixed zoom, x and y *is* immutable\n  for that window -- terrain does not move and imagery is re-flown on a\n  scale of years. Without it a browser reload revalidates every tile on\n  screen, which is a round trip each to be told nothing changed.\n* An ``ETag``, so the revalidations that do happen -- a hard refresh, a\n  cache that has aged out -- come back 304 with no body instead of a\n  quarter-megabyte of identical PNG.\n\n``private`` stays: these are served behind the console's authorization and\nhave no business in a shared cache, even though the bytes are not personal.\n\nOne caveat worth knowing before anybody measures this: the console reaches\nthis route through its own gateway, which rebuilds request and response\nheaders from scratch so that a browser-supplied ``Authorization`` cannot\nsurvive into an upstream call. It forwards ``Cache-Control`` and does not\nyet forward ``ETag`` or ``If-None-Match``, so today ``immutable`` is what\nthe browser acts on and the validator below only serves a direct caller.\nThat is the right way round -- a tile not requested beats a tile requested\nand answered 304 -- but it means the ETag is not what makes the map fast.",
         "operationId": "terrain_tile_api_v1_terrain__layer___z___x___y__get",
         "parameters": [
           {

@@ -19,11 +19,14 @@ import pytest
 
 from firstdue.container import Container, build_container
 from firstdue.demo.scenario import DISPUTED_ADDRESS_ID, run_slow_loop
-from firstdue.domain.enums import BenchmarkType, BriefStage, FaceLabel, PolicyAction
+from firstdue.domain.enums import BenchmarkType, BriefStage, FaceLabel, LogEntryType, PolicyAction
 from firstdue.domain.keys import Keys
 from firstdue.errors import BriefNotPersistedError, GrantExpiredError
+from firstdue.incident.drone import SYNTHETIC_SOURCE
 from firstdue.incident.fusion import THERMAL_CAVEAT, ThermalFrame
+from firstdue.incident.intake import IntakeChannel
 from firstdue.incident.session import IncidentSession
+from firstdue.ports.audit import AuditEventKind
 from firstdue.settings import AppEnv, Settings
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -630,3 +633,460 @@ async def test_concurrent_resource_requests_do_not_cross_their_outcomes(
 
     # Each request got its own answer back, about the kind it asked for.
     assert [o.kind_id for o in outcomes] == kinds
+
+
+async def test_every_incident_agent_leaves_a_trace_the_console_can_read(
+    container: Container, session: IncidentSession
+) -> None:
+    """The console's evidence is the audit log, not the incident log.
+
+    They answer different questions: the incident log is the record of *the
+    fire*, the audit log is the record of *the fleet*. `sensor-fusion` and
+    `incident-recorder` did their whole job through the recorder, which wrote
+    the incident log and nothing else -- so the console, which reads only the
+    audit log, drew both as idle for the length of an incident they were busy
+    through. `incident-interceptor` had the same problem for a different reason:
+    a brief does not go through the recorder's ordinary append path at all.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+    await session.run_intake(
+        incident_id,
+        narrative="Heavy smoke from the top floor, flames in two windows.",
+        channel=IntakeChannel.CALL_911,
+        source_ref="intake/CAD-0001",
+        correlation_id="corr_trace",
+    )
+    await session.run_resource_request(
+        incident_id,
+        correlation_id="corr_trace_water",
+        kind_id="water-supply",
+        detail="hydrant use",
+        approval_id=None,
+    )
+
+    events = await container.audit.list_events(limit=500)
+    actors = {e.actor for e in events if e.kind is AuditEventKind.AGENT_STEP}
+    assert {"incident-recorder", "incident-interceptor"} <= actors
+
+    # Every step names the entry it stands for and where that entry sits, which
+    # is enough to find it -- and nothing copied out of it. The content lives in
+    # the incident log with its provenance; a second uncited copy here would be
+    # a claim nobody could check.
+    #
+    # Scoped to this incident: the slow-loop watchers write `AGENT_STEP` too,
+    # about districts and addresses, and they carry their own detail shape.
+    for event in events:
+        if event.kind is AuditEventKind.AGENT_STEP and event.target == incident_id:
+            assert event.detail.get("entry"), event
+            assert event.detail.get("sequence"), event
+            assert " " not in event.detail["entry"], event
+
+
+async def test_a_declared_synthetic_sweep_marks_every_reading_it_produces(
+    container: Container, session: IncidentSession
+) -> None:
+    """The condition the permission is granted on.
+
+    A generated frame read by a real model is allowed only because the record
+    says what it is everywhere it appears. If that labelling ever stops
+    happening, the refusal in `sweep_permitted` is protecting nothing and the
+    console is showing an unmarked reading of an imaginary building -- so this
+    asserts the label, not merely that the sweep ran.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    flown = await session.run_drone_sweep_step(incident_id, correlation_id="corr_sweep")
+    assert flown["flown"] is True
+    assert flown["source"] == SYNTHETIC_SOURCE
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    readings = [
+        e
+        for e in entries
+        if e.entry_type is LogEntryType.AGENT_ANALYSIS
+        and (e.content or {}).get("agent_ref", "").startswith("sensor-fusion")
+    ]
+    assert readings, "the sweep recorded nothing under sensor-fusion"
+    for reading in readings:
+        content = reading.content or {}
+        # In the headline an officer actually reads, not buried in a detail tail.
+        assert "SIMULATED" in str(content.get("headline", "")), content
+        # And in the references, so the record itself names the source.
+        assert SYNTHETIC_SOURCE in list(content.get("refs", [])), content
+
+
+async def test_a_refused_sweep_is_recorded_rather_than_returned_silently(
+    container: Container, session: IncidentSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining is this agent working, and it left no trace anywhere.
+
+    The reason went back to the caller as a string and the console printed it in
+    a corner. `sensor-fusion` -- asked to do the one thing it exists for, and
+    having given a considered answer -- read as an agent that had done nothing
+    at all for the length of the incident.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    # A live model with no simulation declared: the ordinary refusal.
+    monkeypatch.setattr(type(container.vision), "model_ref", property(lambda _: "gemini-3.5-flash"))
+
+    result = await session.run_drone_sweep_step(incident_id, correlation_id="corr_refused")
+    assert result["flown"] is False
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    declined = [
+        e
+        for e in entries
+        if e.entry_type is LogEntryType.AGENT_ANALYSIS
+        and "declined" in str((e.content or {}).get("headline", ""))
+    ]
+    assert declined, "a refusal that records nothing is indistinguishable from an idle agent"
+    assert "generated" in str((declined[0].content or {}).get("detail", ""))
+
+
+def _analyses(entries, agent_id: str) -> list:
+    """Every analysis one agent filed under its own id."""
+    return [
+        e
+        for e in entries
+        if e.entry_type is LogEntryType.AGENT_ANALYSIS
+        and str((e.content or {}).get("agent_ref", "")).startswith(agent_id)
+    ]
+
+
+# ------------------------------------------------ the slow loop, cited on the card
+#
+# The incident agents' cards described their own work and stopped. Read down the
+# stream, `sensor-fusion` looked like it had worked out which wall it was
+# pointing at, and the interceptor looked like it had decided six criteria on
+# the spot. Neither is true: the footprint was measured before the bell and the
+# criteria are checks on facts other agents filed. These tests are that
+# dependency made visible, and -- the harder half -- kept honest.
+
+
+async def _cards(container: Container, incident_id: str, agent_id: str) -> list[str]:
+    """Headline and detail of every card one agent filed, as one string each."""
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    return [
+        f"{e.content['headline']} :: {e.content['detail']}" for e in _analyses(entries, agent_id)
+    ]
+
+
+def _card(cards: list[str], needle: str) -> str:
+    matched = [card for card in cards if needle in card]
+    assert matched, f"no card matching {needle!r} in {cards}"
+    return matched[0]
+
+
+async def test_the_sweeps_cards_name_whose_measurement_resolved_the_wall(
+    container: Container, session: IncidentSession
+) -> None:
+    """`sensor-fusion` cannot pick a wall without work the slow loop already did.
+
+    The footprint decides which wall a bearing points at -- not the caller and
+    not the model -- so the headline says whose loop supplied it, and the detail
+    names the agents that filed the attributes it is a function of. Read off
+    ``produced_by_agent`` on the snapshot, never mapped from a source type.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+    await session.run_drone_sweep_step(incident_id, correlation_id="corr-sweep-0")
+
+    read = _card(await _cards(container, incident_id, "sensor-fusion"), "resolved it to")
+    assert "on the footprint the slow loop measured" in read
+    assert "the structural facts it is a function of were filed by" in read
+    assert "records-watcher" in read
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    resolved = [
+        e
+        for e in _analyses(entries, "sensor-fusion")
+        if "resolved it to" in str(e.content["headline"])
+    ]
+    # In the refs as well as the prose: an agent id is an id, and a console
+    # filtering the stream should be able to find the dependency without
+    # parsing a sentence.
+    assert "records-watcher" in resolved[0].content["refs"]
+
+
+async def test_the_readiness_cards_name_the_slow_loop_work_each_one_checks(
+    container: Container, session: IncidentSession
+) -> None:
+    """Four of the six criteria are checks on another agent's output.
+
+    Each cites what the record actually holds: an author for the facts, a *rule*
+    for the conflict -- because a conflict records a ``rule_id`` and no actor --
+    and, for freshness, neither, because what that one checks belongs to the
+    read rather than to any agent.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    await session.emit_instant(opened)
+    await session.assess_entry_readiness(opened.incident.incident_id)
+
+    cards = await _cards(container, opened.incident.incident_id, "incident-interceptor")
+
+    geometry = _card(cards, "readiness geometry.present")
+    assert "the attributes the geometry is a function of were filed by" in geometry
+    assert "geometry-watcher" in geometry
+
+    hazard = _card(cards, "readiness hazard.resolved")
+    assert "these attributes were filed by records-watcher" in hazard
+
+    conflicts = _card(cards, "readiness conflicts.load-bearing")
+    # The rule, and explicitly not an agent: nothing on a conflict records one.
+    assert "detected by rule permit-vs-lidar-story-count" in conflicts
+    assert "structure-watch" not in conflicts
+
+    fresh = _card(cards, "readiness snapshot.fresh")
+    assert "the freshness belongs to the read rather than to any agent" in fresh
+
+    # And the two criteria that check *this* incident's own agents are left
+    # alone. Crediting the slow loop for a thermal frame or a 911 narrative
+    # would be the fabrication the whole exercise is guarding against.
+    for own in ("readiness thermal.coverage", "readiness intake.access-bound"):
+        assert "filed by" not in _card(cards, own)
+
+
+async def test_the_entry_path_card_names_what_priced_the_route(
+    container: Container, session: IncidentSession
+) -> None:
+    """The A* is the cheap part. The cost terms are the slow loop's."""
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+    for index in range(4):
+        await session.run_drone_sweep_step(incident_id, correlation_id=f"corr-sweep-{index}")
+    await session.solve_entry_path(incident_id, target_level=0)
+
+    solved = _card(
+        await _cards(container, incident_id, "incident-interceptor"), "solved the entry path"
+    )
+    assert "over the geometry the slow loop measured" in solved
+    assert "hazard costs from facts filed by records-watcher" in solved
+    assert "found by permit-vs-lidar-story-count" in solved
+
+
+async def test_an_input_with_no_recorded_author_is_described_and_not_credited(
+    container: Container, session: IncidentSession
+) -> None:
+    """The limit on all of the above, and the one that matters most.
+
+    A cold address has a real, missing input -- no footprint -- and nobody on
+    record who would have measured one. The card says the loop, because the
+    absence of geometry is exactly what the snapshot carries; it must not say an
+    agent, because "geometry-watcher never ran" is a claim about a process this
+    incident cannot see and an append-only record would keep it forever.
+    """
+    await _warm(container)
+    opened = await _open(session, address=COLD_ADDRESS)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    result = await session.analyze_imagery(
+        incident_id,
+        image=b"\x89PNG\r\n\x1a\n" + b"0" * 64,
+        mime_type="image/png",
+        camera_bearing_deg=90.0,
+        source="ground-station",
+    )
+    assert result["cold_start"] is True
+
+    refusal = _card(
+        await _cards(container, incident_id, "sensor-fusion"), "cannot read this address"
+    )
+    assert "the slow loop never profiled it" in refusal
+    assert "carries no footprint" in refusal
+    # Named nobody. Not one of the agents that would plausibly have done it.
+    for agent in ("geometry-watcher", "records-watcher", "hazard-watcher", "structure-watch"):
+        assert agent not in refusal
+
+
+async def test_a_finished_sweep_says_it_is_finished_instead_of_going_quiet(
+    container: Container, session: IncidentSession
+) -> None:
+    """Deciding not to fly is a decision, and it looked like the sweep stalling.
+
+    Three faces each produced a card and finishing produced nothing, so the
+    console showed an agent that had been working and then stopped -- which is
+    what a crashed agent also looks like.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    while (await session.run_drone_sweep_step(incident_id, correlation_id="corr_sweep"))["flown"]:
+        pass
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    analyses = _analyses(entries, "sensor-fusion")
+
+    # Which wall is flown next, and why: the choice, not only its answer.
+    chosen = [e for e in analyses if "flying a SIMULATED pass" in str(e.content["headline"])]
+    assert chosen, "the agent picked a wall on every pass and recorded none of them"
+    assert "UNSCANNED" in str(chosen[0].content["detail"])
+
+    complete = [e for e in analyses if "complete" in str(e.content["headline"])]
+    assert complete, "the sweep ended and the agent that ended it said nothing"
+    assert complete[-1].sequence == max(e.sequence for e in analyses)
+
+
+async def test_a_frame_on_an_unprofiled_address_is_recorded_as_a_refusal(
+    container: Container, session: IncidentSession
+) -> None:
+    """Cold start is the two-loop dependency failing, and it was a return value.
+
+    This agent cannot attribute a frame to a wall that nobody measured, so the
+    wall stays UNSCANNED and somebody has to fly it again -- an operational fact
+    that reached the caller as a string and the incident's record not at all.
+    """
+    await _warm(container)
+    opened = await _open(session, address=COLD_ADDRESS)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    result = await session.analyze_imagery(
+        incident_id,
+        image=b"\x89PNG\r\n\x1a\n" + b"0" * 64,
+        mime_type="image/png",
+        camera_bearing_deg=90.0,
+        source="ground-station",
+    )
+    assert result["registered"] is False
+    assert result["cold_start"] is True
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    refused = _analyses(entries, "sensor-fusion")
+    assert refused, "the frame was refused and sensor-fusion read as idle"
+    # The headline names the loop whose work is missing, because that is the
+    # whole content of the refusal: this agent resolves a bearing against a
+    # footprint and there is no footprint. It names no *agent* -- nothing on
+    # this snapshot records who would have measured one.
+    headline = str(refused[0].content["headline"])
+    assert "the slow loop never profiled it" in headline
+    detail = str(refused[0].content["detail"])
+    assert "carries no footprint" in detail
+    assert "The slow loop is what supplies it" in detail
+    assert opened.incident.address_id in refused[0].content["refs"]
+
+
+async def test_every_resource_request_records_the_gateways_answer(
+    container: Container, session: IncidentSession
+) -> None:
+    """Only a *sent* notification was in the log.
+
+    So the outcome the whole governance model exists to produce -- a commitment
+    staged on a chief's card and sent to nobody -- left no entry at all, and an
+    approval gate whose firing is invisible is indistinguishable from an agent
+    that never asked.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    sent = await session.request_resource(
+        incident_id, kind_id="water-supply", detail="hydrant in use", approval_id=None
+    )
+    staged = await session.request_resource(
+        incident_id, kind_id="gas-shutoff", detail="", approval_id=None
+    )
+    assert sent.action is PolicyAction.ALLOW
+    assert staged.action is PolicyAction.REQUIRE_APPROVAL
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    decisions = _analyses(entries, "agency-notifier")
+    assert len(decisions) == 2
+
+    cleared = decisions[0].content
+    assert "cleared" in str(cleared["headline"])
+    assert sent.rule_id in cleared["refs"] and sent.decision_id in cleared["refs"]
+
+    waiting = decisions[1].content
+    assert "chief" in str(waiting["headline"])
+    assert staged.approval_id in waiting["refs"]
+    # And nothing about it claims a partner was told.
+    assert "nobody has been told" in str(waiting["detail"])
+
+
+async def test_the_enriched_stage_says_whether_prose_was_actually_written(
+    container: Container, session: IncidentSession
+) -> None:
+    """A brief with no narrative because none was wanted and a brief with no
+    narrative because the composition was refused look identical on screen.
+
+    ``BRIEF_EMITTED`` carries both booleans as fields, which is the right shape
+    for a record and the wrong shape for a card: nothing in it reads as an agent
+    having composed anything.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    emission = await session.emit_enriched(incident_id)
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    composed = [
+        e
+        for e in _analyses(entries, "incident-interceptor")
+        if "composed the enriched brief" in str(e.content["headline"])
+    ]
+    assert len(composed) == 1
+    detail = str(composed[0].content["detail"])
+    assert ("accepted" in detail) is emission.narrative_available
+    assert emission.emission_id in composed[0].content["refs"]
+
+
+async def test_the_360_records_whether_the_observation_reached_the_profile(
+    container: Container, session: IncidentSession
+) -> None:
+    """Two facts the resolution entry cannot carry.
+
+    Whether the officer's words parsed as the type the attribute is measured in
+    -- a resolution kept as free text is still authoritative and comparable to
+    nothing -- and whether the durable write actually landed. Losing the race
+    with a slow-loop pass is a correct outcome and a silent one, and it means
+    the next incident at this address opens against the disagreement this one
+    settled.
+    """
+    await _warm(container)
+    opened = await _open(session)
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+
+    profile = await container.profiles.get(DISPUTED_ADDRESS_ID)
+    assert profile is not None
+    conflict = profile.open_conflicts[0]
+    await session.resolve(
+        incident_id,
+        conflict_id=conflict.conflict_id,
+        observed_value="3",
+        resolved_by="bc-09",
+        note="Walked the Charlie side.",
+    )
+
+    entries = (await container.incident_log.get_log(incident_id)).entries
+    settled = [
+        e
+        for e in _analyses(entries, "incident-interceptor")
+        if "settled" in str(e.content["headline"])
+    ]
+    assert settled, "the 360 resolution left no entry naming the agent that wrote it"
+    content = settled[0].content
+    assert conflict.canonical_key in str(content["headline"])
+    assert "parsed as" in str(content["detail"])
+    assert conflict.conflict_id in content["refs"]

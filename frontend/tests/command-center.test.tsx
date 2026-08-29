@@ -831,6 +831,66 @@ describe('the dispatch transition', () => {
     expect(screen.getByLabelText('Structures where records disagree')).toBeInTheDocument();
     expect(screen.getAllByRole('status')[0]).toHaveTextContent(/Grant revoked, log sealed/);
   });
+
+  /**
+   * Hold the console's POST to `fragment` open, and hand back the release.
+   *
+   * The in-flight label exists only while a request is open, so a test that
+   * wants to read it has to keep one open. Against the ordinary stub, which
+   * answers on the next microtask, the write is finished before an assertion
+   * can run and the test would pass just as happily against the bug below.
+   */
+  function holdOpen(fragment: string) {
+    const base = stubFetch();
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes(fragment) && init?.method === 'POST') await held;
+      return base(input, init);
+    });
+    return release;
+  }
+
+  /**
+   * Every write on this screen shared one busy flag, and the only control that
+   * put that flag into words was the banner's close button -- so a chief who
+   * asked `agency-notifier` to tell the water department was told, at the top
+   * of a live incident, that the incident was being closed.
+   */
+  it('says it is notifying, not closing, while a resource request is open', async () => {
+    const release = holdOpen('/resources');
+    await dispatch();
+
+    fireEvent.click(screen.getByRole('button', { name: /water department/i }));
+
+    const label = await screen.findByTestId('in-flight-status');
+    expect(label).toHaveTextContent(/notifying/i);
+    expect(label).not.toHaveTextContent(/closing/i);
+    // And the banner is not quietly saying it either: the close control is
+    // still offering to close, because nobody has asked it to.
+    expect(screen.getByRole('button', { name: /close incident/i })).toBeInTheDocument();
+
+    await act(async () => {
+      release();
+    });
+  });
+
+  it('says it is closing while the close is open', async () => {
+    const release = holdOpen('/close');
+    await dispatch();
+
+    fireEvent.click(screen.getByRole('button', { name: /close incident/i }));
+
+    const label = await screen.findByTestId('in-flight-status');
+    expect(label).toHaveTextContent(/closing/i);
+    expect(label).not.toHaveTextContent(/notifying/i);
+
+    await act(async () => {
+      release();
+    });
+  });
 });
 
 describe('the building imagery panel', () => {
@@ -1013,6 +1073,10 @@ describe('the standby heartbeat', () => {
   const districtReads = (mock: ReturnType<typeof stubFetch>) =>
     mock.mock.calls.filter(([input]) => String(input).includes('/queue')).length;
 
+  /** The fleet's own evidence, which is read on its own timer. */
+  const auditReads = (mock: ReturnType<typeof stubFetch>) =>
+    mock.mock.calls.filter(([input]) => String(input).includes('/audit/events')).length;
+
   /** Fake timers, and a flush that lets the fetches settle inside `act`. */
   async function tick(ms: number) {
     await act(async () => {
@@ -1025,13 +1089,88 @@ describe('the standby heartbeat', () => {
     const fetchMock = stubFetch();
     vi.stubGlobal('fetch', fetchMock);
     try {
-      renderConsole();
+      // Live mode, so the heartbeat is measured on its own.
+      //
+      // Under the demo choreography a slow-loop pass runs shortly after load
+      // and re-reads the district when it finishes, which is a second reader of
+      // the same endpoint. That is intended -- see `FIRST_PASS_MS` -- and it is
+      // not what this test is about, so the choreography is off here and every
+      // read counted below is the interval's own.
+      renderConsole({ status: { ...STATUS, mode: 'live' } });
       // Standby data was injected, so nothing has been fetched yet.
       expect(districtReads(fetchMock)).toBe(0);
       await tick(8000);
       expect(districtReads(fetchMock)).toBe(1);
       await tick(8000);
       expect(districtReads(fetchMock)).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps reading the fleet audit log while an incident is open', async () => {
+    // The district poll stops when an incident opens, and the fleet read used
+    // to ride it. So for the whole incident the console held the audit log as
+    // it stood at dispatch, and `incident-interceptor`, `incident-recorder` and
+    // `sensor-fusion` -- which record everything they do there -- were drawn
+    // idle through the ninety seconds they were busiest. They were working;
+    // nobody asked again.
+    vi.useFakeTimers();
+    const fetchMock = stubFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderConsole();
+      fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
+      await tick(0);
+      fireEvent.click(screen.getByTestId('dispatch-button'));
+      await tick(0);
+      expect(screen.getByLabelText('Active incident')).toBeInTheDocument();
+
+      const before = auditReads(fetchMock);
+      await tick(20000);
+      expect(auditReads(fetchMock)).toBeGreaterThan(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts the choreography’s first pass shortly after load, not a minute in', async () => {
+    // Twenty-five seconds of an untouched screen, with every slow-loop agent
+    // reading idle, is indistinguishable from a console that is broken.
+    vi.useFakeTimers();
+    const fetchMock = stubFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderConsole();
+      const polls = () =>
+        fetchMock.mock.calls.filter(([input]) => String(input).includes('/poll')).length;
+      expect(polls()).toBe(0);
+      await tick(4000);
+      expect(polls()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves the operator’s own pass button alone while the page is arriving', async () => {
+    // The lead-in is a few seconds rather than immediate for this reason: a
+    // pass fired on mount disables the one manual control on screen before
+    // anyone has had a chance to reach it.
+    renderConsole();
+    expect(screen.getByTestId('run-slow-loop-pass')).not.toBeDisabled();
+  });
+
+  it('reads the fleet immediately on load rather than one interval later', async () => {
+    // A fresh console draws the fleet from an empty list. Waiting for the first
+    // tick showed every agent in the catalog as idle for the opening seconds of
+    // the demo, which is when someone is looking hardest.
+    vi.useFakeTimers();
+    const fetchMock = stubFetch();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderConsole();
+      await tick(0);
+      expect(auditReads(fetchMock)).toBeGreaterThan(0);
     } finally {
       vi.useRealTimers();
     }
@@ -1071,6 +1210,118 @@ describe('the standby heartbeat', () => {
       unmount();
       await tick(40000);
       expect(districtReads(fetchMock)).toBe(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * A restart onto a log that outlived it.
+ *
+ * `make live-demo` runs against a real Firestore, which keeps the audit log
+ * across server restarts, and every other test in this suite starts from an
+ * empty log -- so the state a live console actually mounts into, a log already
+ * holding a complete previous pass, had no coverage at all. That is the gap two
+ * "fixed" attempts fell through: both scoped a counter to a unit of work read
+ * *out of* the log, and on a fresh restart the newest pass in the log belongs
+ * to the last run, so the console anchored on it and displayed its totals.
+ *
+ * Mounted with no injected events, so the floor is taken from the first audit
+ * read the way it is on a real load.
+ */
+describe('a console restarted onto a live log it did not watch fill', () => {
+  const WATCHER = 'records-watcher';
+  const OTHER = 'structure-watch';
+
+  /** A second slow agent, so "every agent" means more than one row. */
+  const FLEET_AGENTS = [
+    ...AGENTS,
+    { ...AGENTS[0]!, agent_id: OTHER, ref: `${OTHER}@1.0.0` },
+  ];
+
+  function step(over: Record<string, unknown>) {
+    return {
+      audit_id: `audit_${Math.random().toString(36).slice(2)}`,
+      kind: 'agent_step',
+      occurred_at: '2026-08-20T07:00:00+00:00',
+      actor: WATCHER,
+      target: ADDRESS,
+      incident_id: null,
+      correlation_id: 'corr_last_run',
+      detail: {},
+      ...over,
+    };
+  }
+
+  /** What Firestore hands back the instant the console reconnects: a complete
+   *  slow-loop pass, every event of it from the run before this one. */
+  const LAST_RUN = [
+    step({ occurred_at: '2026-08-20T07:00:00+00:00' }),
+    step({ occurred_at: '2026-08-20T07:00:01+00:00' }),
+    step({ occurred_at: '2026-08-20T07:00:02+00:00', kind: 'agent_pass' }),
+    step({ occurred_at: '2026-08-20T07:00:03+00:00', actor: OTHER }),
+    step({ occurred_at: '2026-08-20T07:00:04+00:00', actor: OTHER, kind: 'agent_pass' }),
+  ];
+
+  /** The same log, plus one step this session watched land. */
+  const THIS_SESSION = [
+    ...LAST_RUN,
+    step({ occurred_at: '2026-08-20T08:30:00+00:00', correlation_id: 'corr_this_run' }),
+  ];
+
+  async function tick(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it('reads every agent idle at zero recorded, whatever the log already held', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', stubFetch({ '/audit/events': LAST_RUN, '/audit/decisions': [] }));
+    try {
+      renderConsole({ initialEvents: [], initialDecisions: [], initialAgents: FLEET_AGENTS });
+      await tick(0);
+      for (const id of [WATCHER, OTHER]) {
+        const row = screen.getByTestId(`fleet-row-${id}`);
+        expect(row).toHaveTextContent('0 recorded');
+        expect(row).toHaveTextContent('idle');
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('climbs in real time once the fleet writes something this session watched', async () => {
+    vi.useFakeTimers();
+    // The first read returns the previous run and every read after it returns
+    // that plus one new step, which is what a poll against an accumulating log
+    // looks like.
+    let reads = 0;
+    const fallback = stubFetch({ '/audit/decisions': [] });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/audit/events')) {
+        reads += 1;
+        return new Response(JSON.stringify(reads === 1 ? LAST_RUN : THIS_SESSION), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return fallback(input, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      renderConsole({ initialEvents: [], initialDecisions: [], initialAgents: FLEET_AGENTS });
+      await tick(0);
+      expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('0 recorded');
+
+      await tick(3000);
+      const row = screen.getByTestId(`fleet-row-${WATCHER}`);
+      expect(row).toHaveTextContent('1 recorded');
+      expect(row).toHaveTextContent('active');
+      // And the last run is still not this session's, however long it stays in
+      // the log the console is accumulating.
+      expect(screen.getByTestId(`fleet-row-${OTHER}`)).toHaveTextContent('0 recorded');
     } finally {
       vi.useRealTimers();
     }

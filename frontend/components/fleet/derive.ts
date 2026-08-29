@@ -73,6 +73,30 @@ export function clock(at: string): string {
   return at.slice(11, 19) || at;
 }
 
+/**
+ * Order two backend instants. Every timestamp comparison on this screen.
+ *
+ * A plain `<`, and deliberately **not** `localeCompare`. These are
+ * `datetime.isoformat()` strings and Python elides the fractional part when it
+ * is exactly zero, so the log holds both `...T21:03:14+00:00` and
+ * `...T21:03:14.223456+00:00` -- and `localeCompare` orders those two *wrong*.
+ * ICU collation gives punctuation its own weights, in which `.` sorts before
+ * `+`, so it reports the sub-second instant as the earlier of the pair. Code
+ * unit order gets it right, because `+` (0x2B) genuinely precedes `.` (0x2E)
+ * and a fractional part therefore reads as later within its own second, which
+ * is what it is.
+ *
+ * It only bites within a single second, and only when one side has no
+ * fractional part -- which is why live mode, whose `SystemClock` has a
+ * microsecond field that is essentially never zero, hides it entirely, and why
+ * the `SteppingClock` demo, which steps 50 ms from a whole-second epoch and so
+ * mints one every twentieth reading, is where it lives. A floor anchored on
+ * such an instant silently drops the whole second of work after it.
+ */
+export function compareAt(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 // ------------------------------------------------------------- attribution
 
 /**
@@ -155,6 +179,147 @@ export function agentDecisions(
   );
 }
 
+// ------------------------------------------------------------ the session
+
+/**
+ * The floor under every fleet counter: the backend instant this console started
+ * watching.
+ *
+ * `make live-demo` runs against a real Firestore, and Firestore keeps the audit
+ * log across restarts. So the log a freshly loaded console reads is not empty
+ * -- it holds every pass and every fire of every previous run, hours of them --
+ * and a counter over that opens at a number the officer in front of it has
+ * watched nothing produce. Scoping to the pass in flight did not fix it,
+ * because *the pass in flight is itself read out of the log*: with no new pass
+ * yet run, the newest `agent_pass` in the log is one from the last run, and the
+ * console anchored on it and displayed its totals. The in-memory demo could
+ * never show this, because there the log genuinely does start empty.
+ *
+ * The rule this restores: a counter shows what this session watched happen, and
+ * a fresh load therefore reads `0 recorded` and `idle` for every agent no
+ * matter what Firestore already holds.
+ *
+ * **Anchored on the newest instant in the first read, not on the browser
+ * clock.** `occurred_at` and `decided_at` are stamped by the backend; a floor
+ * from `Date.now()` would be stamped by the tablet, and the two clocks
+ * disagree -- a laptop a minute fast against Cloud Run hides a minute of live
+ * work, a minute slow admits a minute of stale work, and neither failure is
+ * visible on screen. Worse, they are not even the same *string*: the backend
+ * writes `datetime.isoformat()` (`+00:00`, microseconds elided when zero) and
+ * the browser writes `toISOString()` (`Z`, always milliseconds), and every
+ * comparison in this file is a string comparison. Taking the floor out of the
+ * log keeps it in the backend's clock and the backend's format, which is the
+ * only pair the comparison below is valid over.
+ *
+ * The tradeoff, stated plainly: a pass already running when the console loads
+ * has its earlier half below the floor and is not counted, and an event sharing
+ * the anchor's exact timestamp that arrives in a later poll is dropped by the
+ * strict `>` in `since`. Both err toward showing less than happened. That is
+ * the right direction for this screen -- a fireground counter that under-reports
+ * work it did not see is honest, and one that inherits a previous shift's totals
+ * is the bug being fixed.
+ *
+ * `null` when the first read came back empty: an empty log has no backend
+ * instant to anchor on, and it needs none -- everything that arrives after it
+ * arrived while this session was watching.
+ */
+export function sessionFloor(
+  events: readonly AuditEventView[],
+  decisions: readonly PolicyDecisionView[],
+): string | null {
+  let newest: string | null = null;
+  const consider = (at: string): void => {
+    if (!newest || compareAt(at, newest) > 0) newest = at;
+  };
+  for (const event of events) consider(event.occurred_at);
+  // Decisions count toward the floor as well. They are written by the gateway
+  // on the same clock and they feed the same counters, and a floor taken from
+  // events alone would let a decision recorded before the console loaded past
+  // it whenever the gateway wrote after the last agent did.
+  for (const decision of decisions) consider(decision.decided_at);
+  return newest;
+}
+
+/** Events strictly after the floor. The floor's own event is pre-session. */
+export function eventsSince(events: AuditEventView[], since: string | null): AuditEventView[] {
+  if (!since) return events;
+  return events.filter((event) => compareAt(event.occurred_at, since) > 0);
+}
+
+/** Decisions strictly after the floor, on the same rule. */
+export function decisionsSince(
+  decisions: PolicyDecisionView[],
+  since: string | null,
+): PolicyDecisionView[] {
+  if (!since) return decisions;
+  return decisions.filter((decision) => compareAt(decision.decided_at, since) > 0);
+}
+
+// --------------------------------------------------------------- the pass
+
+/**
+ * The two kinds that carry a slow-loop pass's own correlation id.
+ *
+ * Only these two. `write_executed`, `injection_blocked` and a rejected draft
+ * each mint a fresh correlation because each stands alone in the log, so they
+ * identify no pass -- which is why the window below is a timestamp and not a
+ * correlation filter. Scoping on the correlation alone would have dropped the
+ * work order and every blocked injection out of the pass that produced them.
+ */
+const PASS_KINDS = new Set(['agent_pass', 'agent_step']);
+
+export interface PassWindow {
+  /** The correlation id `run_slow_loop` minted for this pass. */
+  correlationId: string;
+  /** When this pass's first recorded event landed. */
+  since: string;
+}
+
+/**
+ * The slow-loop pass in flight, read out of the log itself.
+ *
+ * There is no endpoint for this. `POST /districts/{id}/poll` returns the pass's
+ * report and the report does not carry the correlation id the pass ran under,
+ * and the console does not drive every pass anyway -- a scheduler does, and a
+ * console that only knew about passes it started would show nothing during the
+ * ones it did not. So the log is the source: the newest `agent_pass` or
+ * `agent_step` written by an agent in this column names the pass in flight,
+ * because those are the only events that carry the pass's own correlation.
+ *
+ * `actorIds` restricts that to this column's fleet on purpose. `incident-
+ * recorder` writes `agent_step` too, and during a fire its steps are the newest
+ * in the log -- an unrestricted read would move the slow loop's window every
+ * time the incident recorder ticked.
+ *
+ * The window returned is a *timestamp*, not the correlation, for the reason
+ * `PASS_KINDS` gives: a third of a pass's events do not carry it. Everything
+ * from the pass's first event onward is the pass, which is true as long as one
+ * slow loop runs at a time -- which is what `run_slow_loop` does, one pass per
+ * request, agents in sequence.
+ *
+ * `null` when no agent in this column has recorded a pass or a step at all.
+ * The caller then counts the whole session, which is the honest reading of a
+ * log with no pass boundary in it rather than a zero nothing supports.
+ */
+export function currentPass(
+  events: AuditEventView[],
+  actorIds: ReadonlySet<string>,
+): PassWindow | null {
+  let newest: AuditEventView | null = null;
+  for (const event of events) {
+    if (!PASS_KINDS.has(event.kind) || !actorIds.has(event.actor)) continue;
+    if (!newest || compareAt(event.occurred_at, newest.occurred_at) > 0) newest = event;
+  }
+  if (!newest) return null;
+  const correlationId = newest.correlation_id;
+  let since = newest.occurred_at;
+  for (const event of events) {
+    if (event.correlation_id !== correlationId) continue;
+    if (compareAt(event.occurred_at, since) < 0) since = event.occurred_at;
+  }
+  return { correlationId, since };
+}
+
 // ---------------------------------------------------------------- terminal
 
 export interface TerminalLine {
@@ -173,13 +338,24 @@ export interface TerminalLine {
  *
  * Newest-last on purpose: this box reads like a console someone left running,
  * and the eye goes to the bottom of one of those.
+ *
+ * The limit was 14, and 14 is smaller than the work. One live slow-loop pass
+ * measured 36 audit events with 14 of them `records-watcher`'s alone, and one
+ * incident puts around 38 recorder steps in the log -- so the surface labelled
+ * *activity* was silently cutting the tail off the busiest agents at the exact
+ * moment they were busiest, and an officer counting lines counted the cap
+ * rather than the fleet. It was never a display constraint either: the box
+ * scrolls, and `max-h-28` is what decides how much of the tail is visible at
+ * once. 60 covers several passes of the loudest slow agent and a whole
+ * incident's recorder, and it stays a bound because it is a bound on what one
+ * session recorded, not on a log that outlives the session.
  */
 export function terminalLines(
   events: AuditEventView[],
   decisions: PolicyDecisionView[],
   agent: AgentDescriptorView,
   fleetIds: ReadonlySet<string>,
-  limit = 14,
+  limit = 60,
 ): TerminalLine[] {
   const lines: TerminalLine[] = [
     ...attributableEvents(events, agent, fleetIds).map((event) => {
@@ -207,7 +383,7 @@ export function terminalLines(
       note: decision.justification,
     })),
   ];
-  lines.sort((a, b) => a.at.localeCompare(b.at));
+  lines.sort((a, b) => compareAt(a.at, b.at));
   return lines.slice(Math.max(0, lines.length - limit));
 }
 
@@ -228,7 +404,7 @@ export interface Pass {
  */
 export function passBuckets(events: AuditEventView[]): Pass[] {
   const byCorrelation = new Map<string, Pass>();
-  const ordered = [...events].sort((a, b) => a.occurred_at.localeCompare(b.occurred_at));
+  const ordered = [...events].sort((a, b) => compareAt(a.occurred_at, b.occurred_at));
   for (const event of ordered) {
     const existing = byCorrelation.get(event.correlation_id);
     if (existing) {

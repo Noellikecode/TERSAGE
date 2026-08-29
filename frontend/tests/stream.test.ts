@@ -6,9 +6,9 @@
  */
 
 import { act, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { applyEmission, useBriefStream } from '@/lib/api/stream';
+import { applyEmission, useBriefStream, useIncidentLogStream } from '@/lib/api/stream';
 import { emission } from './fixtures';
 
 describe('applying a streamed emission', () => {
@@ -126,5 +126,180 @@ describe('a new incident is a new brief', () => {
     rerender({ id: null });
     expect(result.current.emissions).toEqual([]);
     expect(result.current.latest).toBeNull();
+  });
+});
+
+/**
+ * A stream that can fail the way a gateway actually fails it.
+ *
+ * `EventSource` retries a dropped connection, and that retry is the mechanism
+ * the incident log feed runs on — the backend sends a snapshot and ends. But a
+ * response that is non-2xx, or 2xx with the wrong MIME, *fails* the connection
+ * instead: `readyState` goes CLOSED and the browser never tries again. The
+ * console's own gateway returns a JSON envelope on an unreachable backend, an
+ * unavailable credential, or any upstream non-200. One of those, once, and the
+ * feed is dead for the whole incident — silently, because it looks exactly like
+ * a fireground where nothing is happening.
+ */
+class FailingEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+  static instances: FailingEventSource[] = [];
+
+  listeners: Record<string, ((event: unknown) => void)[]> = {};
+  onerror: (() => void) | null = null;
+  readyState = 1;
+  closed = false;
+
+  constructor(public url: string) {
+    FailingEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, handler: (event: unknown) => void) {
+    (this.listeners[type] ??= []).push(handler);
+  }
+
+  close() {
+    this.closed = true;
+  }
+
+  /** The gateway answered with an envelope: closed for good, no retry coming. */
+  failPermanently() {
+    this.readyState = FailingEventSource.CLOSED;
+    this.onerror?.();
+  }
+
+  /** The ordinary end of a snapshot: the browser is already reconnecting. */
+  endNormally() {
+    this.readyState = FailingEventSource.CONNECTING;
+    this.onerror?.();
+  }
+
+  sendEntry(payload: unknown) {
+    for (const handler of this.listeners.entry ?? []) {
+      handler({ data: JSON.stringify(payload) });
+    }
+  }
+}
+
+describe('an incident log feed the browser has given up on', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    FailingEventSource.instances = [];
+    vi.stubGlobal('EventSource', FailingEventSource);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function entry(sequence: number) {
+    return {
+      sequence,
+      entry_type: 'ENTRY_PACKAGE',
+      occurred_at: '2026-08-28T09:00:00Z',
+      agent_versions: {},
+      content_hash: 'h',
+      content: {},
+    };
+  }
+
+  it('re-opens a stream that closed for good, rather than going quiet forever', async () => {
+    const { result } = renderHook(() => useIncidentLogStream('inc_1'));
+    expect(FailingEventSource.instances).toHaveLength(1);
+
+    await act(async () => {
+      FailingEventSource.instances[0]!.failPermanently();
+      await vi.advanceTimersByTimeAsync(3500);
+    });
+
+    // A second socket, because nothing else was ever going to open one.
+    expect(FailingEventSource.instances.length).toBeGreaterThan(1);
+
+    await act(async () => {
+      FailingEventSource.instances[1]!.sendEntry(entry(7));
+    });
+    expect(result.current.entries.map((e) => e.sequence)).toEqual([7]);
+  });
+
+  it('re-asks for the snapshot within a second, rather than at the browser’s pace', async () => {
+    // The ordinary end of a snapshot. The browser would retry in ~3s, which is
+    // a spec default with nothing to do with how fast this incident is
+    // recording -- and during a sweep that turned a continuous log into eight
+    // cards every three seconds. The close is taken back and re-asked on this
+    // hook's own cadence.
+    renderHook(() => useIncidentLogStream('inc_1'));
+    await act(async () => {
+      FailingEventSource.instances[0]!.endNormally();
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(FailingEventSource.instances).toHaveLength(2);
+    // Exactly one socket at a time: the browser's own retry was cancelled by
+    // `close()` before this one was scheduled, so no frame can arrive twice.
+    expect(FailingEventSource.instances[0]!.closed).toBe(true);
+  });
+
+  it('resumes by sequence, so a poll of an unchanged log transfers nothing', async () => {
+    renderHook(() => useIncidentLogStream('inc_1'));
+    expect(FailingEventSource.instances[0]!.url).not.toContain('after_sequence');
+
+    await act(async () => {
+      FailingEventSource.instances[0]!.sendEntry(entry(11));
+      FailingEventSource.instances[0]!.endNormally();
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    // A socket this hook opened by hand carries no `Last-Event-ID` -- that is
+    // per-socket state the browser keeps for its own retries -- so the resume
+    // point travels in the query instead.
+    expect(FailingEventSource.instances[1]!.url).toContain('after_sequence=11');
+  });
+
+  it('slows down while the log is quiet, and speeds back up when it moves', async () => {
+    // A console outlives the incident on its screen. A fixed sub-second poll
+    // would ask a closed incident for new entries all night.
+    renderHook(() => useIncidentLogStream('inc_1'));
+    for (let i = 0; i < 6; i += 1) {
+      await act(async () => {
+        FailingEventSource.instances.at(-1)!.endNormally();
+        await vi.advanceTimersByTimeAsync(3100);
+      });
+    }
+    const quiet = FailingEventSource.instances.length;
+
+    // One frame, and the feed is fast again: the fleet is working, which is the
+    // whole reason for the fast cadence.
+    await act(async () => {
+      FailingEventSource.instances.at(-1)!.sendEntry(entry(3));
+      FailingEventSource.instances.at(-1)!.endNormally();
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(FailingEventSource.instances.length).toBe(quiet + 1);
+  });
+
+  it('backs off rather than hammering a gateway that is refusing everything', async () => {
+    renderHook(() => useIncidentLogStream('inc_1'));
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => {
+        FailingEventSource.instances.at(-1)!.failPermanently();
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+    }
+    // Five sockets over four failures, not one per tick of the clock.
+    expect(FailingEventSource.instances).toHaveLength(5);
+  });
+
+  it('schedules nothing more once the incident is gone', async () => {
+    const { unmount } = renderHook(() => useIncidentLogStream('inc_1'));
+    await act(async () => {
+      FailingEventSource.instances[0]!.failPermanently();
+    });
+    unmount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    // The pending retry was cancelled; nothing opened into a torn-down console.
+    expect(FailingEventSource.instances).toHaveLength(1);
   });
 });

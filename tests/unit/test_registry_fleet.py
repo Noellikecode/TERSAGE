@@ -284,13 +284,21 @@ def test_no_agent_declares_a_budget_tighter_than_the_work_it_runs() -> None:
     it owns ask for 4 s and 6 s. Fake adapters answer in microseconds, so the
     entire suite passed and the failure would have arrived on the first live
     Vertex call, as a timeout on every incident with a narrative.
+
+    Equality is not good enough either, which is the second half of this. A
+    stage whose model deadline is exactly the run's cap loses the race to the
+    runtime by microseconds when the model spends its whole budget -- so the
+    *good* failure, a refusal this loop records and routes around, is replaced
+    by a cancelled handler that records nothing and wakes nobody. Every stage
+    has to leave room for the work that follows its model call.
     """
+    from firstdue.incident.crewbrief import CREW_BRIEF_DEADLINE_MS
     from firstdue.incident.intake import INTAKE_DEADLINE_MS
     from firstdue.incident.reconciler import NARRATIVE_DEADLINE_MS
 
     interceptor = descriptor_for("incident-interceptor")
-    slowest = max(INTAKE_DEADLINE_MS, NARRATIVE_DEADLINE_MS)
-    assert interceptor.latency_target_ms >= slowest, (
+    slowest = max(INTAKE_DEADLINE_MS, NARRATIVE_DEADLINE_MS, CREW_BRIEF_DEADLINE_MS)
+    assert interceptor.latency_target_ms > slowest, (
         f"incident-interceptor declares {interceptor.latency_target_ms} ms but runs a "
         f"{slowest} ms stage; budget_seconds would cap and time it out"
     )
