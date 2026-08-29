@@ -1327,3 +1327,34 @@ describe('a console restarted onto a live log it did not watch fill', () => {
     }
   });
 });
+
+/**
+ * Opening a structure has to look like something happened.
+ *
+ * The middle column holds the region above and the structure below, and the
+ * map is deliberately tall -- it is the subject of the standby screen and it
+ * takes the whole column. So a profile opened from a conflict card renders
+ * six hundred pixels below the fold, inside a pane that scrolls on its own.
+ * Everything worked; nothing moved; the card just took focus and sat there.
+ * An officer clicks the disagreement they were told to look at and concludes
+ * the console is broken.
+ *
+ * The profile is brought to the top of its column when it opens, which is the
+ * one thing that makes the click legible as having done anything.
+ */
+describe('opening a structure from a conflict', () => {
+  it('brings the profile into view rather than leaving it below the fold', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      writable: true,
+      value: scrollIntoView,
+    });
+
+    renderConsole();
+    fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
+    await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  });
+});

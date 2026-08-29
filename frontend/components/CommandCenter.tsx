@@ -717,6 +717,17 @@ export function CommandCenter({
    */
   const [staged, setStaged] = useState<ReferralSummary[]>([]);
   const [profile, setProfile] = useState<BuildingProfileView | null>(null);
+  /**
+   * The structure panel, so opening one can be seen to have happened.
+   *
+   * The middle column is the region above and the structure below, and the map
+   * is deliberately tall -- it is the subject of the standby screen and takes
+   * the column. So a profile opened from a conflict card lands some six hundred
+   * pixels down a pane that scrolls on its own: it rendered, it was correct,
+   * and nothing on screen moved. Clicking the disagreement an officer was told
+   * to look at and seeing nothing change reads as a broken console.
+   */
+  const profileRef = useRef<HTMLDivElement | null>(null);
   const [timeline, setTimeline] = useState<TimelineEventView[]>([]);
   const [geometry, setGeometry] = useState<GeometryView | null>(null);
   /** Whether geometry is on its way, here, or not coming. `geometry === null`
@@ -1224,6 +1235,29 @@ export function CommandCenter({
     setGeometry(geometryResult.ok ? geometryResult.data : null);
     setGeometryState(geometryResult.ok ? 'ready' : 'unavailable');
   }, []);
+
+  /**
+   * Bring an opened structure to the top of its column.
+   *
+   * Keyed on the address rather than the object, so re-reading the same
+   * building after a sweep does not yank the column back while somebody is
+   * reading further down it. Motion is dropped for anyone who has asked for
+   * less of it -- the point is arriving, not the travelling.
+   */
+  const openedAddress = profile?.address_id ?? null;
+  useEffect(() => {
+    if (!openedAddress) return;
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+    // Called optionally: not every environment this renders in implements it,
+    // and a console that throws while opening a building is far worse than one
+    // that opens it without scrolling.
+    profileRef.current?.scrollIntoView?.({
+      behavior: reduced ? 'auto' : 'smooth',
+      block: 'start',
+    });
+  }, [openedAddress]);
 
   /**
    * Fly the drone sweep, one wall per tick.
@@ -2427,7 +2461,17 @@ export function CommandCenter({
               </div>
 
               {profile && (
-                <div className="flex flex-col gap-px bg-line lg:rounded-lg lg:border lg:border-line lg:overflow-hidden">
+                /* `shrink-0`, or the map eats it.
+                   The heat map above is `flex-1` and grows to fill the column.
+                   Without a shrink guard flexbox squeezed this panel down to
+                   its borders -- two pixels -- so opening a structure rendered
+                   the whole profile, correctly, at no height at all. The click
+                   did everything except produce anything to look at, which is
+                   indistinguishable from a dead button. */
+                <div
+                  ref={profileRef}
+                  className="flex shrink-0 scroll-mt-2 flex-col gap-px bg-line lg:rounded-lg lg:border lg:border-line lg:overflow-hidden"
+                >
                   <div className="grid shrink-0 grid-cols-1 gap-px bg-line lg:grid-cols-[7fr_3fr]">
                     {structurePanel}
                     <div className="min-w-0 bg-ground p-4">
