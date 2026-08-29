@@ -303,3 +303,131 @@ describe('an incident log feed the browser has given up on', () => {
     expect(FailingEventSource.instances).toHaveLength(1);
   });
 });
+
+/**
+ * The brief stream, when the server has said everything it has.
+ *
+ * `GET /incidents/{id}/stream` is not a long-lived socket. It yields the
+ * emissions the log already holds and returns -- so the connection ends
+ * immediately, every time, for an open incident and a closed one alike. That
+ * is the same shape the incident log feed has, and `useIncidentLogStream`
+ * already answers it correctly: it takes the socket back, waits, and re-asks
+ * on a decaying schedule with a ceiling.
+ *
+ * `useBriefStream` did not. It opened a bare `EventSource` and left the
+ * *browser's* automatic retry to do the reconnecting -- and that retry has no
+ * backoff, no ceiling, and no stop condition. Against an endpoint that closes
+ * on every connection, the result is an unbounded reconnect loop for as long
+ * as the console holds an incident id: measured at tens of requests per
+ * second, which starves every other request the page needs, including the
+ * chunk load for the map renderer.
+ *
+ * So the rule these tests hold: **the hook owns the reconnect, not the
+ * browser.** A snapshot that ends is closed by us and re-asked on our clock.
+ */
+class SnapshotEventSource {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSED = 2;
+  static instances: SnapshotEventSource[] = [];
+
+  listeners: Record<string, ((event: unknown) => void)[]> = {};
+  onerror: (() => void) | null = null;
+  readyState = 1;
+  closed = false;
+
+  constructor(public url: string) {
+    SnapshotEventSource.instances.push(this);
+  }
+
+  addEventListener(type: string, handler: (event: unknown) => void) {
+    (this.listeners[type] ??= []).push(handler);
+  }
+
+  close() {
+    this.closed = true;
+  }
+
+  send(payload: unknown) {
+    for (const handler of this.listeners.brief ?? []) {
+      handler({ data: JSON.stringify(payload) });
+    }
+  }
+
+  /** The server sent what it had and ended. The browser is about to retry. */
+  endNormally() {
+    this.readyState = SnapshotEventSource.CONNECTING;
+    this.onerror?.();
+    for (const handler of this.listeners.error ?? []) handler({});
+  }
+}
+
+describe('the brief stream owns its own reconnect', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    SnapshotEventSource.instances = [];
+    vi.stubGlobal('EventSource', SnapshotEventSource);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('closes the socket when the snapshot ends, so the browser stops retrying', () => {
+    // The whole bug in one assertion. An open socket left to the browser is a
+    // reconnect loop nobody is throttling.
+    renderHook(() => useBriefStream('inc_1'));
+    act(() => {
+      SnapshotEventSource.instances[0]!.endNormally();
+    });
+    expect(SnapshotEventSource.instances[0]!.closed).toBe(true);
+  });
+
+  it('does not re-open in the same tick', async () => {
+    renderHook(() => useBriefStream('inc_1'));
+    act(() => {
+      SnapshotEventSource.instances[0]!.endNormally();
+    });
+    // Still one. A second socket here is the storm.
+    expect(SnapshotEventSource.instances).toHaveLength(1);
+  });
+
+  it('re-asks after a wait, so the feed still moves', async () => {
+    renderHook(() => useBriefStream('inc_1'));
+    await act(async () => {
+      SnapshotEventSource.instances[0]!.endNormally();
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(SnapshotEventSource.instances.length).toBeGreaterThan(1);
+  });
+
+  it('stays bounded over a quiet minute rather than hammering the gateway', async () => {
+    // An incident that is open but not emitting is the ordinary case between
+    // amendments. Sixty seconds of it must not cost hundreds of requests.
+    renderHook(() => useBriefStream('inc_1'));
+    await act(async () => {
+      for (let i = 0; i < 60; i += 1) {
+        const latest = SnapshotEventSource.instances[SnapshotEventSource.instances.length - 1]!;
+        latest.endNormally();
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+    });
+    expect(SnapshotEventSource.instances.length).toBeLessThanOrEqual(40);
+  });
+
+  it('cancels a pending re-open when the incident goes away', async () => {
+    const { rerender } = renderHook(({ id }) => useBriefStream(id), {
+      initialProps: { id: 'inc_1' as string | null },
+    });
+    act(() => {
+      SnapshotEventSource.instances[0]!.endNormally();
+    });
+    rerender({ id: null });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    // Nothing opened into a console that has no incident.
+    expect(SnapshotEventSource.instances).toHaveLength(1);
+  });
+});

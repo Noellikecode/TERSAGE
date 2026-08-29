@@ -40,6 +40,32 @@ export function applyEmission(
   return [...current, incoming].sort((a, b) => a.version - b.version);
 }
 
+/**
+ * How long to wait before re-asking for a snapshot that carried nothing new.
+ *
+ * `GET /incidents/{id}/stream` is not a long-lived socket. It yields the
+ * emissions the log already holds and *returns*, so the connection ends
+ * immediately -- on every connection, for an open incident and a closed one
+ * alike. Left to the browser's own `EventSource` retry that becomes an
+ * unbounded reconnect loop: the spec's retry has no backoff, no ceiling, and
+ * no stop condition, and a clean end-of-stream is precisely the case it
+ * treats as "try again". Measured against a held incident id it ran at tens
+ * of requests a second and starved the rest of the page -- including the
+ * chunk load for the map renderer, which then sat on "Drawing the region..."
+ * forever because its `import()` never got a socket.
+ *
+ * So the hook takes the reconnect back. Same discipline the incident log feed
+ * already uses: close what the server ended, wait, and re-ask -- fast while
+ * the brief is moving, decaying to a floor while it is not.
+ */
+const BRIEF_POLL_MS = 1000;
+const BRIEF_POLL_CEILING_MS = 5000;
+const BRIEF_POLL_DECAY = 1.6;
+
+/** A connection that *failed* rather than ended. Backed off harder, and capped. */
+const BRIEF_RECONNECT_BASE_MS = 3000;
+const BRIEF_RECONNECT_CEILING_MS = 30_000;
+
 export function useBriefStream(incidentId: string | null): BriefStream {
   const [emissions, setEmissions] = useState<BriefEmissionView[]>([]);
   const [state, setState] = useState<StreamState>('idle');
@@ -70,32 +96,100 @@ export function useBriefStream(incidentId: string | null): BriefStream {
       return;
     }
     setState('connecting');
-    const source = new EventSource(gatewayPath(`/api/v1/incidents/${incidentId}/stream`));
-    sourceRef.current = source;
 
-    source.addEventListener('open', () => setState('open'));
-    source.addEventListener('brief', (event) => {
-      try {
-        const parsed = JSON.parse((event as MessageEvent<string>).data) as BriefEmissionView;
-        if (!parsed.persisted_at) {
-          // Should be impossible: the backend gates on this too. Counted rather
-          // than shown, because showing it would be the failure.
+    let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    /** Highest version this hook has taken, so a re-open resumes rather than replays. */
+    let after = -1;
+    /** Frames the currently open socket delivered, to tell a productive snapshot from an empty one. */
+    let delivered = 0;
+    /** Consecutive hard failures, for the backoff exponent. */
+    let attempt = 0;
+    let quiet = BRIEF_POLL_MS;
+
+    const open = () => {
+      if (stopped) return;
+      delivered = 0;
+      const resume = after >= 0 ? `?after_version=${after}` : '';
+      const source = new EventSource(
+        gatewayPath(`/api/v1/incidents/${incidentId}/stream${resume}`),
+      );
+      sourceRef.current = source;
+
+      source.addEventListener('open', () => setState('open'));
+      source.addEventListener('brief', (event) => {
+        try {
+          const parsed = JSON.parse((event as MessageEvent<string>).data) as BriefEmissionView;
+          if (!parsed.persisted_at) {
+            // Should be impossible: the backend gates on this too. Counted rather
+            // than shown, because showing it would be the failure.
+            setRejected((count) => count + 1);
+            return;
+          }
+          // A frame means the path is working, so the next failure starts its
+          // backoff from the bottom rather than from where the last one ended.
+          attempt = 0;
+          delivered += 1;
+          if (parsed.version > after) after = parsed.version;
+          setState('open');
+          setEmissions((current) => applyEmission(current, parsed));
+        } catch {
           setRejected((count) => count + 1);
+        }
+      });
+
+      // One handler, two completely different events.
+      //
+      // `readyState` separates them. CLOSED means the connection *failed* --
+      // a non-2xx, or a 2xx with the wrong MIME, which is what this console's
+      // gateway returns when the backend is unreachable. The browser will
+      // never retry that one, so this hook must. Anything else is the ordinary
+      // end of a snapshot, and the browser is already about to retry it -- so
+      // the socket is closed first, to take that retry away from it.
+      // Both `onerror` and an `error` listener are wired, because the two are
+      // not interchangeable across the browsers and the test doubles this runs
+      // against. A real browser fires both, so this must do its work once:
+      // scheduling twice would open two sockets and rebuild the loop it exists
+      // to remove.
+      let settled = false;
+      const ended = () => {
+        if (stopped || settled) return;
+        settled = true;
+        const failed = source.readyState === (source.constructor as typeof EventSource).CLOSED;
+        source.close();
+        if (sourceRef.current === source) sourceRef.current = null;
+        setState((previous) => (previous === 'open' || delivered > 0 ? 'reconnecting' : 'failed'));
+        if (failed) {
+          const wait = Math.min(
+            BRIEF_RECONNECT_CEILING_MS,
+            BRIEF_RECONNECT_BASE_MS * 2 ** attempt,
+          );
+          attempt += 1;
+          retry = setTimeout(open, wait);
           return;
         }
-        setState('open');
-        setEmissions((current) => applyEmission(current, parsed));
-      } catch {
-        setRejected((count) => count + 1);
-      }
-    });
-    source.addEventListener('error', () => {
-      // EventSource retries on its own and replays from Last-Event-ID.
-      setState((previous) => (previous === 'open' ? 'reconnecting' : 'failed'));
-    });
+        // The ordinary end. A snapshot that carried something resets to the
+        // fast cadence, because the brief is moving and that is the whole
+        // reason for asking quickly. The decay is applied after scheduling, so
+        // the first re-ask following any close is the fast one and only a run
+        // of empty snapshots slows down.
+        if (delivered) quiet = BRIEF_POLL_MS;
+        retry = setTimeout(open, quiet);
+        if (!delivered) {
+          quiet = Math.min(BRIEF_POLL_CEILING_MS, Math.round(quiet * BRIEF_POLL_DECAY));
+        }
+      };
+
+      source.addEventListener('error', ended);
+      source.onerror = ended;
+    };
+
+    open();
 
     return () => {
-      source.close();
+      stopped = true;
+      if (retry !== null) clearTimeout(retry);
+      sourceRef.current?.close();
       sourceRef.current = null;
       setState('idle');
     };
