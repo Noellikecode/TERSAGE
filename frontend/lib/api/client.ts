@@ -36,6 +36,27 @@ export const DEFAULT_API_BASE_URL = 'http://localhost:8000';
 const DEFAULT_TIMEOUT_MS = 15_000;
 
 /**
+ * Say that *we* gave up, rather than repeating what the DOMException said.
+ *
+ * `AbortController.abort()` takes no reason here, so the error that surfaces is
+ * `signal is aborted without reason` -- which is true, useless, and reads to
+ * anyone looking at the console like the backend died. It is the console's own
+ * stopwatch firing, and the console knows both that it fired and what it was
+ * counting to, so it can say so.
+ *
+ * This matters most on the panels that exist to explain an absence. When the
+ * entry-package watch renders a bare abort, the one card whose job is to
+ * distinguish "the loop declined to compose" from "nothing answered" has
+ * failed in the second way while looking like the first.
+ */
+function describeFailure(caught: unknown, timedOut: boolean, budgetMs: number): string {
+  if (timedOut) {
+    return `no answer within ${Math.round(budgetMs / 1000)}s, so the console stopped waiting`;
+  }
+  return caught instanceof Error ? caught.message : 'request failed';
+}
+
+/**
  * Where the backend is, for **server-side** calls only.
  *
  * `FIRSTDUE_API_BASE_URL` is a plain server variable, read from the environment
@@ -104,7 +125,12 @@ export async function apiGet<T>(path: string, options: RequestOptions = {}): Pro
   const base = options.baseUrl ?? apiBaseUrl();
   const doFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const budgetMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, budgetMs);
 
   const headers: Record<string, string> = { Accept: 'application/json' };
   const token = serverToken();
@@ -137,7 +163,7 @@ export async function apiGet<T>(path: string, options: RequestOptions = {}): Pro
 
     return { ok: true, data: payload as T };
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : 'request failed';
+    const message = describeFailure(caught, timedOut, budgetMs);
     return { ok: false, error: unreachable(message), unreachable: true };
   } finally {
     clearTimeout(timeout);
@@ -172,7 +198,12 @@ export async function apiPost<T>(
   const base = options.baseUrl ?? apiBaseUrl();
   const doFetch = options.fetchImpl ?? fetch;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const budgetMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, budgetMs);
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -208,7 +239,7 @@ export async function apiPost<T>(
     }
     return { ok: true, data: payload as T };
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : 'request failed';
+    const message = describeFailure(caught, timedOut, budgetMs);
     return { ok: false, error: unreachable(message), unreachable: true };
   } finally {
     clearTimeout(timeout);

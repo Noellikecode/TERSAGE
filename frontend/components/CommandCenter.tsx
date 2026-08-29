@@ -2121,6 +2121,7 @@ export function CommandCenter({
         view={view}
         forceFallback={forceSvgGeometry}
         route={routeOverlay}
+        geometryState={geometryState}
       />
     </section>
   );

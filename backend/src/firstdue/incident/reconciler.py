@@ -96,7 +96,13 @@ COAL_WAS_WEALTH: Final[tuple[BriefSectionKey, ...]] = (
 )
 
 NARRATIVE_MAX_CHARS: Final[int] = 2_000
-NARRATIVE_DEADLINE_MS: Final[int] = 4_000
+
+#: The enriched brief's prose budget. 4 s here is what produced "the composed
+#: prose was refused or never arrived" on every live incident: a measured
+#: `compose` on this project runs 5.72-6.97 s, so the call was cancelled before
+#: it could return and the brief landed as bare fields every time. Sized with
+#: `CREW_BRIEF_DEADLINE_MS`, which buys the same thing from the same endpoint.
+NARRATIVE_DEADLINE_MS: Final[int] = 10_000
 
 #: What a brief says when nothing was on file. Stated in words rather than left
 #: to a column of UNKNOWNs, because "we checked and found nothing" and "nobody

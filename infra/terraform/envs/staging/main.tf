@@ -32,6 +32,24 @@ locals {
 provider "google" {
   project = var.project_id
   region  = var.region
+
+  # `project` is not enough for every API this configuration touches.
+  #
+  # Most resources here are project-scoped, so the provider derives the quota
+  # project from `project` and the request bills to `firstdue-dev`. The billing
+  # budget is not: `google_billing_budget` addresses a *billing account*, which
+  # sits above any project, so there is nothing for the provider to infer from
+  # and it falls back to the quota project of whatever credential is in hand.
+  # Under Application Default Credentials that is gcloud's own OAuth client,
+  # project 764086051850 -- which does not have `billingbudgets.googleapis.com`
+  # enabled and never will, because it is not ours. The apply failed on the last
+  # resource with SERVICE_DISABLED naming a project nobody here recognises.
+  #
+  # Setting the quota project on ADC does not fix it; the provider only sends
+  # the `x-goog-user-project` header when `user_project_override` asks it to.
+  # These two lines are that ask.
+  billing_project       = var.project_id
+  user_project_override = true
 }
 
 module "services" {

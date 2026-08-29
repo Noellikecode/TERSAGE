@@ -39,6 +39,15 @@ locals {
 provider "google" {
   project = var.project_id
   region  = var.region
+
+  # Required by `module.budget`, for the reason written out at length in the
+  # staging env's provider block: a billing budget addresses a billing account
+  # rather than a project, so the provider has no quota project to infer and
+  # falls back to the credential's own -- which under ADC is gcloud's OAuth
+  # client, not ours. Staging's first apply failed on exactly this. Prod has
+  # never been applied, so it would have failed the same way on the first try.
+  billing_project       = var.project_id
+  user_project_override = true
 }
 
 module "services" {

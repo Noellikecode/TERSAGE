@@ -60,7 +60,20 @@ CREW_BRIEF_TEMPLATE: Final[str] = "brief.crew.v1"
 CREW_BRIEF_MAX_CHARS: Final[int] = 3_000
 
 #: What the wording is worth waiting for when nothing tighter is asked for.
-CREW_BRIEF_DEADLINE_MS: Final[int] = 4_000
+#:
+#: It was 4 s, and against a real Vertex endpoint that number could never be
+#: met. Measured on `gemini-3.5-flash` at `global`, one `compose` of a crew
+#: brief: 6.97 s, 6.05 s, 5.72 s, 6.35 s, 5.94 s. The *fastest* of those is
+#: over the old budget, so the composition was refused for time on every live
+#: incident and the package it belonged to was cancelled with it -- while fake
+#: mode, answering in microseconds, passed every test.
+#:
+#: 10 s is the slowest observed call plus room for a cold one, on the same
+#: reasoning `sensor-fusion` uses for its 12 s frame cap. It is a ceiling for a
+#: call that is merely slow, not a target: nothing waits for the whole of it,
+#: and `CREW_BRIEF_TIMEOUT_GRACE_MS` still hands the client the smaller number
+#: so a refusal arrives named rather than as an anonymous cancellation.
+CREW_BRIEF_DEADLINE_MS: Final[int] = 10_000
 
 #: Held back from whatever budget the caller gives, so the *client* reaches its
 #: own deadline and raises the refusal it knows how to name before the bound

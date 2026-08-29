@@ -368,6 +368,36 @@ describe('the card is the interceptor asking', () => {
     expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
   });
 
+  /**
+   * A caveat printed before the thing it qualifies reads as a refusal.
+   *
+   * The dialog opened on the readiness verdict, so a commander met the words
+   * "Not ready" before a single line of the plan. The verdict does not block a
+   * send and the copy says so at length -- it belongs after the brief and the
+   * route, as a note on them. This pins the order, because it is the kind of
+   * thing a later edit reshuffles without noticing what it costs.
+   */
+  it('leads with the plan and puts the record check after it', () => {
+    renderModal(entryPackage());
+    const modal = screen.getByTestId('entry-package-modal');
+    const brief = screen.getByTestId('crew-brief');
+    const readiness = screen.getByTestId('readiness-verdict');
+    // `compareDocumentPosition` is the honest check: it asks the DOM which
+    // comes first rather than trusting a query order.
+    expect(brief.compareDocumentPosition(readiness) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(modal).toContainElement(brief);
+    expect(modal).toContainElement(readiness);
+  });
+
+  it('does not paint an incomplete record in the colour reserved for faults', () => {
+    renderModal(entryPackage());
+    // `alarm` is for something that has gone wrong. An unconfirmed record has
+    // not gone wrong, and the banner's own sentence says so.
+    const banner = screen.getByTestId('readiness-banner');
+    expect(banner.className).toContain('border-disputed');
+    expect(banner.className).not.toContain('border-alarm');
+  });
+
   it('closes on Escape', () => {
     const onClose = vi.fn();
     render(

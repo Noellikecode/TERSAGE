@@ -225,47 +225,85 @@ export function EntryPackageModal({
           // text that then has to be contrast-checked against four hues.
           style={{ borderTopColor: identity.color, borderTopWidth: 3 }}
         >
-          <h2 id="entry-package-title" className="flex flex-wrap items-baseline gap-2">
-            <span aria-hidden="true" style={{ color: identity.color }}>
-              {identity.glyph}
+          {/* Kicker, headline, lede -- in that order, and sized so they read
+              as three different things. The agent's name is *attribution*: it
+              belongs above the headline in the small voice a byline uses, not
+              beside it competing at the same size. What the dialog is asking
+              is the headline, because that is the sentence a commander has to
+              answer. Both stay inside the `h2` so the accessible name still
+              carries the agent and the ask together. */}
+          <h2 id="entry-package-title">
+            <span
+              className="flex items-center gap-2 font-mono text-label uppercase tracking-widest"
+              style={{ color: identity.color }}
+            >
+              <span aria-hidden="true">{identity.glyph}</span>
+              {COMPOSING_AGENT}
+              <span className="text-muted">@{entryPackage.brief.composed_by_version}</span>
             </span>
-            <span className="font-mono text-title text-ink">{COMPOSING_AGENT}</span>
-            <span className="text-title text-ink">asks for approval to send an entry package</span>
+            <span className="mt-1 block text-display text-ink">
+              Asks for approval to send an entry package
+            </span>
           </h2>
-          <p id="entry-package-lede" className="mt-1.5 text-body leading-6 text-muted">
+          <p id="entry-package-lede" className="mt-2 max-w-prose text-body leading-6 text-muted">
             {identity.role}. It composed this package and{' '}
             {TRIGGER_WORDS[autonomyTrigger] ?? 'is holding it for a human decision.'} Approving it
             releases the crew brief <em className="not-italic text-ink">and</em> the entry path to
             live dispatch units. Nothing has been sent.
           </p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <StatusPill
-              tone={entryPackage.assessment.ready ? 'confirmed' : 'alarm'}
-              label={entryPackage.assessment.ready ? 'ready' : 'not ready'}
-            />
+          {/* The readiness pill is deliberately *not* here any more.
+              It used to be the first coloured thing on the dialog, in alarm
+              red, above the plan -- so the screen opened by announcing a
+              problem before it had said what the plan was. The verdict has not
+              been softened or moved out of sight: it is stated in full, in its
+              own section, under the plan it qualifies. See `ReadinessVerdict`. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <StatusPill
               tone={sent ? 'confirmed' : outstanding.length === 0 ? 'live' : 'disputed'}
               label={entryPackage.status.toLowerCase().replace(/_/g, ' ')}
             />
             <span className="font-mono text-micro text-muted">
-              {entryPackage.package_id} · {entryPackage.address_id} · composed{' '}
+              {entryPackage.address_id} · {entryPackage.package_id} · composed{' '}
               {entryPackage.created_at}
             </span>
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-4">
+        {/* Order is the argument this dialog makes.
+            It used to open on the readiness verdict, so a commander met "NOT
+            READY" in red before reading a single line of the plan -- and the
+            verdict is not a blocker, it is a caveat. A caveat printed before
+            the thing it qualifies reads as a refusal. So: the brief, then the
+            route, then what the record could not confirm about either. Nothing
+            is hidden and nothing is reordered inside a section; only the three
+            sections are ranked the way they are actually used. */}
+        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4">
           <div>
-            <h3 className="mb-2 text-micro uppercase tracking-widest text-muted">
-              Readiness — six criteria, as the record answered them
-            </h3>
-            <ReadinessVerdict assessment={entryPackage.assessment} />
+            <SectionHeading
+              step={1}
+              title="Crew brief"
+              note="what the record says about this building"
+            />
+            <CrewBriefBody brief={entryPackage.brief} />
+            <HalfSignature
+              testId="approve-crew-brief"
+              label="Sign the crew brief"
+              question="This is an accurate account of what we know."
+              approved={entryPackage.brief_approved}
+              approvedBy={entryPackage.brief_approved_by}
+              approvedAt={entryPackage.brief_approved_at}
+              approvalId={entryPackage.brief_approval_id}
+              busy={busy !== null}
+              onSign={() => void grant('crew-brief')}
+            />
           </div>
 
           <div>
-            <h3 className="mb-2 text-micro uppercase tracking-widest text-muted">
-              Entry path — and what each leg was weighed against
-            </h3>
+            <SectionHeading
+              step={2}
+              title="Entry path"
+              note="the route, and what each leg was weighed against"
+            />
             <EntryPathSummary
               path={entryPackage.path}
               selection={selection}
@@ -285,21 +323,12 @@ export function EntryPackageModal({
           </div>
 
           <div>
-            <h3 className="mb-2 text-micro uppercase tracking-widest text-muted">
-              Crew brief — the prose, and every claim under it
-            </h3>
-            <CrewBriefBody brief={entryPackage.brief} />
-            <HalfSignature
-              testId="approve-crew-brief"
-              label="Sign the crew brief"
-              question="This is an accurate account of what we know."
-              approved={entryPackage.brief_approved}
-              approvedBy={entryPackage.brief_approved_by}
-              approvedAt={entryPackage.brief_approved_at}
-              approvalId={entryPackage.brief_approval_id}
-              busy={busy !== null}
-              onSign={() => void grant('crew-brief')}
+            <SectionHeading
+              step={3}
+              title="What the record could not confirm"
+              note="six checks, and how each one answered"
             />
+            <ReadinessVerdict assessment={entryPackage.assessment} />
           </div>
 
           <p className="border border-line bg-surface p-3 text-micro leading-5 text-muted">
@@ -361,6 +390,30 @@ export function EntryPackageModal({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A numbered section heading, so the dialog reads as a document with an order.
+ *
+ * The three sections used to be introduced by identical small grey all-caps
+ * lines, which made them look like three captions rather than three parts of
+ * one thing an officer works through. The number is the whole trick: it says
+ * there are three, says which one this is, and says they are meant to be taken
+ * in order -- brief, route, caveats -- without a word of instruction.
+ */
+function SectionHeading({ step, title, note }: { step: number; title: string; note: string }) {
+  return (
+    <div className="mb-3 flex items-baseline gap-3 border-b border-line pb-2">
+      <span
+        aria-hidden="true"
+        className="font-mono text-label tabular-nums text-muted"
+      >
+        {String(step).padStart(2, '0')}
+      </span>
+      <h3 className="text-title text-ink">{title}</h3>
+      <span className="text-micro leading-5 text-muted">{note}</span>
     </div>
   );
 }

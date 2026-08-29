@@ -141,7 +141,14 @@ MAX_REPORTED_CHARS: Final[int] = 300
 #: A second of reserve buys the screen, the record, the amendment, the routing
 #: and the wakes, and turns the worst case back into an intake nobody could
 #: read on an incident whose fleet is running.
-INTAKE_DEADLINE_MS: Final[int] = 5_000
+#:
+#: Raised from 5 s for the reason the paragraph above already gives, with the
+#: measurement it was missing: one live `gemini-3.5-flash` call on this project
+#: costs 5.72-6.97 s, so a 5 s extraction budget was under the *fastest*
+#: observed call and the reserve it describes was being spent before the model
+#: answered. The failure was quiet in exactly the way described -- an intake
+#: that read nothing, on an incident whose readiness then waited for it.
+INTAKE_DEADLINE_MS: Final[int] = 10_000
 
 #: Alarm levels the department runs. A reported level outside this is recorded
 #: as text and contributes no signal, because there is no such alarm.

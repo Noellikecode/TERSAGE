@@ -36,6 +36,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type * as ThreeNS from 'three-r128';
 
+import type { GeometryState } from '@/components/PhotorealisticModel';
 import type { FaceView, GeometryView, RouteView } from '@/lib/api/types';
 
 export type ViewAngle = 'ALPHA' | 'BRAVO' | 'CHARLIE' | 'DELTA' | 'ISO';
@@ -626,11 +627,27 @@ export function StructureModel({
   view = 'ISO',
   forceFallback = false,
   route = null,
+  geometryState = 'ready',
 }: {
   geometry: GeometryView | null;
   view?: ViewAngle;
   forceFallback?: boolean;
   route?: RouteOverlay | null;
+  /**
+   * Why there is no geometry, when there is none.
+   *
+   * `geometry === null` cannot distinguish "nobody has measured this building"
+   * from "the read failed", and this panel makes a *claim* about the first --
+   * that the absence is an absence of measurement rather than of information.
+   * That claim is false when the request timed out, and it is the more
+   * damaging way to be wrong: a commander is told the record is empty when it
+   * is merely unread. `CommandCenter` already tracks the difference for
+   * `PhotorealisticModel`; this is the same signal, told to the panel that
+   * words the absence.
+   *
+   * Defaulted so existing callers that genuinely mean "absent" read unchanged.
+   */
+  geometryState?: GeometryState;
 }) {
   const mount = useRef<HTMLDivElement | null>(null);
   const [fallback, setFallback] = useState(false);
@@ -1512,6 +1529,39 @@ export function StructureModel({
   }, [geometry, forceFallback]);
 
   if (!geometry) {
+    if (geometryState === 'loading' || geometryState === 'idle') {
+      return (
+        <div
+          className="border border-dashed border-line p-6 text-muted"
+          role="status"
+          aria-label="Reading the geometry on record for this structure"
+          data-testid="geometry-loading"
+        >
+          <p className="text-ink">Reading the record</p>
+          <p className="mt-1 text-micro leading-5">
+            The measurement has been asked for and has not come back. Nothing is
+            claimed about this structure until it does.
+          </p>
+        </div>
+      );
+    }
+    if (geometryState === 'unavailable') {
+      return (
+        <div
+          className="border border-dashed border-alarm/40 bg-alarm/10 p-6 text-alarm"
+          role="status"
+          aria-label="The geometry for this structure could not be read"
+          data-testid="geometry-unreadable"
+        >
+          <p>The geometry could not be read</p>
+          <p className="mt-1 text-micro leading-5">
+            The console asked and did not get an answer. This says nothing about
+            the building — the record may hold a full survey. Do not read it as
+            an unmeasured structure.
+          </p>
+        </div>
+      );
+    }
     return (
       <div
         className="border border-dashed border-line p-6 text-muted"

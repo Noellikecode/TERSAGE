@@ -51,6 +51,27 @@ import type {
 export const ENTRY_PACKAGE_ENTRY_TYPE = 'ENTRY_PACKAGE';
 
 /**
+ * What the diagnostics read is allowed to take.
+ *
+ * It looks like a status ping and is not one. `describe_autonomy` runs the
+ * silent readiness assessment to answer "what is still outstanding", and that
+ * is a full profile snapshot, its coverage reports and its conflicts read out
+ * of Firestore -- the same work the composer does, minus the model call. On a
+ * laptop against real Firestore it lands between one and three seconds, and it
+ * lands slowest at exactly the moment this panel is on screen, because the
+ * panel only appears while the incident loop is busy competing for the same
+ * reads.
+ *
+ * It inherited the 15 s default and was the only diagnostic call that did not
+ * name a budget, so at the two-minute mark it aborted and the card that exists
+ * to explain a missing package instead reported that the backend was
+ * unreachable. 30 s is the assessment's worst observed cost with the loop
+ * running, not a target -- nothing waits for it, and a slow answer still beats
+ * a confident wrong one.
+ */
+const DIAGNOSTICS_TIMEOUT_MS = 30_000;
+
+/**
  * How often the packages endpoint is asked whether one exists yet.
  *
  * Three seconds, and the number is taken from the thing it is standing in for
@@ -151,6 +172,7 @@ export function readAutonomyDiagnostics(
 ): Promise<ApiResult<AutonomyDiagnosticsView>> {
   return browserGet<AutonomyDiagnosticsView>(
     `/api/v1/incidents/${incidentId}/entry-packages/diagnostics`,
+    { timeoutMs: DIAGNOSTICS_TIMEOUT_MS },
   );
 }
 

@@ -67,6 +67,43 @@ describe('api client', () => {
     }
   });
 
+  /**
+   * `signal is aborted without reason` is the console's own stopwatch, and it
+   * reads on screen as a dead backend. The panels that explain an absence are
+   * exactly the ones that hit it, so the message has to name the timeout.
+   */
+  it('names its own timeout instead of repeating the abort exception', async () => {
+    const fetchImpl = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            // What an AbortController actually produces: no reason attached.
+            reject(new DOMException('signal is aborted without reason', 'AbortError'));
+          });
+        }),
+    );
+    const result = await apiGet('/api/v1/slow', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      timeoutMs: 10,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.unreachable).toBe(true);
+      expect(result.error.message).not.toContain('without reason');
+      expect(result.error.message).toContain('the console stopped waiting');
+    }
+  });
+
+  it('still reports a genuine transport failure in its own words', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const result = await apiGet('/healthz', {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      timeoutMs: 5_000,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.message).toBe('ECONNREFUSED');
+  });
+
   it('forwards the correlation id so a screenshot is traceable', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(STATUS));
     await getSystemStatus({

@@ -55,20 +55,35 @@ export function ReadinessVerdict({ assessment }: { assessment: ReadinessAssessme
 
   return (
     <div className="space-y-2" data-testid="readiness-verdict">
+      {/* Amber, not red.
+          `alarm` is this palette's colour for something that has gone wrong,
+          and an incomplete record has not gone wrong -- the sentence below has
+          always said so ("a statement about the record, not a permission").
+          Red made the strongest visual claim on the screen the one claim the
+          copy spends three lines walking back, and it was the first thing a
+          commander saw. `disputed` is the token for contested or incomplete,
+          which is exactly what this is. The words are unchanged: nothing here
+          is softened, the count is still stated, and every failed criterion
+          still carries its reason. */}
       <div
         className={`border-l-4 p-3 ${
-          assessment.ready ? 'border-confirmed bg-surface' : 'border-alarm bg-surface'
+          assessment.ready ? 'border-confirmed bg-surface' : 'border-disputed bg-surface'
         }`}
         data-testid="readiness-banner"
         data-ready={assessment.ready ? 'true' : 'false'}
       >
-        <p
-          className={`font-mono text-title uppercase tracking-wide ${
-            assessment.ready ? 'text-confirmed' : 'text-alarm'
-          }`}
-        >
-          {assessment.ready ? 'Ready' : 'Not ready'}
-        </p>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <p
+            className={`font-mono text-title uppercase tracking-wide ${
+              assessment.ready ? 'text-confirmed' : 'text-disputed'
+            }`}
+          >
+            {assessment.ready ? 'Ready' : 'Not ready'}
+          </p>
+          <p className="font-mono text-micro tabular-nums text-muted">
+            {passed.length}/{assessment.criteria.length} checks pass
+          </p>
+        </div>
         <p className="mt-1 text-body leading-6 text-ink">{assessment.summary}</p>
         {!assessment.ready && (
           <p className="mt-1 text-micro leading-5 text-muted">
@@ -86,12 +101,12 @@ export function ReadinessVerdict({ assessment }: { assessment: ReadinessAssessme
           <li
             key={criterion.criterion_id}
             data-testid={`criterion-${criterion.criterion_id}`}
-            className={`border p-2 ${criterion.passed ? 'border-line bg-surface' : 'border-alarm bg-surface'}`}
+            className={`border p-2 ${criterion.passed ? 'border-line bg-surface' : 'border-disputed bg-surface'}`}
           >
             <div className="flex flex-wrap items-center gap-2">
               <StatusPill
-                tone={criterion.passed ? 'confirmed' : 'alarm'}
-                label={criterion.passed ? 'pass' : 'fail'}
+                tone={criterion.passed ? 'confirmed' : 'disputed'}
+                label={criterion.passed ? 'pass' : 'open'}
               />
               <span className="text-body text-ink">{criterion.title}</span>
               <span className="font-mono text-micro text-muted">{criterion.criterion_id}</span>
@@ -360,20 +375,28 @@ export function CrewBriefBody({ brief }: { brief: CrewBriefView }) {
 
   return (
     <div className="space-y-3" data-testid="crew-brief">
-      <p className="font-mono text-micro text-muted">
-        prose source: {brief.prose_source}
-        {brief.prose_rejection && ` · composition refused: ${brief.prose_rejection}`}
-        {brief.model_ref && ` · ${brief.model_ref}`}
-      </p>
-      <div className="border border-line bg-surface p-3">
+      {/* The prose leads; its provenance follows it.
+          The source line used to sit above the brief, so the first thing on
+          the most-read block on the screen was `prose source: deterministic`.
+          That line matters -- "a model wrote this" and "the template wrote
+          this" are different claims and both are kept -- but it is a footnote
+          to the text, and a footnote printed first is a barrier to reading.
+          Set at `body` on a measure, because unlike everything around it this
+          is genuinely read start to finish rather than scanned. */}
+      <div className="border-l-2 border-line bg-surface px-4 py-3">
         {brief.prose
           .split('\n')
           .filter((line) => line.trim().length > 0)
           .map((line, index) => (
-            <p key={index} className="mb-2 text-body leading-6 text-ink last:mb-0">
+            <p key={index} className="mb-2.5 max-w-prose text-body leading-7 text-ink last:mb-0">
               {line}
             </p>
           ))}
+        <p className="mt-3 border-t border-line pt-2 font-mono text-micro text-muted">
+          prose source: {brief.prose_source}
+          {brief.prose_rejection && ` · composition refused: ${brief.prose_rejection}`}
+          {brief.model_ref && ` · ${brief.model_ref}`}
+        </p>
       </div>
 
       {brief.unknowns.length > 0 && (

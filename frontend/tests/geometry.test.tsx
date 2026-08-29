@@ -47,6 +47,38 @@ describe('the geometry view', () => {
       screen.getByText(/absence of measurement, not a measurement/i),
     ).toBeInTheDocument();
   });
+
+  /**
+   * The three ways to have no geometry are three different facts.
+   *
+   * "Nothing has measured this" is a claim about the building. A read that
+   * timed out is a claim about the console, and stating the first when the
+   * second happened tells a commander the record is empty when it is only
+   * unread -- which is the more dangerous of the two mistakes, because an
+   * empty record invites entry assumptions a full one would not.
+   */
+  it('does not claim the structure is unmeasured while the read is open', () => {
+    render(<StructureModel geometry={null} geometryState="loading" />);
+    expect(screen.getByTestId('geometry-loading')).toBeInTheDocument();
+    expect(screen.queryByText('No geometry on record')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/absence of measurement/i),
+    ).not.toBeInTheDocument();
+  });
+
+  it('says the read failed rather than that the record is empty', () => {
+    render(<StructureModel geometry={null} geometryState="unavailable" />);
+    expect(screen.getByTestId('geometry-unreadable')).toBeInTheDocument();
+    expect(screen.getByText(/could not be read/i)).toBeInTheDocument();
+    expect(screen.getByText(/says nothing about the building/i)).toBeInTheDocument();
+    expect(screen.queryByText('No geometry on record')).not.toBeInTheDocument();
+  });
+
+  it('still states a true absence when the record really is empty', () => {
+    render(<StructureModel geometry={null} geometryState="ready" />);
+    expect(screen.getByText('No geometry on record')).toBeInTheDocument();
+    expect(screen.queryByTestId('geometry-unreadable')).not.toBeInTheDocument();
+  });
 });
 
 describe('the geometry description', () => {

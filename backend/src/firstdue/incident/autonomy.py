@@ -54,6 +54,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field
 
 from firstdue.incident.readiness import ReadinessAssessment
+from firstdue.registry.descriptors import descriptor_for
 
 #: How much of an exception message is kept. Long enough to name a missing
 #: snapshot id or a refused scope, short enough that a stack of them cannot turn
@@ -78,7 +79,17 @@ HARD_CEILING: Final[timedelta] = timedelta(seconds=120)
 #: snapshot already in memory, the A* solve is pure compute over a graph of
 #: tens of nodes, and the brief synthesis is one model call; the cap is the
 #: model call and the runtime cancels the run if it overruns.
-COMPOSITION_CAP: Final[timedelta] = timedelta(seconds=6)
+#:
+#: Read off the descriptor rather than written here, because the sentence above
+#: claimed it already was and it was the literal ``timedelta(seconds=6)`` --
+#: exactly the drift it disclaims. When the interceptor's cap moved from 6 s to
+#: 12 s this stayed at 6, and the identity below silently stopped being true:
+#: the budget said a card arrives by 120 s while the composition it budgeted
+#: for could take twice what was set aside. Derived, the arithmetic cannot come
+#: apart from the catalog again.
+COMPOSITION_CAP: Final[timedelta] = timedelta(
+    milliseconds=descriptor_for("incident-interceptor").latency_target_ms
+)
 
 #: Staged to on screen, worst case. It used to be 1 s, described as "SSE frame
 #: out, console renders the card", and that was the number for a delivery path
@@ -97,8 +108,13 @@ DELIVERY_ALLOWANCE: Final[timedelta] = timedelta(seconds=3)
 #: the ceiling rather than picked, because what a commander is promised is an
 #: *arrival*, not a start:
 #:
-#:   111 s (this) + 6 s (:data:`COMPOSITION_CAP`) + 3 s (:data:`DELIVERY_ALLOWANCE`)
+#:   105 s (this) + 12 s (:data:`COMPOSITION_CAP`) + 3 s (:data:`DELIVERY_ALLOWANCE`)
 #:     = 120 s  =  :data:`HARD_CEILING`
+#:
+#: It was 111 s against a 6 s cap. The cap is now 12 s -- measured, see the
+#: interceptor's descriptor -- so this gives back the six seconds rather than
+#: letting the sum drift over the ceiling. Solved, not chosen: the assertion
+#: below is what keeps the three numbers honest about each other.
 #:
 #: Every term on the left is a cap something else already enforces, so the sum
 #: is a bound and not a hope: the runtime cancels the composing run at the
@@ -123,7 +139,20 @@ DELIVERY_ALLOWANCE: Final[timedelta] = timedelta(seconds=3)
 #:
 #: Nothing here waits *for* the deadline. It is a ceiling on when the card
 #: appears, not a schedule for it.
-COMPOSE_DEADLINE: Final[timedelta] = timedelta(seconds=111)
+COMPOSE_DEADLINE: Final[timedelta] = HARD_CEILING - COMPOSITION_CAP - DELIVERY_ALLOWANCE
+
+#: The identity above, enforced rather than described.
+#:
+#: Every term is now derived from something else -- the ceiling is the promise,
+#: the cap is the catalog -- so the one way this can break is a descriptor
+#: change that leaves no room to compose in. That is a configuration error and
+#: it should be loud at import, not a card that quietly arrives late.
+if COMPOSE_DEADLINE.total_seconds() <= 0:  # pragma: no cover - a catalog misconfiguration
+    raise ValueError(
+        "the incident-interceptor's latency cap leaves no time to reach the "
+        "composition: HARD_CEILING - COMPOSITION_CAP - DELIVERY_ALLOWANCE is "
+        f"{COMPOSE_DEADLINE}"
+    )
 
 
 class AutonomyTrigger(StrEnum):

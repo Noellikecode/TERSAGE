@@ -13,6 +13,15 @@ PREFIX = "/api/v1/registry"
 
 
 def _descriptor_payload(version: str, **overrides: Any) -> dict[str, Any]:
+    """A records-watcher descriptor at an arbitrary version.
+
+    Every ``version`` passed here must stay off the fleet's own lineage.
+    Startup seeds the whole fleet at :data:`FLEET_VERSION`, so a test that
+    reaches for a version the fleet already publishes is not testing what it
+    reads as: an identical republish is an idempotent 200, not a 201, and a
+    changed one is a 409. Hence the 9.x line -- reserved for these tests and
+    left free by :data:`FLEET_VERSION` for as long as the fleet has one digit.
+    """
     payload = RECORDS_WATCHER.model_copy(update={"version": version}).model_dump(mode="json")
     payload.update(overrides)
     return payload
@@ -66,18 +75,18 @@ def test_an_unknown_version_is_a_404_with_the_error_envelope(app_client: TestCli
 
 
 def test_publishing_a_new_version_creates_it(app_client: TestClient) -> None:
-    response = app_client.post(f"{PREFIX}/agents", json=_descriptor_payload("1.1.0"))
+    response = app_client.post(f"{PREFIX}/agents", json=_descriptor_payload("9.1.0"))
     assert response.status_code == 201
-    assert response.json()["version"] == "1.1.0"
+    assert response.json()["version"] == "9.1.0"
 
 
 @pytest.mark.idempotency
 def test_republishing_an_identical_descriptor_is_a_no_op(app_client: TestClient) -> None:
-    payload = _descriptor_payload("1.2.0")
+    payload = _descriptor_payload("9.2.0")
     assert app_client.post(f"{PREFIX}/agents", json=payload).status_code == 201
     again = app_client.post(f"{PREFIX}/agents", json=payload)
     assert again.status_code == 200
-    assert again.json()["version"] == "1.2.0"
+    assert again.json()["version"] == "9.2.0"
 
 
 @pytest.mark.invariant
@@ -85,10 +94,10 @@ def test_republishing_a_changed_descriptor_at_the_same_version_is_refused(
     app_client: TestClient,
 ) -> None:
     """A version somebody pinned must not turn into different code underneath them."""
-    payload = _descriptor_payload("1.3.0")
+    payload = _descriptor_payload("9.3.0")
     assert app_client.post(f"{PREFIX}/agents", json=payload).status_code == 201
 
-    changed = _descriptor_payload("1.3.0", role_summary="Now also files referrals.")
+    changed = _descriptor_payload("9.3.0", role_summary="Now also files referrals.")
     response = app_client.post(f"{PREFIX}/agents", json=changed)
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "APPEND_ONLY_VIOLATION"

@@ -257,6 +257,14 @@ class IncidentSession:
             model=container.model,
             use_langgraph=container.settings.langgraph_enabled,
             max_graph_steps=container.settings.agent_graph_max_steps,
+            # Left unset, this took the constructor's `"1.0.0"` default, so
+            # every entry the recorder wrote was stamped with a version string
+            # nobody chose -- and after the fleet moved to 1.1.0 the console
+            # attributed the whole incident log to a version that is no longer
+            # published. The provenance claim this project rests on is that an
+            # emission names the *pinned* version that produced it; a literal
+            # in a constructor signature is not that.
+            agent_version=FLEET_VERSION,
         )
         self.controller = IncidentController(
             incidents=container.incidents,

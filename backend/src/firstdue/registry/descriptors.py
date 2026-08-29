@@ -43,7 +43,20 @@ from firstdue.domain.registry import AgentDescriptor
 from firstdue.errors import NotFoundError
 
 #: The version every agent in this build is published at.
-FLEET_VERSION: Final[str] = "1.0.0"
+#:
+#: Bumped from ``1.0.0`` when two descriptors changed content: ``sensor-fusion``
+#: took its latency cap from 2 s to 12 s, and ``incident-recorder`` gained
+#: ``read:public-records``. A published version is immutable, so changing what a
+#: descriptor *says* without changing what it is *called* is refused by the
+#: catalog at seed time -- correctly. This is the "publish a new version
+#: instead" the guard asks for.
+#:
+#: Bumped again to ``1.2.0`` for ``incident-interceptor``'s latency cap, 6 s to
+#: 12 s. Same rule, and worth stating as a rule rather than a changelog: a
+#: descriptor's *content* is what the version names. Editing a comment beside
+#: one costs nothing; editing a number inside one costs a version, because
+#: somewhere there is a pinned subscription that promised that number.
+FLEET_VERSION: Final[str] = "1.2.0"
 #: The department that runs the fleet and subscribes to all eight.
 HOME_DEPARTMENT: Final[Department] = Department.FIRE
 #: Fixed publication timestamp, so seeding is byte-identical on every run.
@@ -375,7 +388,29 @@ INCIDENT_INTERCEPTOR = _agent(
     # synchronously outside any runtime run and is already checked against
     # `settings.instant_brief_budget_ms`, where exceeding it is logged as a
     # defect rather than silently truncated.
-    latency_ms=6_000,
+    #
+    # 6 s was still wrong, and wrong in the way the paragraph above warns
+    # about: it was set from stage budgets nobody had measured. One live
+    # `gemini-3.5-flash` compose on this project costs 5.72-6.97 s, so the cap
+    # on the *whole run* was below the mean cost of a single model call inside
+    # it. Every entry-package composition was cancelled by the runtime before
+    # the crew brief returned, `_last_entry_package` was never set, and the
+    # loop reported "the composing run ended without staging an entry package"
+    # -- the exact message `run_entry_package` writes for a run the runtime
+    # cancelled. No package, therefore no optimal path and no crew brief, on
+    # every live incident.
+    #
+    # 12 s is the slowest stage (10 s, shared by the intake read, the enriched
+    # prose and the crew brief) plus the same 2 s reserve the paragraph above
+    # argues for: the model reaches its own deadline first and raises a refusal
+    # the loop can record and route around, instead of the runtime cancelling
+    # the run anonymously underneath it.
+    #
+    # `COMPOSITION_CAP` in `firstdue.incident.autonomy` reads this number off
+    # the catalog, and `COMPOSE_DEADLINE` is solved against it, so raising it
+    # here moves the fallback earlier rather than pushing the card past the
+    # two-minute ceiling.
+    latency_ms=12_000,
     input_schema="DispatchEvent",
     output_schema="BriefEmission",
 )

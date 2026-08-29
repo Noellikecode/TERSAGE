@@ -266,6 +266,9 @@ class RecordsWatcher:
         self._use_langgraph = use_langgraph
         self._max_graph_steps = max_graph_steps
         self._agent_version = agent_version
+        #: The district's building ids, for the duration of one pass. See
+        #: :meth:`_candidates_for`.
+        self._district_candidates: dict[str, tuple[str, ...]] = {}
 
     @property
     def reasons(self) -> bool:
@@ -301,6 +304,10 @@ class RecordsWatcher:
         # catalog makes about it. An agent that could not see its own budget
         # could not stop inside it.
         deadline = deadline or self._own_deadline()
+        # A pass reads the district's building ids at most once. Cleared here
+        # rather than at the end, so a pass that was cancelled mid-flight does
+        # not leave the next one reading a stale list. See `_candidates_for`.
+        self._district_candidates.clear()
 
         if not self.reasons:
             # Retrieval gets a share of the pass here too, and it is the same
@@ -892,6 +899,40 @@ class RecordsWatcher:
             return await self._ground_address(raw, district_id)
         return address.address_id
 
+    async def _candidates_for(self, district_id: str) -> tuple[str, ...]:
+        """The district's building ids, read once per pass.
+
+        This used to be read inside :meth:`_ground_address`, which is called
+        once per record the city adapter cannot place -- and on live data that
+        is *most* records: the DataSF feeds are keyed by block-and-lot, not by
+        a normalized address line. So a pass over a district holding 5,091
+        filings did up to 5,091 full reads of the district's 385 profiles
+        before it extracted anything.
+
+        It never got that far. Measured on a live pass, ``records-watcher``
+        reported ``addresses: 0`` and ``deferred: 5091``: the whole 120-second
+        budget went on re-reading the same profile list, the extraction loop
+        found the deadline already gone, and the agent wrote no facts, recorded
+        no steps and read as idle on the console for the length of every pass
+        it ever ran. In fake mode the same list is a dictionary lookup, which
+        is why nothing looked wrong locally.
+
+        Held for the duration of one pass and cleared at the start of the next.
+        Within a pass it cannot go stale in a way that matters: a profile
+        created *by this pass* is one whose records the pass has already
+        placed, so it is not a candidate for grounding anything else.
+        """
+        cached = self._district_candidates.get(district_id)
+        if cached is not None:
+            return cached
+        candidates = tuple(
+            sorted(
+                profile.address_id for profile in await self._profiles.list_by_district(district_id)
+            )
+        )
+        self._district_candidates[district_id] = candidates
+        return candidates
+
     async def _ground_address(self, reference: str, district_id: str) -> str | None:
         """Ask the grounding service which building a stray address line means.
 
@@ -902,11 +943,7 @@ class RecordsWatcher:
         """
         if self._grounding is None:
             return None
-        candidates = tuple(
-            sorted(
-                profile.address_id for profile in await self._profiles.list_by_district(district_id)
-            )
-        )
+        candidates = await self._candidates_for(district_id)
         if not candidates:
             return None
         # Never raises, by contract: every failure is a decline. Guarded anyway

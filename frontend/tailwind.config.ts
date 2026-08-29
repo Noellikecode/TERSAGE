@@ -40,6 +40,13 @@ const config: Config = {
         hero: ['2.75rem', { lineHeight: '1', letterSpacing: '-0.02em' }],
         // A heading that names a region of the page, once.
         title: ['1.0625rem', { lineHeight: '1.4' }],
+        // The gap between `title` and `hero` was doing real damage: the entry
+        // package modal is the one screen a commander is asked to *decide* on,
+        // and its heading spoke at 17px -- the same volume as the sentence
+        // under it, and one step above the metadata. A dialog needs a headline
+        // that is unmistakably the headline without shouting like `hero`,
+        // which is sized to be read across a room.
+        display: ['1.625rem', { lineHeight: '1.25', letterSpacing: '-0.01em' }],
         // The default for anything that is actually read rather than glanced.
         body: ['0.875rem', { lineHeight: '1.5' }],
         // A label above a number. Small on purpose -- it is the number's
