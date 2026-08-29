@@ -575,19 +575,59 @@ export function RegionalHeatMap({
    * solution and the better one here, because it also survives the frame being
    * unmounted and remounted when the panel switches between refusal and data.
    */
-  const frameRef = useCallback((node: HTMLDivElement | null) => {
-    observerRef.current?.disconnect();
-    observerRef.current = null;
-    if (!node || typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      if (width > 0 && height > 0) setSize({ width, height });
-    });
-    observer.observe(node);
-    observerRef.current = observer;
+  /**
+   * Report a measurement, and only a new one.
+   *
+   * The frame is remeasured on every resize and the map rebuilds its camera
+   * and its layers from the result, so handing back an equal-but-new object
+   * costs a full deck.gl rebuild for a size that did not change.
+   */
+  const applySize = useCallback((width: number, height: number) => {
+    if (width <= 0 || height <= 0) return;
+    setSize((prev) =>
+      prev && prev.width === width && prev.height === height ? prev : { width, height },
+    );
   }, []);
+
+  const frameRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      if (!node) return;
+
+      /**
+       * **Measure the frame here, not only when the browser gets round to it.**
+       *
+       * The observer was the only source of a size, and an observer reports
+       * asynchronously: it schedules its first callback and the browser runs it
+       * when it next does layout work. That is fine on a cold page load, where
+       * layout is about to happen anyway. It is not fine when this panel
+       * remounts into a tab that is already painted and idle -- closing an
+       * incident hands the column back to standby without anything else on the
+       * page changing size -- because the browser has no reason to do the work
+       * and the first callback can sit unrun. The frame is on screen, at its
+       * full width, and the map waits for a measurement of it forever.
+       *
+       * The node is attached and laid out by the time a ref callback sees it,
+       * so its own box is available for the asking. Asking costs one synchronous
+       * layout, once per mount, and removes the wait entirely. The observer
+       * still runs, and still owns every size *change* after this one.
+       */
+      const rect = node.getBoundingClientRect();
+      applySize(rect.width, rect.height);
+
+      if (typeof ResizeObserver === 'undefined') return;
+      const observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        const { width, height } = entry.contentRect;
+        applySize(width, height);
+      });
+      observer.observe(node);
+      observerRef.current = observer;
+    },
+    [applySize],
+  );
 
   useEffect(() => () => observerRef.current?.disconnect(), []);
 

@@ -324,6 +324,34 @@ describe('the regional heat map', () => {
     expect(screen.getByTestId('regional-heat-canvas')).toBeInTheDocument();
   });
 
+  it('measures the frame on mount rather than waiting to be told its size', () => {
+    // The other half of the same failure, and the half that survived the
+    // callback ref. A ResizeObserver reports *asynchronously*: it schedules its
+    // first callback and the browser runs it the next time it does layout work.
+    // On a cold load that happens immediately. On a remount into an already
+    // painted, idle tab -- closing an incident hands this column back to
+    // standby without anything else on the page changing size -- the browser
+    // has no reason to do that work, the first callback can sit unrun, and the
+    // map waits forever for a measurement of a frame that is on screen at full
+    // width. So the frame is asked for its own box the moment the ref attaches,
+    // and the observer is left owning only the changes after that.
+    const measured: Element[] = [];
+    const spy = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockImplementation(function (this: Element) {
+        measured.push(this);
+        return { width: 905, height: 308 } as DOMRect;
+      });
+
+    try {
+      render(<RegionalHeatMap activity={activity()} basemap={BASEMAP} webgl={false} />);
+      const frame = screen.getByTestId('regional-heat-canvas');
+      expect(measured).toContain(frame);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('draws without a ground plane rather than refusing to draw at all', () => {
     // A missing basemap costs the coastline, not the map. The panel must not
     // treat it as a failure.
