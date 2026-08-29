@@ -29,8 +29,14 @@ async def load_demo_state(container: Container) -> int:
         return 0
 
     profiles = profiles_from_seed(document)
+    # Records yes, findings no -- see `Settings.demo_rebuild_findings`. The
+    # facts are the months of reading the fleet is supposed to have already
+    # done; the conflicts between them are this afternoon's work, and seeding
+    # those is what left the slow loop with nothing to show.
+    seed_conflicts = not container.settings.demo_rebuild_findings
     loaded = 0
     already = 0
+    withheld = 0
     for profile in profiles:
         # A profile that is already there is the ordinary case on any restart
         # against a durable store, and it used to be fatal: `create` refuses a
@@ -49,14 +55,18 @@ async def load_demo_state(container: Container) -> int:
         loaded += 1
         for fact in profile.all_facts():
             await container.facts.append(fact)
-        for conflict in profile.conflicts:
-            await container.conflicts.add(conflict)
+        if seed_conflicts:
+            for conflict in profile.conflicts:
+                await container.conflicts.add(conflict)
+        else:
+            withheld += len(profile.conflicts)
 
     logger.info(
         "demo_state_loaded",
         extra={
             "profiles": loaded,
             "already_present": already,
+            "conflicts_withheld": withheld,
             "content_hash": str(document.get("content_hash", "")),
         },
     )

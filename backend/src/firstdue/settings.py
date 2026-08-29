@@ -526,6 +526,30 @@ class Settings(BaseSettings):
     #: only thing that sets it.
     demo_synthetic_sweep: bool = False
 
+    #: Seed the records, not the findings, so the slow loop has work to show.
+    #:
+    #: The seed is a whole finished district: 134 profiles, their facts, **and
+    #: their 32 conflicts**. Loading all of it means the console opens on the
+    #: answers -- every "records disagree" card already on screen at t=0 -- and
+    #: a slow-loop pass over it then changes nothing, because appending a fact
+    #: that is already there is a no-op and the conflicts it would detect are
+    #: already recorded. Measured: one live pass, 56 materialisations, dozens of
+    #: model calls, and every district counter flat for 121 s. The page was
+    #: honestly reporting a district where nothing new happened, which is
+    #: indistinguishable on screen from a broken loop.
+    #:
+    #: With this on, the conflicts are left out of the load. The *records* are
+    #: still seeded -- they are months of reading the fleet is supposed to have
+    #: already done, which is the whole thesis -- but the disagreements between
+    #: them have not been found yet. `structure-watch` re-derives them on its
+    #: first pass from deterministic rules over facts already in the store, so
+    #: they arrive on screen in seconds and with no model call, and the panel
+    #: fills in as an officer watches instead of being full before they look.
+    #:
+    #: Not a rendering trick: the conflicts really are detected live, by the
+    #: agent that detects them, citing the rule and the fact ids as always.
+    demo_rebuild_findings: bool = False
+
     # ---------------------------------------------------- incident autonomy --
     #: Let the incident loop compose the entry package without being asked.
     #:

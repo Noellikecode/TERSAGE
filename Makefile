@@ -196,7 +196,29 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	@#     deployment: it would put simulated wall readings in a real fire's
 	@#     permanent record.
 	@#
-	@#   NEXT_PUBLIC_DEMO_DISPATCH=true (console)
+	@#   FIRESTORE_NAMESPACE=demo_<epoch>_ + DEMO_REBUILD_FINDINGS=true
+	@#     A blank slate for every launch, which is the only way the slow loop has
+	@#     anything to show. `.env.live` pins `local_`, and that one namespace
+	@#     accumulated across every run this project has ever done -- 134 profiles,
+	@#     10,674 facts and 32 conflicts, all present before the console finished
+	@#     loading. A pass over a finished district is a no-op by construction: the
+	@#     facts are already appended and the conflicts already recorded, so the
+	@#     counters cannot move and the screen shows five idle agents standing over
+	@#     work somebody else did. Measured before this line existed: 121 s of a
+	@#     live pass, 56 materialisations, every district counter flat.
+	@#
+	@#     The stamped namespace gives each launch its own collections, so the seed
+	@#     lands fresh. `DEMO_REBUILD_FINDINGS` then withholds the seeded conflicts
+	@#     from that load, leaving the *records* -- the months of reading the fleet
+	@#     is meant to have already done -- and none of the disagreements. The
+	@#     "records disagree" panel opens empty and `structure-watch` fills it in on
+	@#     its first pass, from deterministic rules over facts already in the store,
+	@#     with no model call and no wait.
+	@#
+	@#     It leaves a namespace per run in Firestore. That is a dev project and
+	@#     they are small; `make demo` in fake mode leaves nothing at all.
+	@#
+#   NEXT_PUBLIC_DEMO_DISPATCH=true (console)
 	@#     Runs the demo choreography against the live backend: slow-loop
 	@#     passes on an interval, then a simulated 911 call, then the drone
 	@#     sweep and the agency notifications. The console refuses to place a
@@ -224,6 +246,7 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	 [ -n "$$TOKEN" ] || { echo "could not mint a token; see infra/smoke-staging.sh for the grant it needs"; exit 1; }; \
 	 lsof -ti:$(API_PORT) >/dev/null 2>&1 && { echo "port $(API_PORT) is already in use; stop it first"; exit 1; } || true; \
 	 ( set -a && . ./.env && . ./.env.live && set +a && \
+	   FIRESTORE_NAMESPACE=demo_$$(date +%s)_ DEMO_REBUILD_FINDINGS=true \
 	   EVENT_BACKEND=pubsub PUBSUB_PULL_BRIDGE=true PUBSUB_TOPIC_PREFIX= \
 	   INTERNAL_PUSH_AUDIENCE=https://firstdue-incident \
 	   INTERNAL_PUSH_SERVICE_ACCOUNT=fd-pubsub-push@$(GCP_PROJECT).iam.gserviceaccount.com,fd-scheduler@$(GCP_PROJECT).iam.gserviceaccount.com \
