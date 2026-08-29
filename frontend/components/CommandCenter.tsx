@@ -2537,7 +2537,19 @@ export function CommandCenter({
                     24,000px down a scrolling column -- playing to nobody, which
                     is the same as not playing. The recording is the first thing
                     that happens in an incident and it belongs where an officer
-                    is already looking. */}
+                    is already looking.
+
+                    **It does not autoplay, and must not start doing so.** The
+                    overlay above it plays the call as it arrives -- `dispatch`
+                    opens that overlay for every call that carries a recording,
+                    so this player is mounted at the same moment and with the
+                    same file. Both asked to play, and the same twenty-three
+                    seconds ran twice over itself a fraction of a second apart:
+                    two voices disagreeing about which floor the fire is on.
+                    The overlay owns the first playback because it is the thing
+                    the dispatch opens. This one keeps its controls and waits to
+                    be pressed, which is what it is for -- hearing the call
+                    again, after. */}
                 {incident.intake && (
                   <div className="mb-4">
                     <CallAudio
@@ -2545,7 +2557,6 @@ export function CommandCenter({
                       label={
                         incident.intake.channel === 'CALL_911' ? '911 call' : 'CAD narrative'
                       }
-                      autoPlay
                     />
                   </div>
                 )}
