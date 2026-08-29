@@ -1772,14 +1772,20 @@
       },
       "EntryPathRequest": {
         "additionalProperties": false,
-        "description": "Which storey the route is solved to.\n\nZero-based, and defaulting to the ground floor -- the only storey a route\ncan reach without assuming a stairwell nobody surveyed. A caller that knows\nthe floor of origin (the intake binds one, marked as reported) passes it.",
+        "description": "Which storey the route is solved to.\n\nZero-based. **Omitted, it comes from the floor the call reported** -- the\ninterceptor binds ``intake.reported_floor_of_origin`` to the span that\nsupports it, and a caller who says the third floor is alight should not have\na crew routed to the lobby. Absent a reported floor it stays on the ground,\nwhich is the only storey a route reaches without assuming a stairwell nobody\nsurveyed.\n\nSent explicitly, it wins. A commander naming a storey outranks a caller\nreporting one, because the caller is reporting and the commander deciding.\n``null`` and omission mean the same thing; they have to be distinguishable\nfrom an explicit ``0``, which is why this is nullable rather than defaulted.",
         "properties": {
           "target_level": {
-            "default": 0,
-            "maximum": 199.0,
-            "minimum": 0.0,
-            "title": "Target Level",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 199.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Level"
           }
         },
         "title": "EntryPathRequest",

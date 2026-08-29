@@ -242,14 +242,22 @@ class CloseIncidentRequest(BaseModel):
 class EntryPathRequest(BaseModel):
     """Which storey the route is solved to.
 
-    Zero-based, and defaulting to the ground floor -- the only storey a route
-    can reach without assuming a stairwell nobody surveyed. A caller that knows
-    the floor of origin (the intake binds one, marked as reported) passes it.
+    Zero-based. **Omitted, it comes from the floor the call reported** -- the
+    interceptor binds ``intake.reported_floor_of_origin`` to the span that
+    supports it, and a caller who says the third floor is alight should not have
+    a crew routed to the lobby. Absent a reported floor it stays on the ground,
+    which is the only storey a route reaches without assuming a stairwell nobody
+    surveyed.
+
+    Sent explicitly, it wins. A commander naming a storey outranks a caller
+    reporting one, because the caller is reporting and the commander deciding.
+    ``null`` and omission mean the same thing; they have to be distinguishable
+    from an explicit ``0``, which is why this is nullable rather than defaulted.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    target_level: int = Field(default=0, ge=0, le=199)
+    target_level: int | None = Field(default=None, ge=0, le=199)
 
 
 class PackageSummary(BaseModel):

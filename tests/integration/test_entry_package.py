@@ -457,3 +457,106 @@ def test_an_unknown_package_is_a_404(app_client: TestClient, incident: dict[str,
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "NOT_FOUND"
+
+
+# ------------------------------------------- the floor the caller reported
+
+
+@pytest.mark.invariant
+async def test_the_reported_floor_of_origin_decides_which_storey_the_path_climbs_to(
+    container: Container, session: IncidentSession
+) -> None:
+    """The caller says which floor is burning. The route has to go there.
+
+    Everything for this already existed and none of it was joined up. The
+    interceptor reads ``intake.reported_floor_of_origin`` off the call and binds
+    it to the span that supports it; the graph carries a vertical core with an
+    interior node on every storey the massing model measured; the solver takes a
+    target level and the waypoints carry the height to draw it at. But the
+    target defaulted to the ground and nothing ever passed anything else, so a
+    caller reporting smoke on the third floor got a crew routed to the lobby --
+    on a five-storey building, using one storey of a graph that had all five.
+
+    Counting is the fire service's: the ground storey is the first floor, so the
+    third floor is two levels above it.
+    """
+    await run_slow_loop(container, approve=False)
+    opened = await session.controller.open(
+        address=DISPUTED_ADDRESS_ID, cad_ref="CAD-FLOOR", alarm_level=2
+    )
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+    await session.run_intake(
+        incident_id,
+        narrative="The third floor is full of smoke. There are people still inside.",
+        channel=IntakeChannel.CALL_911,
+        source_ref="intake/CAD-FLOOR",
+        correlation_id="corr-floor",
+    )
+
+    plan = await session.solve_entry_path(incident_id)
+
+    assert plan.target_level == 2
+    reached = [waypoint.level for waypoint in plan.entry.waypoints if waypoint.level is not None]
+    assert max(reached) == 2
+    # And it climbed rather than teleporting: every storey between the door and
+    # the fire floor is on the route, because that is the walk crews make.
+    assert sorted(set(reached)) == [0, 1, 2]
+
+
+@pytest.mark.invariant
+async def test_an_explicit_target_level_still_wins_over_the_reported_floor(
+    container: Container, session: IncidentSession
+) -> None:
+    """A commander asking for a storey outranks what the call said.
+
+    The reported floor is a default, not an override. An IC who asks for the
+    ground storey gets the ground storey even on a call that reported the third,
+    because the caller is reporting and the IC is deciding.
+    """
+    await run_slow_loop(container, approve=False)
+    opened = await session.controller.open(
+        address=DISPUTED_ADDRESS_ID, cad_ref="CAD-FLOOR-2", alarm_level=2
+    )
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+    await session.run_intake(
+        incident_id,
+        narrative="The third floor is full of smoke. There are people still inside.",
+        channel=IntakeChannel.CALL_911,
+        source_ref="intake/CAD-FLOOR-2",
+        correlation_id="corr-floor-2",
+    )
+
+    plan = await session.solve_entry_path(incident_id, target_level=0)
+
+    assert plan.target_level == 0
+
+
+@pytest.mark.invariant
+async def test_a_call_that_reports_no_floor_leaves_the_path_on_the_ground(
+    container: Container, session: IncidentSession
+) -> None:
+    """No reported floor is not a reported ground floor, but it routes the same.
+
+    The difference is that nothing was inferred to get there: the solver was
+    given no storey and used its documented default, rather than reading a
+    number out of a call that never contained one.
+    """
+    await run_slow_loop(container, approve=False)
+    opened = await session.controller.open(
+        address=DISPUTED_ADDRESS_ID, cad_ref="CAD-FLOOR-3", alarm_level=2
+    )
+    incident_id = opened.incident.incident_id
+    await session.emit_instant(opened)
+    await session.run_intake(
+        incident_id,
+        narrative="Smoke showing from the rear. The side gate is chained shut.",
+        channel=IntakeChannel.CALL_911,
+        source_ref="intake/CAD-FLOOR-3",
+        correlation_id="corr-floor-3",
+    )
+
+    plan = await session.solve_entry_path(incident_id)
+
+    assert plan.target_level == 0

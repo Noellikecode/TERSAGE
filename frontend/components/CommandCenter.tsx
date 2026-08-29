@@ -1251,13 +1251,28 @@ export function CommandCenter({
     const reduced =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-    // Called optionally: not every environment this renders in implements it,
-    // and a console that throws while opening a building is far worse than one
-    // that opens it without scrolling.
-    profileRef.current?.scrollIntoView?.({
-      behavior: reduced ? 'auto' : 'smooth',
-      block: 'start',
-    });
+    // The *pane* is moved, never the document.
+    //
+    // `scrollIntoView` walks every scrollable ancestor and will happily scroll
+    // the document itself. The shell is one viewport tall and the document is
+    // `overflow: hidden`, so a document scrolled by script has no scrollbar to
+    // put it back: it stays where it was left, the shell hangs off the top of
+    // the window, and the space it used to occupy shows as a band of empty
+    // ground under the footer that grows every time a building is opened.
+    //
+    // So the nearest scrolling ancestor is found and only that one is moved,
+    // by the distance between the two boxes. Nothing above it is touched.
+    const node = profileRef.current;
+    if (!node) return;
+    let pane: HTMLElement | null = node.parentElement;
+    while (pane) {
+      const overflow = getComputedStyle(pane).overflowY;
+      if (overflow === 'auto' || overflow === 'scroll') break;
+      pane = pane.parentElement;
+    }
+    if (!pane) return;
+    const delta = node.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    pane.scrollBy?.({ top: delta, behavior: reduced ? 'auto' : 'smooth' });
   }, [openedAddress]);
 
   /**

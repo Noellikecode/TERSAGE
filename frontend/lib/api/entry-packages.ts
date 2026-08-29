@@ -101,13 +101,25 @@ const DIAGNOSTICS_TIMEOUT_MS = 30_000;
  */
 export const ENTRY_PACKAGE_POLL_MS = 3000;
 
+/**
+ * Compose a package, for a storey somebody named or the one the call reported.
+ *
+ * `targetLevel` is left out by default and the field is then omitted from the
+ * body entirely, which is not the same as sending `0`. Omitted, the backend
+ * routes to the floor the 911 call reported -- it binds
+ * `intake.reported_floor_of_origin` to the span that supports it, and a caller
+ * saying the third floor is alight should not have a crew routed to the lobby.
+ * Sending `0` says "the ground storey, whatever the call said", which is a
+ * decision, and only a commander gets to make it.
+ */
 export function composeEntryPackage(
   incidentId: string,
-  targetLevel = 0,
+  targetLevel?: number,
 ): Promise<ApiResult<EntryPackageView>> {
-  return browserPost<EntryPackageView>(`/api/v1/incidents/${incidentId}/entry-packages`, {
-    target_level: targetLevel,
-  });
+  return browserPost<EntryPackageView>(
+    `/api/v1/incidents/${incidentId}/entry-packages`,
+    targetLevel === undefined ? {} : { target_level: targetLevel },
+  );
 }
 
 export function listEntryPackages(incidentId: string): Promise<ApiResult<PackageListView>> {

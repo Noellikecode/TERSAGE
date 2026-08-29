@@ -361,6 +361,17 @@ class IncidentSession:
         self._pending_packages: dict[str, tuple[int, str]] = {}
         self._last_entry_package: dict[str, EntryPackage] = {}
 
+        #: The storey a caller said was burning, per incident, one-based.
+        #:
+        #: Kept because the entry path needs it and nothing else carries it that
+        #: far: the log records which attributes a narrative bound but not their
+        #: values -- the transcript has exactly one home and the log is not it --
+        #: and the intake response is returned once, to the console. Without
+        #: this the solver had no way to learn the floor the call reported, so
+        #: it routed every crew to the ground storey of a building whose graph
+        #: had all five.
+        self._reported_floor: dict[str, int] = {}
+
         #: What the loop has already decided about composing a package on its
         #: own, per incident. See :mod:`firstdue.incident.autonomy`.
         self._autonomy: dict[str, AutonomyState] = {}
@@ -1127,6 +1138,12 @@ class IncidentSession:
         await self._record_read(incident_id, reading)
 
         signals = signals_from(reading)
+        # Remembered before anything is routed, so a path solved later in this
+        # incident goes to the storey the caller named. A later call that names
+        # a different floor replaces it: the most recent report is the one a
+        # commander is acting on.
+        if signals.reported_floor_of_origin is not None:
+            self._reported_floor[incident_id] = signals.reported_floor_of_origin
         emission = await self._intake_amendment(incident, reading)
 
         now = self._container.clock.now()
@@ -2200,9 +2217,13 @@ class IncidentSession:
                 ),
                 refs=[str(trigger), *assessment.failed_ids],
             )
+            # No storey named here on purpose: the loop composing a package for
+            # itself should route to the floor the call reported, exactly as a
+            # human asking would. Pinning the ground here was what sent an
+            # autonomous package to the lobby of a building whose caller had
+            # said the third floor was alight.
             package = await self.run_entry_package(
                 incident_id,
-                target_level=0,
                 correlation_id=self._container.ids.new_id("corr"),
                 trigger=str(trigger),
             )
@@ -2272,9 +2293,20 @@ class IncidentSession:
         await self._consider_entry_package(incident_id, deadline_elapsed=True)
 
     async def run_entry_package(
-        self, incident_id: str, *, target_level: int, correlation_id: str, trigger: str = ""
+        self,
+        incident_id: str,
+        *,
+        target_level: int | None = None,
+        correlation_id: str,
+        trigger: str = "",
     ) -> EntryPackage:
         """Compose a package through the runtime, under the incident's grant.
+
+        ``target_level`` follows :meth:`solve_entry_path`: omitted, it is the
+        storey the call reported, so a package composed for a fire on the third
+        floor carries a route that climbs to it. Resolved here rather than at
+        the solve so the storey the package was *asked* for is the one recorded
+        against the run, whether a human or the loop asked for it.
 
         A separate run from anything the brief does, and deliberately late: the
         instant brief has been persisted and streamed long before this is asked
@@ -2287,7 +2319,8 @@ class IncidentSession:
         autonomy changes who decided, not what the work is or what may do it.
         """
         grant = await self._require_grant(incident_id)
-        self._pending_packages[correlation_id] = (target_level, trigger)
+        storey = self.target_level_for(incident_id) if target_level is None else target_level
+        self._pending_packages[correlation_id] = (storey, trigger)
         try:
             run = await self.fleet.run(
                 AGENT_ID,
@@ -2623,8 +2656,32 @@ class IncidentSession:
                 keys.extend(str(key) for key in reported)
         return tuple(keys), reads
 
-    async def solve_entry_path(self, incident_id: str, *, target_level: int = 0) -> EntryPathPlan:
+    def target_level_for(self, incident_id: str) -> int:
+        """The storey a route should climb to when nobody has named one.
+
+        The caller's reported floor of origin, if this incident had one, and the
+        ground storey otherwise. Counting is the call's and the fire service's:
+        the ground storey is the first floor, so a reported third floor is two
+        levels above it.
+
+        Nothing is inferred when no floor was reported. A call that never named
+        a storey leaves this at the ground because that is the documented
+        default, not because a number was read out of a sentence without one.
+        """
+        reported = self._reported_floor.get(incident_id)
+        if reported is None:
+            return 0
+        return max(0, reported - 1)
+
+    async def solve_entry_path(
+        self, incident_id: str, *, target_level: int | None = None
+    ) -> EntryPathPlan:
         """Solve the entry and egress route, or record the refusal.
+
+        ``target_level`` is zero-based. Left out, it comes from the floor the
+        call reported -- a default, not an override: a commander who names a
+        storey outranks a caller who reported one, because the caller is
+        reporting and the commander is deciding.
 
         The solver is pure and lives in :mod:`firstdue.incident.entrypath`; this
         method is the part that reads. Everything it hands over already exists
@@ -2638,6 +2695,8 @@ class IncidentSession:
         snapshot = await self._container.snapshots.get(incident.profile_snapshot_id)
         if snapshot is None:
             raise NotFoundError("profile snapshot is missing", details={"incident_id": incident_id})
+
+        storey = self.target_level_for(incident_id) if target_level is None else target_level
 
         now = self._container.clock.now()
         resolved = self._container.city.get_address(incident.address_id)
@@ -2656,7 +2715,7 @@ class IncidentSession:
                 if resolved is not None
                 else None
             ),
-            target_level=target_level,
+            target_level=storey,
         )
 
         # What the solve was priced against, and who filed it. The graph is

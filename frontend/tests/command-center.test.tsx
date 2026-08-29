@@ -1343,18 +1343,36 @@ describe('a console restarted onto a live log it did not watch fill', () => {
  * one thing that makes the click legible as having done anything.
  */
 describe('opening a structure from a conflict', () => {
-  it('brings the profile into view rather than leaving it below the fold', async () => {
+  it('scrolls the pane the profile is in, and never the document', async () => {
+    // `scrollIntoView` walks every scrollable ancestor, document included. The
+    // shell is one viewport tall and the document does not scroll, so a
+    // document moved by script has no scrollbar to put it back: it stays
+    // there, the shell hangs off the top of the window, and the space it used
+    // to fill shows as a band of empty ground under the footer -- growing
+    // every time somebody opens a building.
     const scrollIntoView = vi.fn();
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
       writable: true,
       value: scrollIntoView,
     });
+    const scrollBy = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollBy', {
+      configurable: true,
+      writable: true,
+      value: scrollBy,
+    });
 
     renderConsole();
     fireEvent.click(screen.getByRole('button', { name: openDisagreement(ADDRESS) }));
     await waitFor(() => expect(screen.getByText(/profile v16/)).toBeInTheDocument());
 
-    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    // The guard that matters, and the one this environment can actually make:
+    // `scrollIntoView` is the call that moves the page, and it is never used.
+    // Which pane gets moved instead is a question about real layout -- jsdom
+    // loads no stylesheet, so nothing here computes as scrollable and the walk
+    // correctly finds nothing to move. That half is verified in a browser.
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollBy).not.toHaveBeenCalled();
   });
 });
