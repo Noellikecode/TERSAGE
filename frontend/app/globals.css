@@ -9,6 +9,16 @@
 html,
 body {
   height: 100%;
+  /* Said, and now enforced.
+     The shell below is one viewport tall and every pane inside it scrolls on
+     its own, so the document has nothing left to scroll -- but nothing was
+     stopping it, and something was overflowing it by about 130px. That is
+     enough for the window's own scrollbar to appear, and a window scrollbar
+     takes roughly fifteen pixels of width away from the layout when it does.
+     The countdown banner arriving and leaving tipped the page over that line
+     and back, so the whole console stepped sideways and back every few
+     seconds. */
+  overflow: hidden;
 }
 
 body {
@@ -23,6 +33,19 @@ body {
      because the page does not scroll. Contained overscroll keeps a flicked
      pane from rubber-banding the whole surface on a tablet. */
   overscroll-behavior: contain;
+}
+
+/* A pane that scrolls keeps its gutter whether it is scrolling or not.
+   These panes gain and lose their scrollbars constantly -- the fleet list as
+   an agent records work, the brief as a version lands, the middle column as
+   the countdown banner takes a strip off the top. Each appearance narrows the
+   content by the scrollbar's width and each disappearance widens it again, so
+   text reflows and the eye reads it as the interface glitching. Reserving the
+   gutter costs the width permanently and moves nothing. */
+.overflow-y-auto,
+.overflow-auto,
+.lg\:overflow-y-auto {
+  scrollbar-gutter: stable;
 }
 
 /* Panes scroll now, so their scrollbars are part of the interface. Thin, and
