@@ -56,7 +56,13 @@ from firstdue.errors import NotFoundError
 #: descriptor's *content* is what the version names. Editing a comment beside
 #: one costs nothing; editing a number inside one costs a version, because
 #: somewhere there is a pinned subscription that promised that number.
-FLEET_VERSION: Final[str] = "1.2.0"
+#:
+#: And ``1.3.0`` for the same field again, 12 s to 20 s, because 12 s was
+#: measured against a model call when the thing it caps is a whole stage. Two
+#: bumps for one number in one afternoon is the catalog doing its job: each one
+#: is a promise that changed, and a pin that survived the change would have
+#: been a lie about what the agent is allowed to take.
+FLEET_VERSION: Final[str] = "1.3.0"
 #: The department that runs the fleet and subscribes to all eight.
 HOME_DEPARTMENT: Final[Department] = Department.FIRE
 #: Fixed publication timestamp, so seeding is byte-identical on every run.
@@ -400,17 +406,30 @@ INCIDENT_INTERCEPTOR = _agent(
     # cancelled. No package, therefore no optimal path and no crew brief, on
     # every live incident.
     #
-    # 12 s is the slowest stage (10 s, shared by the intake read, the enriched
-    # prose and the crew brief) plus the same 2 s reserve the paragraph above
-    # argues for: the model reaches its own deadline first and raises a refusal
-    # the loop can record and route around, instead of the runtime cancelling
-    # the run anonymously underneath it.
+    # 12 s was measured against the wrong thing and failed by half a second.
+    # It was set to the slowest stage *deadline* (10 s) plus a 2 s reserve --
+    # but a stage is not a model call. Timed on a live intake: the screened
+    # extract returned at 3.8 s, the `FocusComposer` graph closed at 11.2 s,
+    # and the runtime cancelled the run at 12.0 s -- 0.5 s after the focus was
+    # composed and before the handler could hand back its result. The incident
+    # then failed to open at all, with "the intake produced no result".
+    #
+    # The intake stage is the slowest because it is two model-bearing phases,
+    # not one: a Gemini extract under `INTAKE_DEADLINE_MS`, then a LangGraph
+    # focus composition that recalls from the memory bank and plans. Worst case
+    # is the extract taking its full 10 s and the graph its observed 7 s, plus
+    # the writes and the event publish -- about 18.5 s.
+    #
+    # 20 s covers that with the reserve the paragraph above argues for. It is
+    # also, deliberately, what `COMPOSITION_CAP` reserves against the two-minute
+    # ceiling: the runtime will cancel *any* stage of this agent at this number,
+    # so the budget has to assume the worst one.
     #
     # `COMPOSITION_CAP` in `firstdue.incident.autonomy` reads this number off
     # the catalog, and `COMPOSE_DEADLINE` is solved against it, so raising it
     # here moves the fallback earlier rather than pushing the card past the
     # two-minute ceiling.
-    latency_ms=12_000,
+    latency_ms=20_000,
     input_schema="DispatchEvent",
     output_schema="BriefEmission",
 )

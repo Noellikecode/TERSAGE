@@ -3,17 +3,26 @@
 Municipal structural intelligence for a fire department, built as an
 institutional agent fleet.
 
-**Status, 2026-08-26.** `main` at `55e3e53`, in sync with origin, plus one
-uncommitted change described under [In flight](#in-flight). 1,536 backend and
-356 console tests pass; mypy, Ruff, the console build, Terraform validation, the
-seed hash and the secret scan are all clean — see
-[Verification](#verification). Staging **is deployed** and healthy in project
-`firstdue-dev`: 377 Terraform resources, 12 Cloud Run services, a public console
-— running images built from a commit 17 behind `main`, against an empty district,
-with the slow loop's scheduler paused. See
-[What is actually deployed](#what-is-actually-deployed). Three known gaps are
-open and one has been fixed; each was re-checked against the code for this
-revision rather than carried forward — see [Known gaps](#known-gaps).
+**Status, 2026-08-29.** `main` at `e9a696f`, working tree clean. 1,796 backend
+and 575 console tests pass; mypy is clean across 206 source files, and Ruff, the
+console build, Terraform validation and `tofu fmt` are clean — see
+[Verification](#verification). The fleet publishes at **`FLEET_VERSION 1.2.0`**;
+two content changes today each cost a version, which is the append-only
+catalog working as designed — see [Fleet versioning](#fleet-versioning-1200).
+Staging **is deployed** and healthy in project `firstdue-dev`: 377 Terraform
+resources, 12 Cloud Run services, a public console, and — new today — the
+billing budget that had never applied. It runs `1.1.0` images, so it is one
+fleet version behind `main` and is missing today's second round of fixes. See
+[What is actually deployed](#what-is-actually-deployed).
+
+**The headline finding of 2026-08-29:** every model-bearing budget in the
+incident loop had been sized against fake mode, where a model answers in
+microseconds. Measured against the live Vertex endpoint this project actually
+calls, one `gemini-3.5-flash` compose costs **5.72–6.97 s**. The interceptor's
+whole-run cap was 6 s and its stage deadlines were 4–5 s, so **no live incident
+had ever produced an entry package** — no crew brief, no optimal path — and the
+sweep had never landed a single thermal frame. All of it passed locally. See
+[The budgets were never measured](#the-budgets-were-never-measured-2026-08-29).
 
 ---
 
@@ -329,12 +338,17 @@ prefix `firstdue/staging`, and holds **377 resources**.
 
 **Three things are true about that deployment that a demo script must not gloss.**
 
-1. **It is running code 17 commits behind `main`.** Both backend services and
-   the console run images tagged `11165da`, built 2026-08-24T17:23. That commit
-   predates the live-geometry fixes, the imagery provider, the fleet rows-and-pane
-   console, the Three.js structure model and the conflict de-duplication. A newer
-   backend image tagged `5644369` sits in Artifact Registry unused; the tfvars
-   digests still point at the older pair.
+1. **It is running code one commit behind `main`, and one fleet version
+   behind.** Redeployed 2026-08-29 from the working tree at `520d34f`, so both
+   images carry `FLEET_VERSION = 1.1.0` and the deployed catalog holds thirteen
+   descriptors at `1.1.0` with `sub_fire_*` pinned to `1.1.0`. `main` is now at
+   `e9a696f` and publishes `1.2.0`. What staging therefore **does not** have:
+   the interceptor's 12 s run cap, the three raised model-stage deadlines, the
+   derived `COMPOSITION_CAP`, the recorder's version fix, the records-watcher
+   candidate cache, and the whole console pass (entry-package redesign, named
+   timeouts, geometry-state panel). Staging can still compose no entry package
+   for the reason set out under [Known gaps](#known-gaps); the fix is on `main`
+   and not on the deployment.
 2. **The deployed district is empty.** `seeded_profiles: 0`, and
    `/districts/sffd-district-03/stats` returns 0 profiles, 0 facts, 0 conflicts.
    Sources report `LIVE` with closed circuits. The seed is a local artefact and

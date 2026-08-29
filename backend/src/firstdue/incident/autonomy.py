@@ -100,21 +100,40 @@ COMPOSITION_CAP: Final[timedelta] = timedelta(
 #: be written against because it is the one that cannot be killed by a single
 #: bad response. The timer is ``ENTRY_PACKAGE_POLL_MS`` in
 #: ``frontend/lib/api/entry-packages.ts``; a package staged just after a tick
-#: waits one whole interval, so the interval is the allowance. Render is inside
-#: it: the card is state the console already holds by then.
-DELIVERY_ALLOWANCE: Final[timedelta] = timedelta(seconds=3)
+#: waits one whole interval, so the interval is the allowance.
+#:
+#: "Render is inside it" was the part that was wrong, and it was wrong before
+#: anything was added to it. The console does not render the card when the
+#: package lands -- it draws the entry route first and raises the card after,
+#: so the officer sees the walk before being asked to sign for it. That draw is
+#: ``ROUTE_DRAW_BUDGET_MS`` (1.6 s) and it was never in this number, so the
+#: ceiling arithmetic had been quietly 1.6 s optimistic since the animation
+#: was written.
+#:
+#: It is now counted, together with ``ROUTE_HOLD_MS`` (2 s) -- the beat that
+#: leaves the *finished* route alone before the modal covers it, without which
+#: the completed path was on screen for zero frames. Both live in
+#: ``frontend/components/StructureModel.tsx``.
+#:
+#:   3 s poll interval + 1.6 s draw + 2 s hold = 6.6 s, taken as 7 s.
+#:
+#: Rounded up rather than down: every other term here is a cap something
+#: enforces, and this one is the only estimate, so it should be the one that
+#: errs against us.
+DELIVERY_ALLOWANCE: Final[timedelta] = timedelta(seconds=7)
 
 #: The fallback deadline, measured from incident open. Solved backwards from
 #: the ceiling rather than picked, because what a commander is promised is an
 #: *arrival*, not a start:
 #:
-#:   105 s (this) + 12 s (:data:`COMPOSITION_CAP`) + 3 s (:data:`DELIVERY_ALLOWANCE`)
+#:   93 s (this) + 20 s (:data:`COMPOSITION_CAP`) + 7 s (:data:`DELIVERY_ALLOWANCE`)
 #:     = 120 s  =  :data:`HARD_CEILING`
 #:
-#: It was 111 s against a 6 s cap. The cap is now 12 s -- measured, see the
-#: interceptor's descriptor -- so this gives back the six seconds rather than
-#: letting the sum drift over the ceiling. Solved, not chosen: the assertion
-#: below is what keeps the three numbers honest about each other.
+#: It was 111 s against a 6 s cap and a 3 s allowance, and both of those turned
+#: out to be measurements nobody had taken. Every time one of them is corrected
+#: this term gives back the difference rather than letting the sum drift over
+#: the ceiling -- which is the entire reason it is solved and not chosen. The
+#: assertion below is what keeps the three numbers honest about each other.
 #:
 #: Every term on the left is a cap something else already enforces, so the sum
 #: is a bound and not a hope: the runtime cancels the composing run at the

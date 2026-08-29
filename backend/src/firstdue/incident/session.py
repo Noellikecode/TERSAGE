@@ -591,7 +591,7 @@ class IncidentSession:
         grant = await self._require_grant(incident_id)
         self._pending_narratives[correlation_id] = (narrative, channel, source_ref)
         try:
-            await self.fleet.run(
+            run = await self.fleet.run(
                 AGENT_ID,
                 correlation_id=correlation_id,
                 parameters={STAGE_PARAM: STAGE_INTAKE},
@@ -601,8 +601,23 @@ class IncidentSession:
         finally:
             self._pending_narratives.pop(correlation_id, None)
         result = self._last_intercept.pop(incident_id, None)
-        if result is None:  # pragma: no cover - the handler always sets one
-            raise NotFoundError("the intake produced no result", details={"id": incident_id})
+        if result is None:
+            # The same lesson `run_entry_package` already learned, and this
+            # path had not: "the handler always sets one" is true in fake mode
+            # and false against a real model. A run the runtime cancelled on
+            # its deadline leaves this slot empty, and the bare message named
+            # neither the deadline nor the run -- so a cancelled intake
+            # surfaced as a 404 on `POST /incidents` and the incident did not
+            # open at all. The run record knows why; say what it says.
+            raise NotFoundError(
+                "the intake produced no result",
+                details={
+                    "id": incident_id,
+                    "run_status": str(run.result.status),
+                    "run_error_code": run.result.error_code or "",
+                    "run_id": run.record.run_id,
+                },
+            )
         # Outside the run that just finished, never inside it. A composition
         # started from within ``intercept`` would inherit the intake run's
         # remaining budget and be cancelled by it, which is the same mistake

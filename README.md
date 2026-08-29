@@ -127,7 +127,7 @@ deterministic template ships. On approval, Resend delivers it.
 
 ### Incident loop
 
-**`incident-interceptor`** · 6s · the head of the loop
+**`incident-interceptor`** · 12s · the head of the loop
 Reads the 911 or CAD narrative, opens the incident against one profile snapshot,
 streams the three-stage brief, and routes the incident to the other agents by
 their declared capabilities. It then writes a **focus** to the incident log:
@@ -136,7 +136,7 @@ third floor, the permit says two storeys, lidar measured three, and a conflict
 has been open since March — the head points every downstream agent at exactly
 those ids.
 
-**`sensor-fusion`** · 2s
+**`sensor-fusion`** · 12s
 Gemini multimodal reads a thermal or optical frame and returns observations
 bound to image regions. Which wall it is looking at is resolved from the
 footprint geometry, not from the model — a model that could name the wall could
@@ -292,7 +292,7 @@ should read a window count off a picture.
 
 ## Verification
 
-1,505 backend tests and 330 console tests. Strict mypy across 187 source files.
+1,796 backend tests and 575 console tests. Strict mypy across 206 source files.
 A contract suite that holds the in-memory and Firestore backends to one set of
 behaviours, an infrastructure suite that holds Terraform to the agent
 descriptors, and an observability suite that asserts telemetry carries no

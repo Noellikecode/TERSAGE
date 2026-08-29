@@ -31,6 +31,7 @@ import {
 } from '@/components/incident/EntryPackageParts';
 import {
   ROUTE_DRAW_BUDGET_MS,
+  ROUTE_HOLD_MS,
   ROUTE_EGRESS_GAP_MS,
   ROUTE_LEG_MS,
   StructureModel,
@@ -1221,7 +1222,9 @@ describe('the console, from the composed package to standby', () => {
   it('raises the card and the route off one ENTRY_PACKAGE frame', async () => {
     await openIncident();
     await composePackage(entryPackage());
-    expect(await screen.findByTestId('entry-package-modal')).toBeInTheDocument();
+    expect(
+      await screen.findByTestId('entry-package-modal', {}, { timeout: CARD_WAIT_MS }),
+    ).toBeInTheDocument();
     expect(document.getElementById('entry-package-title')).toHaveTextContent(
       'incident-interceptor',
     );
@@ -1230,13 +1233,33 @@ describe('the console, from the composed package to standby', () => {
   });
 
   /** What the console waits for, computed the way the console computes it. */
-  const drawMsFor = (held: EntryPackageView) =>
-    routeDrawSchedule({
+  /**
+   * What the console actually waits before raising the card.
+   *
+   * The draw *and* `ROUTE_HOLD_MS`. The hold is what leaves the finished route
+   * on screen by itself -- without it the card went up on the tick the last
+   * leg landed and the completed path was never visible -- so a helper that
+   * returned only `totalMs` would be timing a wait the console no longer has.
+   */
+  /**
+   * How long a test may wait for the card, with slack for the render.
+   *
+   * Named rather than repeated, because the wait is now the draw *plus* the
+   * hold and three separate tests were each timing it against
+   * `findBy*`'s one-second default -- which the draw alone used to fit inside
+   * and no longer does.
+   */
+  const CARD_WAIT_MS = ROUTE_DRAW_BUDGET_MS + ROUTE_HOLD_MS + 1500;
+
+  const drawMsFor = (held: EntryPackageView) => {
+    const total = routeDrawSchedule({
       entry: held.path.entry,
       egress: held.path.egress,
       highlight: null,
       drawKey: held.package_id,
     }).totalMs;
+    return total > 0 ? total + ROUTE_HOLD_MS : 0;
+  };
 
   /** Answer `prefers-reduced-motion` the way a reader who set it would. */
   const answerReducedMotion = (reduce: boolean) =>
@@ -1269,7 +1292,7 @@ describe('the console, from the composed package to standby', () => {
     // Bounded: the wait is the schedule's own total, not an open-ended one.
     expect(
       await screen.findByTestId('entry-package-modal', undefined, {
-        timeout: ROUTE_DRAW_BUDGET_MS * 2,
+        timeout: (ROUTE_DRAW_BUDGET_MS + ROUTE_HOLD_MS) * 2,
       }),
     ).toBeInTheDocument();
   });
@@ -1336,7 +1359,7 @@ describe('the console, from the composed package to standby', () => {
   it('returns to standby once the send comes back, not before', async () => {
     await openIncident();
     await composePackage(entryPackage());
-    await screen.findByTestId('entry-package-modal');
+    await screen.findByTestId('entry-package-modal', {}, { timeout: CARD_WAIT_MS });
 
     fireEvent.click(screen.getByTestId('approve-both'));
     await screen.findByTestId('approve-crew-brief-granted');
@@ -1363,7 +1386,7 @@ describe('the console, from the composed package to standby', () => {
     vi.stubGlobal('fetch', stubFetch(true));
     await openIncident();
     await composePackage(entryPackage());
-    await screen.findByTestId('entry-package-modal');
+    await screen.findByTestId('entry-package-modal', {}, { timeout: CARD_WAIT_MS });
     fireEvent.click(screen.getByTestId('approve-both'));
     await screen.findByTestId('approve-crew-brief-granted');
     await waitFor(() => expect(screen.getByTestId('entry-package-release')).toBeEnabled());
@@ -1423,7 +1446,8 @@ describe('the console, from the composed package to standby', () => {
     }
 
     /** Long enough for a tick, a document read and the whole route draw. */
-    const CARD_BUDGET_MS = ENTRY_PACKAGE_POLL_MS + ROUTE_DRAW_BUDGET_MS + 4000;
+    const CARD_BUDGET_MS =
+      ENTRY_PACKAGE_POLL_MS + ROUTE_DRAW_BUDGET_MS + ROUTE_HOLD_MS + 4000;
 
     it(
       'raises the approval card off the packages endpoint alone',

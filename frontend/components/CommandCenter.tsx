@@ -75,6 +75,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
 import {
+  ROUTE_HOLD_MS,
   StructureModel,
   prefersReducedMotion,
   routeDrawSchedule,
@@ -1788,11 +1789,22 @@ export function CommandCenter({
    * measurements of another. A refusal has no route and therefore no wait.
    *
    * Zero here means "there is nothing to watch", and the card goes up at once.
+   *
+   * The wait is the draw **plus `ROUTE_HOLD_MS`**, because those buy different
+   * things: the draw is the route arriving, the hold is the route being
+   * looked at. Gating the card on the draw alone raised it on the tick the
+   * last leg landed, so the finished path was never once on screen by itself.
+   *
+   * Reduced motion keeps its existing answer -- `totalMs` is zero and the card
+   * goes up at once. The hold exists to let a drawn line finish being read,
+   * and a reader who asked for no animation has the whole route on screen from
+   * the first frame with nothing arriving to wait for. Holding the card back
+   * from them would be inventing a delay to replace one they opted out of.
    */
   const routeDrawMs = useMemo(() => {
     const waiting = entryPackages.awaiting;
     if (!waiting || waiting.path.refused) return 0;
-    return routeDrawSchedule(
+    const schedule = routeDrawSchedule(
       {
         entry: waiting.path.entry,
         egress: waiting.path.egress,
@@ -1800,7 +1812,11 @@ export function CommandCenter({
         drawKey: waiting.package_id,
       },
       { reducedMotion: prefersReducedMotion() },
-    ).totalMs;
+    );
+    // Zero stays zero: a refusal has nothing to draw, and reduced motion has
+    // nothing arriving. Both mean the card is not being held back from
+    // anything, so neither earns the hold.
+    return schedule.totalMs > 0 ? schedule.totalMs + ROUTE_HOLD_MS : 0;
   }, [entryPackages.awaiting]);
 
   /**

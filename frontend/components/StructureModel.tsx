@@ -122,6 +122,31 @@ export const ROUTE_LEG_MS = 220;
  */
 export const ROUTE_EGRESS_GAP_MS = 160;
 
+/**
+ * How long the finished route is left alone before the card covers it.
+ *
+ * The draw budget above buys the *drawing*; this buys the **drawn thing**.
+ * They are not the same purchase, and only the first was being made: the
+ * console raised the approval card at `totalMs`, the exact tick the last leg
+ * landed, so the completed route existed on screen for zero frames. Everything
+ * the animation was for -- kerb, door, stair, floor, read as one walk -- was
+ * finished and immediately hidden behind a modal.
+ *
+ * Two seconds is a reading pause, not an animation: long enough to take in a
+ * whole path and notice which face it enters by, short enough that it never
+ * feels like waiting for permission to work.
+ *
+ * It applies under reduced motion too. That setting asks for no *movement*;
+ * it does not ask for less time to look at a static picture, and a reader who
+ * turned the animation off is precisely the one who has had no chance to watch
+ * the route arrive.
+ *
+ * Charged honestly: `DELIVERY_ALLOWANCE` in `firstdue.incident.autonomy`
+ * counts this and the draw budget alongside the poll interval, so the card
+ * still lands inside the two-minute ceiling rather than 2 s past it.
+ */
+export const ROUTE_HOLD_MS = 2000;
+
 /** The tail of a leg over which the waypoint it reaches comes up. */
 const MARKER_LAND_FRACTION = 0.34;
 
