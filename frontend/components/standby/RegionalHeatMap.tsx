@@ -464,13 +464,47 @@ export function totalFrp(detections: readonly FireDetection[]): number | null {
  * test suite renders this component and must get the panel's chrome rather than
  * an exception. Either way the honest answer is the counts and a sentence
  * saying the map could not be drawn -- not a blank rectangle.
+ *
+ * **Asked once, and the context it costs is handed straight back.**
+ *
+ * Answering this question means acquiring a real WebGL2 context, and a browser
+ * caps how many may be live at once -- Chrome at about sixteen. This ran from
+ * the component body, so every render took another one and left it for the
+ * collector. Standby re-renders on a seven-second poll, so a console left open
+ * drifted past the cap, and at the cap Chrome does not refuse the new context:
+ * it kills the OLDEST live one. The oldest one is deck.gl's, the one actually
+ * drawing the region. The canvas turns white and stays white, because deck.gl
+ * does not rebuild after a lost context -- and a white rectangle where the
+ * region should be reads as "nothing is burning", which is the one thing this
+ * panel must never say by accident.
+ *
+ * The browser's capability does not change between renders, so it is asked
+ * once and remembered. The probe context is released explicitly rather than
+ * left to garbage collection, because the cap counts live contexts and not
+ * live canvases.
  */
+let webgl2Support: boolean | null = null;
+
+/** Test seam: forget the cached answer. Never called by the app. */
+export function __resetWebGL2Probe(): void {
+  webgl2Support = null;
+}
+
 export function hasWebGL2(): boolean {
+  if (webgl2Support !== null) return webgl2Support;
   if (typeof document === 'undefined') return false;
   try {
     const canvas = document.createElement('canvas');
-    return canvas.getContext('webgl2') !== null;
+    const context = canvas.getContext('webgl2');
+    // Give it back at once. Without this the probe holds a slot against the
+    // browser's cap for as long as the canvas takes to be collected.
+    (
+      context as WebGL2RenderingContext | null
+    )?.getExtension('WEBGL_lose_context')?.loseContext();
+    webgl2Support = context !== null;
+    return webgl2Support;
   } catch {
+    webgl2Support = false;
     return false;
   }
 }

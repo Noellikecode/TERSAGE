@@ -17,7 +17,7 @@
  */
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { FireActivity, FireDetection } from '@/components/standby/FireActivityMap';
 import {
@@ -489,5 +489,80 @@ describe('the key under the map', () => {
       />,
     );
     expect(screen.getByTestId('regional-heat-key')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The probe must not cost a GPU context every time it is asked.
+ *
+ * `hasWebGL2` answered by creating a canvas and *acquiring a real WebGL2
+ * context* on it, and it was called from the component body -- so every render
+ * took another context. Standby re-renders on a seven-second poll, so a console
+ * left open drifted past the browser's hard cap (Chrome allows about sixteen),
+ * at which point Chrome starts killing the OLDEST live context. The oldest one
+ * is deck.gl's, the one actually drawing the map. The canvas goes white and
+ * never comes back, because deck.gl does not rebuild after a lost context.
+ *
+ * That is the white rectangle with a broken-image glyph an officer sees where
+ * the region should be, and the console says so out loud:
+ *   "WARNING: Too many active WebGL contexts. Oldest context will be lost."
+ *
+ * Whether this browser can draw is a fact about the browser, not about this
+ * render. It is asked once and remembered, and the context the question cost
+ * is handed straight back.
+ */
+describe('the WebGL2 probe', () => {
+  it('asks the browser once, however many times it is called', async () => {
+    const mod = await import('@/components/standby/RegionalHeatMap');
+    const { hasWebGL2, __resetWebGL2Probe } = mod as typeof mod & {
+      __resetWebGL2Probe?: () => void;
+    };
+    __resetWebGL2Probe?.();
+
+    let contexts = 0;
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, id: string) {
+      if (id === 'webgl2') {
+        contexts += 1;
+        return { getExtension: () => null } as unknown as RenderingContext;
+      }
+      return null;
+    } as typeof HTMLCanvasElement.prototype.getContext;
+
+    try {
+      for (let i = 0; i < 40; i += 1) hasWebGL2();
+      // Forty renders must not cost forty contexts. The cap is sixteen.
+      expect(contexts).toBe(1);
+    } finally {
+      HTMLCanvasElement.prototype.getContext = original;
+    }
+  });
+
+  it('hands back the context the question cost', async () => {
+    const mod = await import('@/components/standby/RegionalHeatMap');
+    const { hasWebGL2, __resetWebGL2Probe } = mod as typeof mod & {
+      __resetWebGL2Probe?: () => void;
+    };
+    __resetWebGL2Probe?.();
+
+    const lose = { loseContext: vi.fn() };
+    const original = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, id: string) {
+      if (id === 'webgl2') {
+        return {
+          getExtension: (name: string) => (name === 'WEBGL_lose_context' ? lose : null),
+        } as unknown as RenderingContext;
+      }
+      return null;
+    } as typeof HTMLCanvasElement.prototype.getContext;
+
+    try {
+      expect(hasWebGL2()).toBe(true);
+      // Released explicitly rather than left for the collector, because the
+      // browser's cap counts live contexts and not live canvases.
+      expect(lose.loseContext).toHaveBeenCalled();
+    } finally {
+      HTMLCanvasElement.prototype.getContext = original;
+    }
   });
 });
