@@ -9,6 +9,7 @@ route through produces a refusal rather than a route.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 
 import pytest
@@ -27,8 +28,15 @@ from firstdue.domain.geometry import (
 from firstdue.domain.keys import Keys
 from firstdue.domain.values import BooleanValue
 from firstdue.incident.entrypath import (
+    STAIR_LANDING_M,
+    STAIR_PITCH_DEG,
     THERMAL_BARRIER_C,
     GeoOrigin,
+    NavEdge,
+    NavGraph,
+    _centroid,
+    _contains,
+    _core_point,
     build_graph,
     compute_entry_path,
 )
@@ -44,8 +52,13 @@ def spec(
     storey_m: float = 3.5,
     disputed_from: int | None = None,
     obstruction_azimuth: float | None = None,
+    footprint: tuple[tuple[float, float], ...] | None = None,
 ) -> GeometrySpec:
-    """A twenty-metre square, counter-clockwise, with real storeys on it."""
+    """A twenty-metre square, counter-clockwise, with real storeys on it.
+
+    The footprint is overridable because a square has no long axis, so nothing
+    about stair orientation can be asserted on the default shape.
+    """
     height = levels * storey_m
     segments = (
         (RoofSegment(pitch_deg=15.0, azimuth_deg=obstruction_azimuth),)
@@ -55,7 +68,7 @@ def spec(
     return GeometrySpec(
         address_id="sf-test-square",
         generated_at=NOW,
-        footprint=((0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)),
+        footprint=footprint or ((0.0, 0.0), (20.0, 0.0), (20.0, 20.0), (0.0, 20.0)),
         levels=tuple(
             Level(
                 height_m=storey_m,
@@ -383,16 +396,171 @@ def test_a_truss_attribute_that_was_checked_and_found_absent_costs_nothing(make_
     )
 
 
-def test_a_disputed_storey_is_priced_on_the_leg_that_climbs_into_it() -> None:
+def _flights(graph: NavGraph, level: int) -> list[NavEdge]:
+    """The two legs that climb from ``core:L{level}`` to the storey above it."""
+    landing = f"stair:L{level}:mid"
+    up = next(e for e in graph.edges if e.from_id == f"core:L{level}" and e.to_id == landing)
+    over = next(e for e in graph.edges if e.from_id == landing and e.to_id == f"core:L{level + 1}")
+    return [up, over]
+
+
+def test_a_disputed_storey_is_priced_on_both_flights_that_climb_into_it() -> None:
     graph = build_graph(
         spec(levels=3, disputed_from=2), coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0))
     )
-    climb = next(e for e in graph.edges if e.from_id == "core:L1" and e.to_id == "core:L2")
-    ground = next(e for e in graph.edges if e.from_id == "core:L0" and e.to_id == "core:L1")
-    assert any(term.term_id == "structure.disputed-level" for term in climb.terms)
-    assert not any(term.term_id == "structure.disputed-level" for term in ground.terms)
-    # And the leg is the storey height the geometry derived, never an assumed one.
-    assert climb.length_m == pytest.approx(3.5)
+    # The climb into a storey is a switchback now, so "the leg that climbs into
+    # it" is two legs -- and a disputed storey has to price both, or half the
+    # ascent into a floor the records disagree exists comes out free.
+    for flight in _flights(graph, 1):
+        assert any(term.term_id == "structure.disputed-level" for term in flight.terms)
+    for flight in _flights(graph, 0):
+        assert not any(term.term_id == "structure.disputed-level" for term in flight.terms)
+
+
+def test_the_climb_is_the_stair_a_crew_walks_not_the_rise_it_gains() -> None:
+    """The correction itself: a storey costs its stair, not its height.
+
+    A lift shaft covers a 3.5 m storey in 3.5 m. A stair at the steepest pitch
+    the code permits covers it in `3.5 / sin(32.47 deg)` plus a landing, which is
+    more than twice as far -- and the old model reported the shaft number to a
+    crew deciding what air they needed to reach a floor.
+    """
+    graph = build_graph(spec(levels=3), coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0)))
+    rise = 3.5
+    travelled = sum(flight.length_m for flight in _flights(graph, 0))
+
+    half = rise / 2.0
+    run = half / math.tan(math.radians(STAIR_PITCH_DEG)) + STAIR_LANDING_M / 2.0
+    assert travelled == pytest.approx(2 * math.hypot(run, half))
+    # The claim in human terms, which is the one that matters on a fireground.
+    assert travelled > 2 * rise
+
+
+def test_the_landing_stands_off_the_shaft_at_half_the_rise() -> None:
+    """A flight is a diagonal, so the landing is neither in the shaft nor level.
+
+    Both halves matter. A landing left at the core's own x/y would give a
+    zero-run flight -- a plumb line again, wearing a longer number. A landing at
+    the full storey height would put the turn at the floor above it.
+    """
+    graph = build_graph(spec(levels=3), coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0)))
+    by_id = {node.node_id: node for node in graph.nodes}
+    core, landing, above = by_id["core:L0"], by_id["stair:L0:mid"], by_id["core:L1"]
+
+    assert landing.kind == "stair"
+    assert landing.z_m == pytest.approx((core.z_m + above.z_m) / 2.0)
+    assert math.hypot(landing.x_m - core.x_m, landing.y_m - core.y_m) > 1.0
+    # The shaft itself has not moved: the landing steps off it and back onto it.
+    assert (above.x_m, above.y_m) == (core.x_m, core.y_m)
+
+
+def test_the_stair_runs_along_the_longest_wall() -> None:
+    """Which way the switchback steps, and why it is that way.
+
+    Nobody surveyed this stair's orientation. The long axis is the only axis the
+    measured outline gives any evidence for, so a landing that stepped across
+    the short dimension would be an assumption with less behind it -- and on a
+    narrow building it would step through a wall.
+    """
+    # Ten metres wide, thirty deep: the long axis is y, and a landing that
+    # stepped along x would be 5 m from the shaft in a building with 5 m to give.
+    narrow = ((0.0, 0.0), (10.0, 0.0), (10.0, 30.0), (0.0, 30.0))
+    graph = build_graph(
+        spec(levels=2, footprint=narrow),
+        coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0)),
+    )
+    by_id = {node.node_id: node for node in graph.nodes}
+    core, landing = by_id["core:L0"], by_id["stair:L0:mid"]
+    across = abs(landing.x_m - core.x_m)
+    along = abs(landing.y_m - core.y_m)
+    assert along > across
+    assert across == pytest.approx(0.0)
+    # And it stays inside the ten-metre width it stepped away from.
+    assert _contains(narrow, (landing.x_m, landing.y_m))
+
+
+def test_a_building_too_small_for_the_stair_keeps_its_landing_indoors() -> None:
+    """The same defect the core guard fixes, committed again one function later.
+
+    A switchback at the assumed pitch wants about 3.3 m of run for a 3.5 m
+    storey. A six-metre outbuilding does not have that from its own centre, and
+    the unclamped landing walked out through the wall to be published as WGS-84
+    at seven decimals -- a node in the garden, on a route into a building.
+    """
+    shed = ((0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0))
+    graph = build_graph(
+        spec(levels=3, footprint=shed),
+        coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0)),
+    )
+    by_id = {node.node_id: node for node in graph.nodes}
+    landing = by_id["stair:L0:mid"]
+    assert _contains(shed, (landing.x_m, landing.y_m))
+
+
+def test_capping_the_run_does_not_shorten_the_climb() -> None:
+    """What the cap buys is a landing indoors, not an easier ascent.
+
+    A building too narrow to hold a code switchback still has to be climbed, and
+    the crew still walks a slope. Letting the clamped geometry set the distance
+    would hand back the plumb-line understatement on exactly the small, awkward
+    buildings where a crew has least room to be wrong about it.
+    """
+    shed = ((0.0, 0.0), (6.0, 0.0), (6.0, 5.0), (0.0, 5.0))
+    graph = build_graph(
+        spec(levels=3, footprint=shed),
+        coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0)),
+    )
+    rise = 3.5
+    travelled = sum(flight.length_m for flight in _flights(graph, 0))
+    # The flight the pitch implies, which is the floor the cap may not go under.
+    assert travelled == pytest.approx(rise / math.sin(math.radians(STAIR_PITCH_DEG)))
+    assert travelled > rise
+
+
+def test_a_landing_claims_no_storey_because_it_is_between_two() -> None:
+    """`level` is the storey a renderer draws a waypoint on, and a landing is on
+    neither of the ones it joins. Staging and the approach ring say None for the
+    same reason; a landing claiming the floor below would be drawn on that
+    floor's plan, floating half a storey over it.
+    """
+    graph = build_graph(spec(levels=3), coverage=coverage_of(**dict.fromkeys(GROUND_NAMES, 30.0)))
+    by_id = {node.node_id: node for node in graph.nodes}
+    assert by_id["stair:L0:mid"].level is None
+    # The storeys either side of it still say which floor they are.
+    assert by_id["core:L0"].level == 0
+    assert by_id["core:L1"].level == 1
+
+
+def test_a_courtyard_footprint_puts_its_core_inside_the_building() -> None:
+    """The bug the centroid had, on a shape the live parcel feed really returns.
+
+    A U-shaped block's area-weighted centre is in the courtyard. The old code
+    used it as the stairwell core regardless: a node in open air, an interior leg
+    measured to a point outside the structure, and coordinates handed to a
+    renderer to seven decimals.
+    """
+    courtyard = (
+        (0.0, 0.0),
+        (30.0, 0.0),
+        (30.0, 20.0),
+        (22.0, 20.0),
+        (22.0, 6.0),
+        (8.0, 6.0),
+        (8.0, 20.0),
+        (0.0, 20.0),
+    )
+    assert not _contains(courtyard, _centroid(courtyard))
+    assert _contains(courtyard, _core_point(courtyard))
+
+
+def test_a_convex_footprint_keeps_the_centroid_it_always_had() -> None:
+    """The guard is a guard, not a new placement rule.
+
+    Every parcel in the seed is convex, so this is what keeps the fix from
+    quietly moving every existing route.
+    """
+    rectangle = ((0.0, 0.0), (11.5, 0.0), (11.5, 22.0), (0.0, 22.0))
+    assert _core_point(rectangle) == _centroid(rectangle)
 
 
 def test_an_open_conflict_on_a_load_bearing_attribute_prices_the_interior() -> None:

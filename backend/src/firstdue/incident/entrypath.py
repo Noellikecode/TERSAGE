@@ -103,6 +103,31 @@ APPARATUS_SETBACK_M: Final[float] = 8.0
 #: passes the centroid on a narrow building.
 INTERIOR_SETBACK_M: Final[float] = 2.0
 
+#: The pitch of the stair the storey count implies, in degrees.
+#:
+#: A stairwell is not a lift shaft, and modelling it as one understates how far
+#: a crew walks to reach a floor by more than half. Nobody surveyed this stair,
+#: so its pitch is taken from the steepest one the code would pass: IBC 1011
+#: caps a riser at 7 inches and floors a tread at 11 inches, which is
+#: ``atan(7/11)`` -- 32.5 degrees. Steepest, deliberately: a shallower
+#: assumption would make the climb longer and the arithmetic would be claiming
+#: a margin it has not measured.
+STAIR_PITCH_DEG: Final[float] = 32.47
+
+#: The depth of the landing at each half-storey turn.
+#:
+#: IBC 1011.6 requires a landing at least as deep as the stair is wide, and
+#: 1011.2 floors an egress stair's width at 44 inches. A switchback therefore
+#: costs this much horizontal travel per storey on top of the flights.
+STAIR_LANDING_M: Final[float] = 1.12
+
+#: How far short of a wall a landing is allowed to stand.
+#:
+#: The landing is placed by assumption, not measurement, so it is kept off the
+#: only thing the outline actually measured. Half a metre is roughly the depth
+#: of a person in gear turning on it.
+STAIR_WALL_CLEARANCE_M: Final[float] = 0.5
+
 # --------------------------------------------------------------------- weights
 #
 # Every weight is a multiplier contribution: the leg costs its own length times
@@ -303,11 +328,15 @@ class EntryPathPlan(RecordedDocument):
 def _centroid(footprint: Sequence[Point2D]) -> Point2D:
     """Area-weighted polygon centroid, falling back to the vertex mean.
 
-    The shoelace centroid is the right point for a stairwell core because it
-    sits inside any convex parcel and near the middle of a concave one. On a
-    degenerate ring -- collinear points, zero area -- it divides by zero, so the
-    vertex mean stands in rather than the function raising on a shape the
-    Geometry Watcher may legitimately have filed.
+    The shoelace centre, and nothing more. It sits inside a convex parcel and
+    can sit well outside a concave one, so it is not on its own a place to put a
+    node -- :func:`_core_point` is what the graph asks for a stairwell, and it
+    exists because this function's answer is a centre of area rather than a
+    point in a building.
+
+    On a degenerate ring -- collinear points, zero area -- the shoelace divides
+    by zero, so the vertex mean stands in rather than the function raising on a
+    shape the Geometry Watcher may legitimately have filed.
     """
     twice_area = 0.0
     cx = 0.0
@@ -326,6 +355,71 @@ def _centroid(footprint: Sequence[Point2D]) -> Point2D:
             sum(p[1] for p in footprint) / count,
         )
     return cx / (3.0 * twice_area), cy / (3.0 * twice_area)
+
+
+def _contains(footprint: Sequence[Point2D], point: Point2D) -> bool:
+    """Is this point inside the ring? Even-odd ray casting, half-open in y.
+
+    The half-open comparison ``(y0 > y) != (y1 > y)`` is what keeps a ray that
+    grazes a vertex from counting that vertex twice, which is the only way this
+    test goes wrong on an axis-aligned parcel -- and parcels are mostly
+    axis-aligned.
+    """
+    x, y = point
+    inside = False
+    count = len(footprint)
+    for index in range(count):
+        x0, y0 = footprint[index]
+        x1, y1 = footprint[(index + 1) % count]
+        if (y0 > y) != (y1 > y):
+            crossing = x0 + (y - y0) * (x1 - x0) / (y1 - y0)
+            if crossing > x:
+                inside = not inside
+    return inside
+
+
+def _core_point(footprint: Sequence[Point2D]) -> Point2D:
+    """Where the stairwell core stands: the centroid, pushed inside if it is not.
+
+    The shoelace centroid sits inside a convex parcel, and the docstring above
+    used to be allowed to stop there. It is not true of a concave one: an L, a
+    U, a courtyard block -- all shapes the live parcel feed actually returns --
+    put their area-weighted centre in open air, and the core node inherited it.
+    That is a node in the courtyard, an interior leg measured to a point that is
+    not in the building, and a set of WGS-84 coordinates handed to a renderer at
+    seven decimal places, all under a docstring promising every node is
+    "somewhere a person could actually be".
+
+    So the centroid is tested against the ring it came from, and where it falls
+    outside, it is moved the shortest way that keeps it honest: along its own
+    scanline to the middle of the widest span of building that line crosses. The
+    result is still inferred -- nobody surveyed this stair either -- but it is at
+    least inside the structure, which is the weaker claim the rest of this module
+    is entitled to make.
+    """
+    centre = _centroid(footprint)
+    if _contains(footprint, centre):
+        return centre
+
+    # Every span of building the centroid's own scanline crosses, in x.
+    y = centre[1]
+    crossings: list[float] = []
+    count = len(footprint)
+    for index in range(count):
+        x0, y0 = footprint[index]
+        x1, y1 = footprint[(index + 1) % count]
+        if (y0 > y) != (y1 > y):
+            crossings.append(x0 + (y - y0) * (x1 - x0) / (y1 - y0))
+    crossings.sort()
+
+    widest: tuple[float, float] | None = None
+    for index in range(0, len(crossings) - 1, 2):
+        left, right = crossings[index], crossings[index + 1]
+        if widest is None or (right - left) > (widest[1] - widest[0]):
+            widest = (left, right)
+    if widest is None:  # pragma: no cover - a ring with no interior span
+        return centre
+    return ((widest[0] + widest[1]) / 2.0, y)
 
 
 class _Wall(BaseModel):
@@ -397,6 +491,67 @@ def _walls(spec: GeometrySpec) -> tuple[_Wall, ...]:
             )
         )
     return tuple(walls)
+
+
+def _stair_axis(walls: Sequence[_Wall]) -> Point2D:
+    """The direction a switchback runs, as a unit vector.
+
+    Along the longest measured wall, because that is the axis a building of this
+    outline has room to run a stair down and the only axis the footprint gives
+    any evidence for. It is an assumption about orientation, not a measurement,
+    and it moves no node out of the shaft -- it only says which way the landings
+    step, so a flight reads as a flight instead of a plumb line.
+
+    Ties break on the order :func:`_walls` built them in, which is face order, so
+    the graph is identical on every run.
+    """
+    if not walls:  # pragma: no cover - build_graph returns early without walls
+        return (1.0, 0.0)
+    longest = max(walls, key=lambda wall: wall.length_m)
+    # The wall's own direction is its outward normal turned a quarter turn.
+    return (-longest.normal[1], longest.normal[0])
+
+
+def _exit_distance(footprint: Sequence[Point2D], origin: Point2D, axis: Point2D) -> float:
+    """How far a ray from ``origin`` along ``axis`` travels before it leaves the ring."""
+    best = math.inf
+    count = len(footprint)
+    for index in range(count):
+        x0, y0 = footprint[index]
+        x1, y1 = footprint[(index + 1) % count]
+        ex, ey = x1 - x0, y1 - y0
+        denominator = axis[0] * ey - axis[1] * ex
+        if abs(denominator) < 1e-12:
+            continue
+        dx, dy = x0 - origin[0], y0 - origin[1]
+        along = (dx * ey - dy * ex) / denominator
+        across = (dx * axis[1] - dy * axis[0]) / denominator
+        if along > 1e-9 and -1e-9 <= across <= 1.0 + 1e-9:
+            best = min(best, along)
+    return best
+
+
+def _stair_run(footprint: Sequence[Point2D], core: Point2D, axis: Point2D) -> tuple[Point2D, float]:
+    """Which way off the shaft a landing may step, and how far it may go.
+
+    The long axis says the orientation; it does not say there is room. A stair
+    at the assumed pitch wants about 3.3 m of run for a 3.5 m storey, and an
+    outbuilding six metres on its long side does not have that to give from its
+    own centre -- so the unclamped landing walked out through the wall and was
+    published as WGS-84 to seven decimals, which is the identical defect
+    :func:`_core_point` was written to stop, committed again one function later.
+
+    So the ray is cast both ways along the axis, the roomier side wins, and the
+    run is capped short of the wall it would otherwise cross. The *length* of the
+    flight is not capped with it: see :func:`build_graph`.
+    """
+    forward = _exit_distance(footprint, core, axis)
+    backward = _exit_distance(footprint, core, (-axis[0], -axis[1]))
+    if backward > forward:
+        axis, forward = (-axis[0], -axis[1]), backward
+    if not math.isfinite(forward):  # pragma: no cover - core outside its own ring
+        return axis, 0.0
+    return axis, max(0.0, forward - STAIR_WALL_CLEARANCE_M)
 
 
 # ---------------------------------------------------------------- cost model
@@ -639,12 +794,13 @@ def build_graph(
 ) -> NavGraph:
     """The navigable graph for one building, priced from one incident's data.
 
-    Five kinds of node, and every one of them is somewhere a person could
+    Six kinds of node, and every one of them is somewhere a person could
     actually be: apparatus staging, an approach point off each wall, the door on
-    each wall, the first room inside each wall, and the core -- the stairwell
-    shaft -- once per storey. The perimeter ring joins the approaches, so
-    walking round the building to a cooler wall is a route the search can
-    actually find rather than a shape it has to guess.
+    each wall, the first room inside each wall, the core -- the stairwell shaft
+    -- once per storey, and the landing each flight turns on between them. The
+    perimeter ring joins the approaches, so walking round the building to a
+    cooler wall is a route the search can actually find rather than a shape it
+    has to guess.
 
     Interior movement runs through the core rather than wall to wall. That is
     the honest limit of what this system knows: the slow loop measured an
@@ -658,7 +814,8 @@ def build_graph(
     if not walls or not spec.levels:
         return NavGraph()
 
-    centroid = _centroid(spec.footprint)
+    centroid = _core_point(spec.footprint)
+    stair_axis, stair_room = _stair_run(spec.footprint, centroid, _stair_axis(walls))
     standoff = max(MIN_STANDOFF_M, spec.collapse_zone_radius_m)
 
     nodes: list[NavNode] = []
@@ -821,17 +978,53 @@ def build_graph(
             (),
         )
 
-    # The stairwell. One shaft, one leg per storey, its length the storey height
-    # the geometry already derived -- never an assumed one.
+    # The stairwell: two flights and a landing per storey, not a plumb line.
+    #
+    # The rise of each storey is measured -- it is the level height the geometry
+    # already derived. What was wrong was treating that rise as the distance a
+    # crew travels to climb it, which is only true of a lift shaft. A stair at
+    # the steepest pitch the code permits covers `rise / sin(32.47 deg)`, about
+    # 1.86 times the rise, and a switchback adds a landing on top of that. The
+    # old single leg therefore understated the walk to a third floor by more
+    # than half -- and understating distance is the direction that gets a crew
+    # committed to a route they cannot finish on the air they have.
+    #
+    # The landing node carries the horizontal half of that: it stands off the
+    # shaft along the building's long axis at half the storey's height, so each
+    # flight is a real diagonal and the route reads as a stair. It moves nothing
+    # about where the shaft is, which is still the inference it always was.
+    pitch = math.radians(STAIR_PITCH_DEG)
     for index in range(len(core_ids) - 1):
-        add_pair(
-            core_ids[index],
-            core_ids[index + 1],
-            spec.levels[index].height_m,
-            _structural_terms(
-                spec, facts=resolved_facts, conflicts=conflicts, level_index=index + 1
-            ),
+        rise = spec.levels[index].height_m
+        half_rise = rise / 2.0
+        # The run of one flight, plus half the landing it turns on -- capped at
+        # the room the footprint actually has on this axis.
+        run = min(half_rise / math.tan(pitch) + STAIR_LANDING_M / 2.0, stair_room)
+        landing = register(
+            NavNode(
+                node_id=f"stair:L{index}:mid",
+                x_m=centroid[0] + stair_axis[0] * run,
+                y_m=centroid[1] + stair_axis[1] * run,
+                # A landing is between two storeys, so it is on neither. `level`
+                # is documented as the storey a renderer draws a waypoint on;
+                # claiming the one below would float this node above that floor's
+                # plan. Staging and the approach ring say None for the same
+                # reason, and mean the same thing by it.
+                z_m=elevations[index] + half_rise,
+                kind="stair",
+                level=None,
+            )
         )
+        # Length is floored at the flight the assumed pitch implies, even where
+        # the run was capped. A building too narrow to hold a code switchback
+        # still has to be climbed, and the crew still walks the slope; what the
+        # cap buys is a landing inside the building, not a shorter journey.
+        flight = max(math.hypot(run, half_rise), half_rise / math.sin(pitch))
+        terms = _structural_terms(
+            spec, facts=resolved_facts, conflicts=conflicts, level_index=index + 1
+        )
+        add_pair(core_ids[index], landing.node_id, flight, terms)
+        add_pair(landing.node_id, core_ids[index + 1], flight, terms)
 
     return NavGraph(nodes=tuple(nodes), edges=tuple(edges), barriers=tuple(barriers))
 

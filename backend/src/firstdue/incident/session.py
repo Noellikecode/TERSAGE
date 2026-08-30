@@ -2804,14 +2804,19 @@ class IncidentSession:
 
     #: How many legs of a solved route are written down individually.
     #:
-    #: A route into a low-rise runs to five or six legs -- staging, the
-    #: perimeter, the approach, the door, the interior, the stair -- and the
-    #: cap is above that so an ordinary solve records all of them. It exists
-    #: for the pathological one: a target storey high enough that the stairwell
-    #: alone is a dozen legs, where the entries stop being the route and start
-    #: being a stair count. The rest are still on the plan, on the package, and
-    #: on the printed artifact; what is capped is the per-leg *narration*.
-    MAX_PRICED_LEGS: Final[int] = 8
+    #: A route into a low-rise runs to eight or ten legs -- staging, the
+    #: perimeter, the approach, the door, the interior, and then *two* per
+    #: storey, because a stair is a flight, a landing and a flight back. The cap
+    #: is above that so an ordinary solve records all of them. It exists for the
+    #: pathological one: a target storey high enough that the stairwell alone is
+    #: a dozen legs, where the entries stop being the route and start being a
+    #: stair count. The rest are still on the plan, on the package, and on the
+    #: printed artifact; what is capped is the per-leg *narration*.
+    #:
+    #: Raised from 8 when the stairwell stopped being one leg per storey. Left
+    #: at 8 it would have started truncating at the fourth storey instead of the
+    #: sixth -- the same cap silently covering less building.
+    MAX_PRICED_LEGS: Final[int] = 12
 
     async def _record_route_pricing(self, incident_id: str, plan: EntryPathPlan) -> None:
         """What the solve priced, leg by leg, and what it refused to build.
