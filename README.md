@@ -1,4 +1,6 @@
-# TERSAGE
+# Tactical Evidence, Records, Structural Attributes & Geospatial Evaluation: T.E.R.S.A.G.E
+
+
 
 Municipal structural intelligence for a fire department, built as an
 institutional agent fleet. **Nine scheduled agents across three publishing
