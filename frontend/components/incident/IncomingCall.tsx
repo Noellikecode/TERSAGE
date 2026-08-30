@@ -37,6 +37,15 @@ export interface IncomingCallProps {
   onDismiss: () => void;
 }
 
+/**
+ * How long the transcript waits for the recording before showing itself.
+ *
+ * Long enough that a recording which starts promptly still paces the words,
+ * short enough that nobody watches an empty card wondering whether the call
+ * failed. A dispatch overlay has about a second of credibility.
+ */
+const TRANSCRIPT_GRACE_MS = 1200;
+
 export function IncomingCall({
   open,
   addressId,
@@ -89,6 +98,29 @@ export function IncomingCall({
         setBlocked(true);
         setSpoken(1);
       });
+  }, [open, audioSrc]);
+
+  /**
+   * The words arrive whether or not the recording does.
+   *
+   * `spoken` opens at 0 when there is audio, because the transcript is paced
+   * against the recording -- and that is right once the recording is playing.
+   * It is wrong in the seconds before: a call that has not finished loading
+   * put an empty card on screen at the exact moment a dispatch arrived, which
+   * reads as a broken overlay rather than as audio still buffering.
+   *
+   * So the pacing gets a grace period and no more. If nothing has been spoken
+   * by the time it lapses, the transcript is revealed whole -- the same answer
+   * the autoplay-refused path already gives, for the same reason: the words
+   * are the point and the pacing is a nicety. Audio that arrives later simply
+   * plays under a transcript already on screen.
+   */
+  useEffect(() => {
+    if (!open || !audioSrc) return;
+    const grace = setTimeout(() => {
+      setSpoken((current) => (current > 0 ? current : 1));
+    }, TRANSCRIPT_GRACE_MS);
+    return () => clearTimeout(grace);
   }, [open, audioSrc]);
 
   if (!open) return null;

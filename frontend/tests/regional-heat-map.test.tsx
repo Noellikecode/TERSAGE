@@ -282,7 +282,13 @@ describe('the regional heat map', () => {
         webgl={false}
       />,
     );
-    expect(screen.getByText(/Why the city is always empty/i)).toBeInTheDocument();
+    // The explanation is stated outright now rather than folded behind a
+    // "Why the city is always empty" disclosure. Same fallback, same claim --
+    // an empty city is the instrument working -- but a reader does not have to
+    // open anything to learn the feed is not dead, which is the one reading
+    // this note exists to prevent.
+    expect(screen.getByText(/too small to register/i)).toBeInTheDocument();
+    expect(screen.getByText(/not a dead feed, and not an all-clear/i)).toBeInTheDocument();
   });
 
   it('shows the map attribution, because the licence requires it', () => {

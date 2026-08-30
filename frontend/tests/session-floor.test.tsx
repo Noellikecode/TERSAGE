@@ -220,7 +220,13 @@ describe('a console does not anchor its floor on a pass it started itself', () =
 
     await waitFor(() => {
       const row = screen.getByTestId(`fleet-row-${WATCHER}`);
-      expect(row).toHaveTextContent('2 recorded');
+      // Three, not two: within a session the counter no longer narrows to
+      // the pass in flight. The floor still keeps a previous run's totals
+      // out, but work from an earlier pass of the *same* session now stays
+      // counted -- which is the point. An officer watching the fleet build
+      // a district should not see the number reset when a pass rolls over,
+      // and least of all on the far side of an incident.
+      expect(row).toHaveTextContent('3 recorded');
       expect(row).toHaveTextContent('active');
     });
   });

@@ -994,41 +994,58 @@ function MapKey({
         </span>
       </div>
 
-      <p className="text-micro leading-5 text-muted">
-        The field is weighted by radiative power and{' '}
-        <strong className="text-ink">relative to the busiest area in this window</strong> — a quiet
-        week and a bad one fill the frame alike, so the absolute figures are the ones here. Numbered
-        pins are the {HOTSPOT_COUNT} strongest clusters; click one for what the instrument reported.
-        Rings mark {RING_KM.join(', ')} km from the district.
+      {/* Five facts, five cells.
+          Three paragraphs of prose under a map is a caption competing with the
+          thing it captions, and it is not how anyone reads one: somebody
+          wanting to know what the rings mean should find "Pins" without
+          reading the other four. So each fact gets its own bordered cell and
+          its own small label, and the strip stays at `micro`.
+
+          What went was the justification -- "a quiet week and a bad one fill
+          the frame alike", "relief is under half a percent of 550 km". Both
+          argue that the design is right rather than telling a reader what they
+          are looking at, and that argument belongs here.
+
+          `Colour` and `Terrain` earn their cells because both change what the
+          picture *means*: the field is normalised to this window, so absolute
+          size cannot be read off it, and the relief is exaggerated eightfold.
+          A reader who misses either misreads the map. */}
+      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded border border-line bg-line">
         {summedFrp !== null && (
-          <>
-            {' '}
-            Region total <span className="font-mono text-ink">{summedFrp.toFixed(0)} MW</span> over{' '}
-            {detections.length} {detections.length === 1 ? 'detection' : 'detections'}.
-          </>
+          <div className="bg-surface px-3 py-2">
+            <dt className="text-micro uppercase tracking-widest text-muted">Region</dt>
+            <dd className="mt-0.5 text-micro leading-4 text-ink">
+              <span className="font-mono font-semibold">{summedFrp.toFixed(0)} MW</span> ·{' '}
+              {detections.length} {detections.length === 1 ? 'detection' : 'detections'}
+            </dd>
+          </div>
         )}
-      </p>
-
-      <p className="text-micro leading-5 text-muted">
-        Terrain is drawn at{' '}
-        <strong className="text-ink">×{VERTICAL_EXAGGERATION} vertical exaggeration</strong>. The
-        region is 550 km across and its relief is under half a percent of that, so true scale is a
-        flat sheet — the shape is real, the steepness is not.
-      </p>
-
-      {activity.resolution_note ? (
-        <p className="text-micro leading-5 text-muted">{activity.resolution_note}</p>
-      ) : (
-        <details>
-          <summary className="cursor-pointer text-micro text-muted hover:text-ink">
-            Why the city is always empty
-          </summary>
-          <p className="mt-1 text-micro leading-5 text-muted">
-            VIIRS pixels are ~375 m and built for wildfire, so a structure fire never registers
-            here. An empty city inside a busy region is the instrument working, not a fault.
-          </p>
-        </details>
-      )}
+        <div className="bg-surface px-3 py-2">
+          <dt className="text-micro uppercase tracking-widest text-muted">Colour</dt>
+          <dd className="mt-0.5 text-micro leading-4 text-ink">
+            relative to the busiest area in this window
+          </dd>
+        </div>
+        <div className="bg-surface px-3 py-2">
+          <dt className="text-micro uppercase tracking-widest text-muted">Pins</dt>
+          <dd className="mt-0.5 text-micro leading-4 text-ink">
+            {HOTSPOT_COUNT} strongest — click one · rings {RING_KM.join('/')} km
+          </dd>
+        </div>
+        <div className="bg-surface px-3 py-2">
+          <dt className="text-micro uppercase tracking-widest text-muted">Terrain</dt>
+          <dd className="mt-0.5 text-micro leading-4 text-ink">
+            ×{VERTICAL_EXAGGERATION} vertical exaggeration — the shape is real, the steepness is not
+          </dd>
+        </div>
+        <div className="col-span-2 bg-surface px-3 py-2">
+          <dt className="text-micro uppercase tracking-widest text-muted">City</dt>
+          <dd className="mt-0.5 text-micro leading-4 text-ink">
+            {activity.resolution_note ||
+              'VIIRS sees wildfire-scale heat at about 375 m. A structure fire is too small to register, so an empty city is the ordinary reading — not a dead feed, and not an all-clear.'}
+          </dd>
+        </div>
+      </dl>
 
       {/* Google's Terms require attribution wherever Maps imagery shows, and a
           basemap under a data layer is still the imagery being shown. */}

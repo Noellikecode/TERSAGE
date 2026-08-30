@@ -1,7 +1,11 @@
 # TERSAGE
 
-Municipal structural intelligence for a fire department, built as an institutional
-agent fleet. Nine agents, two loops, one governance layer.
+Municipal structural intelligence for a fire department, built as an
+institutional agent fleet. **Nine scheduled agents across three publishing
+departments, two loops, one governance layer** — cataloged in Google Cloud
+Agent Registry, running on Cloud Run, reasoning on Gemini 3.5 Flash.
+
+*Submitted to the Fortified Enterprise Fleet track.*
 
 A crew arriving at a structure fire has about ninety seconds of usable decision
 time before entry. What they need to know about the building already exists — in
@@ -174,7 +178,7 @@ or declines. Google Search grounding, with citations.
 | Component | How it is built |
 |---|---|
 | **Agent Registry** | `registry/descriptors.py` publishes every agent with its version, scopes, write targets, capabilities and latency budget. Departments subscribe to what they are authorized to run, pinned to a version. Cross-department: fire publishes the structural agents, building publishes the permit agent, county emergency management publishes the hazmat agent. |
-| **Agent Runtime** | Grants, scopes and deadlines enforced around every run; every run reaches a terminal state. Eleven Cloud Run services: the slow loop and nine per-agent workers scale to zero between passes; the incident service keeps one instance warm, because a cold start on dispatch is the one latency this system exists to avoid. A LangGraph graph that exhausts its budget checkpoints and resumes on a later pass. |
+| **Agent Runtime** | Grants, scopes and deadlines enforced around every run; every run reaches a terminal state. Twelve Cloud Run services: the slow loop, nine per-agent workers and the console. The workers scale to zero between passes; the incident service keeps one instance warm, because a cold start on dispatch is the one latency this system exists to avoid. A LangGraph graph that exhausts its budget checkpoints and resumes on a later pass. |
 | **Memory Bank** | Adopted for the half it fits, and only that half. Vertex AI Agent Engine Memory Bank holds each open question's prose and serves semantic recall over it; the record — eliminations, evidence, examination counts, transitions, checkpoints — stays in Firestore, because a `Memory.fact` caps at 2048 characters and a long-running thread's eliminations do not fit. Questions outlive a pass, a restart and a scale-to-zero: one opened in March is closed in August by the incident that answered it. Recall is scope-gated against the stored record, so a match the index offers for a confidential thread still never reaches an agent without the scope. Five behaviours of the managed service turned out otherwise than its SDK implied; `scripts/verify_memory_bank.py` is what found them and is what keeps them found. |
 | **Agent Identity** | Each agent runs as its own service account with only the roles its declared scopes imply. No agent can impersonate another. The IAM policy is generated from the descriptors, and a conformance test fails if the two drift. |
 | **Agent Gateway** | Every read and write decides at a default-deny policy engine — ten rules in order, including PHI derivation and jurisdiction. Every decision is recorded with the rule that produced it. |
@@ -214,16 +218,178 @@ storey count, unresolved conflicts, collapse zone, occupancy, suppression status
 
 ---
 
+## How weeks of analysis become ninety seconds
+
+This is the whole argument, and it is why the fleet is shaped the way it is.
+
+**Months before the fire.** Nine agents work a district on their own schedule.
+`records-watcher` polls permits, the assessor's roll, inspections and
+violations; every document passes two injection screens, Gemma decides whether
+it is worth a Gemini call, and Gemini extracts typed values each bound to the
+character span that supports it. `geometry-watcher` derives roof geometry and
+height from the Solar API and USGS elevation — a subtraction, not a guess, and a
+physically implausible difference produces no height rather than a wrong one.
+`hazard-watcher` resolves federal registries against this parcel, looping until
+it is confident or out of budget and recording what it ruled out so the next
+pass does not repeat the work. `structure-watch` runs deterministic conflict
+rules over everything they filed and ranks the district for survey.
+`referral-clerk` drafts the letter a captain files.
+
+**The record accumulates, provenanced.** Every fact carries its source, its
+snapshot, when it was observed, a confidence that decays on a source-tier
+half-life, and the span in the document behind it. Disagreements are kept as
+disagreements. Questions the record could not answer stay open in the Memory
+Bank for months, across restarts and scale-to-zero.
+
+**Then the call comes in.** The incident loop does not query anything. It reads
+*one immutable snapshot* of work already done. Stage one of the brief contains
+**no model call at all** — `BriefEmission` refuses to construct with
+`model_invoked` set on the instant stage — so construction type, storey count,
+open conflicts, collapse zone, occupancy and suppression status land in
+milliseconds even if every model in the system is down.
+
+**And the whole loop is budgeted backwards from the promise.**
+
+    93 s  compose deadline      the latest a composition may start
+  + 20 s  composition cap       the interceptor's own latency_target_ms
+  +  7 s  delivery allowance    poll interval + route draw + read pause
+  ------
+    120 s hard ceiling          a card on a commander's screen
+
+Every term on the left is a cap something already enforces, so the sum is a
+bound rather than a hope. `COMPOSITION_CAP` is read off the agent catalog at
+import, and `COMPOSE_DEADLINE` is solved from it — change a descriptor's budget
+and the deadline moves rather than the promise breaking.
+
+---
+
+## Every technology, and what it does here
+
+**Google AI**
+
+| | |
+|---|---|
+| **Gemini 3.5 Flash** (Vertex AI) | Typed extraction bound to source spans; enriched-brief and crew-brief prose; the multimodal read of a thermal frame; reference grounding |
+| **Gemma 4 26B** (`gemma-4-26b-a4b-it-maas`, Vertex AI) | Document triage only — the cheap model decides whether a document is worth a Gemini call, never what it says |
+| **Google Gen AI SDK** (`google-genai`) | The agent framework every model call goes through, constructed `vertexai=True` so one project, location and service-account identity govern all of them |
+| **Vertex AI Agent Engine — Memory Bank** | Semantic recall over the prose of open questions that outlive a pass, a restart and a scale-to-zero |
+| **Model Armor** | Inline guardrail on every ingested document, paired with a local injection detector |
+| **Vertex AI Vector Search** | Wired behind the vectors port; off by default on cost (`vector_search_enabled`) |
+| **Google Search grounding** | Resolves a fuzzy external reference to a canonical id, with citations, or declines |
+
+**Google Cloud infrastructure**
+
+| | |
+|---|---|
+| **Cloud Run** | 12 services — slow loop, incident loop, console, and nine per-agent workers, each on its own service account |
+| **Firestore** | 32 collections: append-only facts, profiles with optimistic concurrency, the agent catalog, grants, policy decisions, audit log, idempotency records, fenced locks |
+| **Pub/Sub** | Dispatch fan-out and agent completion, a dead-letter topic per subject, push to authenticated Cloud Run endpoints |
+| **Cloud Storage** | NFPA-1620-shaped pre-incident plans |
+| **Secret Manager** | Containers created by Terraform; values added out of band |
+| **Cloud Scheduler** | The slow loop's cadence |
+| **Cloud Trace** + **OpenTelemetry** | A span per agent run and per graph node — the reasoning chain as the replayable unit |
+| **Cloud Billing Budgets** | A hard spend ceiling with alerting |
+| **Artifact Registry** + **Cloud Build** | Images built and deployed **by digest**, never by tag |
+| **Google Cloud Agent Registry** | 9 agents published as A2A agent cards for cross-department discovery |
+| **IAM** | Per-agent service accounts whose roles are *generated from* the declared scopes |
+
+**Google data & imagery**
+
+Solar API (roof geometry) · USGS 3DEP (ground datum) · Photorealistic 3D Tiles · Street View / Static Maps · Google Calendar and Gmail (survey scheduling, behind a `WORKSPACE_WRITES` switch)
+
+**Non-Google external data**
+
+DataSF permits, assessor, inspections, violations, parcels · EPA FRS · PHMSA pipelines · NREL EV infrastructure · Tier II · NASA FIRMS (regional fire activity) · NASA POWER (fire weather) · Resend (inter-agency referral email)
+
+**Backend**
+
+Python 3.12 · FastAPI · Pydantic v2 + pydantic-settings · Uvicorn · SSE-Starlette (streaming brief) · httpx · tenacity · **LangGraph** + langchain-core (graph *executor* for the reasoning agents — the nodes and router are ordinary code, and a built-in driver runs the identical set when the package is absent) · langchain-google-vertexai (the planner's one job: choose the next lookup from a closed list)
+
+**Console**
+
+TypeScript · Next.js · React · Tailwind · **Three.js** (the measured structure model) · **deck.gl** (regional heat map) · 3d-tiles-renderer (Photorealistic 3D Tiles)
+
+**Infrastructure & quality**
+
+OpenTofu/Terraform (14 modules, 377 resources) · Docker · uv · Ruff · strict mypy (206 files) · pytest (1,807 tests) · Vitest (577 tests) · gitleaks · GitHub Actions
+
+---
+
+## The pipeline, end to end
+
+**1 · Poll.** `records-watcher` reads DataSF permits, the assessor's roll,
+inspections and violations over **httpx**, paging until the feed is exhausted or
+its 40 s budget is spent. `hazard-watcher` reads EPA FRS, PHMSA, NREL and Tier
+II. `geometry-watcher` reads the **Solar API** and **USGS 3DEP**. Snapshots land
+in **Firestore** with a content hash.
+
+**2 · Screen.** Every document passes **Model Armor** *and* a local injection
+detector before a model sees it. A screen that cannot run **withholds** the
+document — it does not pass it through.
+
+**3 · Triage.** **Gemma 4 26B** decides whether the document is worth a Gemini
+call. It can only ever *skip* work, and a broken triage answers "extract".
+
+**4 · Extract.** **Gemini 3.5 Flash**, via the **Gen AI SDK** against Vertex AI,
+returns typed values each bound to the character span that supports it. The
+model may not author a fact — deterministic code decides what is true.
+
+**5 · Materialize.** Facts append to a **Firestore** profile under optimistic
+concurrency; contention re-derives rather than dropping. Confidence decays on a
+source-tier half-life. `conflict.detected` publishes to **Pub/Sub**.
+
+**6 · Reason.** `hazard-watcher` runs a **LangGraph** identity loop — pull a
+candidate, notice ambiguity, query a second registry, stop when confident or out
+of budget — recording what it ruled out. What it cannot settle becomes an open
+question in **Vertex AI Memory Bank**, where it waits months.
+
+**7 · Rank and refer.** `structure-watch` runs deterministic conflict rules and
+ranks the district on four weighted signals. `referral-clerk` drafts a letter;
+a **captain** approves before it is filed, and **Resend** delivers it.
+`geometry-watcher` renders a pre-incident plan to **Cloud Storage**.
+
+*— months pass —*
+
+**8 · Dispatch.** A 911 call or CAD narrative arrives. `incident-interceptor`
+opens the incident against **one immutable snapshot**, mints a scoped grant, and
+emits brief v1 — **no model call**, milliseconds.
+
+**9 · Intake.** Gemini reads the caller's narrative and binds reported values to
+spans in the transcript; a **LangGraph** focus composer routes the incident to
+the other agents by their declared capabilities, and recalls from Memory Bank.
+
+**10 · Sweep.** `sensor-fusion` reads a thermal frame with **Gemini multimodal**
+and returns observations bound to image regions. Which wall it is looking at is
+resolved from the measured footprint — never from the model.
+
+**11 · Notify.** `agency-notifier` drafts for mutual aid, utilities and
+emergency management. Notifying is autonomous; a utility shutoff needs a **chief**.
+
+**12 · Compose.** The interceptor assesses six readiness criteria, solves an
+**A\*** entry path over a graph priced by what the sweep measured, and composes
+the crew brief. Every step passes the **Agent Gateway** (default-deny) under the
+agent's own **service-account identity**, and lands a span in **Cloud Trace**.
+
+**13 · Approve.** The console raises the package over **SSE**, with the route
+drawn on a **Three.js** model of the measured geometry. Two human signatures,
+then release.
+
+**14 · Close.** `incident-recorder` seals the append-only log, writes through to
+RMS, drafts a NERIS-shaped report — and **closes the questions the slow loop
+opened months earlier**, now that a crew has stood in the building.
+
+---
+
 ## Architecture
 
-Ports and adapters. Sixteen ports, one per seam; nine adapter packages. Nearly
-every port has two implementations, and one contract suite holds both to the
-same behaviour.
+Ports and adapters. **Eighteen ports**, one per seam; **ten adapter packages**.
+Nearly every port has two implementations, and one contract suite holds both to
+the same behaviour.
 
 ```
 backend/src/firstdue/
   domain/         models, invariants, deterministic engines
-  ports/          the sixteen seams
+  ports/          the eighteen seams
   adapters/       memory, fake, firestore, pubsub, google, vertex, resend, nasa
   agents/         slow-loop agents, and graphs/ for the reasoning
   incident/       controller, interceptor, fusion, recorder, focus, session
@@ -290,9 +456,90 @@ should read a window count off a picture.
 
 ---
 
+## Fortified Enterprise Fleet — where each requirement is met
+
+| Requirement | Where it lives |
+|---|---|
+| **Gemini 3.5+ via Vertex AI** | `gemini-3.5-flash` through `genai.Client(vertexai=True)`. Gemma (`gemma-4-26b-a4b-it-maas`) does document triage — the cheap model is allowed to decide whether a document is worth reading, never what it says. |
+| **Google Agent Framework** | **GenAI SDK** (`google-genai`), used in `adapters/vertex/model.py`, `vision.py` and `grounding.py`. |
+| **Google Cloud infrastructure** | Cloud Run (12 services), Firestore (32 collections), Pub/Sub with a dead-letter topic per subject, Cloud Storage, Secret Manager, Cloud Scheduler, Cloud Trace. |
+| **Cataloged for cross-department use** | **9 agents published to Google Cloud Agent Registry** as A2A agent cards, plus the in-system catalog in `registry/descriptors.py`. Three publishing departments: fire publishes the structural agents, **building** publishes the permit agent, **county emergency management** publishes the hazmat agent. A department subscribes to a *pinned version* of an agent another department owns. |
+| **Context across weeks of async operation** | Vertex AI Agent Engine **Memory Bank** holds open-question prose for semantic recall; the record — eliminations, evidence, examination counts, checkpoints — stays in Firestore because a `Memory.fact` caps at 2048 characters. A question opened in March is closed in August by the incident that answered it. |
+| **Production data without violating compliance** | Default-deny **Agent Gateway**, PHI derivation, jurisdiction rules, Tier II confidential classification, scope-gated recall, and an audit log that never holds document contents. |
+| **Zero-trust identity** | Each agent runs as its own service account carrying only the roles its declared scopes imply. The IAM policy is *generated from the descriptors*, and a conformance test fails if the two drift. |
+| **Inline guardrails** | **Model Armor** plus a local injection detector in front of every ingested document. A screen that cannot run **withholds** the document rather than passing it through. |
+| **OpenTelemetry observability** | Traces per agent run and per graph node, structured logs, an append-only audit log, and `/internal/audit/*` for the reasoning chain. |
+
+---
+
+## Lifecycle, versioning and safe change
+
+The catalog is **append-only and immutable per version**. Republishing a
+descriptor whose *content* changed under the same version is refused by a
+Firestore transaction — `AppendOnlyViolationError`, "publish a new version
+instead". That is not a nicety: a NIOSH line-of-duty-death investigation
+reconstructs what a commander knew two years later, and every brief records the
+agent versions that produced it.
+
+So the fleet is at **`1.4.0`**, and each bump is a promise that changed:
+
+- `1.1.0` — `sensor-fusion` 2 s → 12 s, `incident-recorder` gained `read:public-records`
+- `1.2.0` — `incident-interceptor` 6 s → 12 s
+- `1.3.0` — `incident-interceptor` 12 s → 20 s
+- `1.4.0` — `records-watcher` 120 s → 40 s
+
+Four superseded agents stay **published and resolvable** rather than deleted:
+`brief-reconciler`, `conflict-detector`, `incident-controller`, `survey-ranker`.
+Thirteen descriptors, nine scheduled. An `agent_id` that vanished from the
+catalog would turn a recorded run into an unresolvable reference.
+
+**Every budget in this system was measured, not picked.** One live
+`gemini-3.5-flash` compose on this project costs 5.72–6.97 s. Budgets sized in
+fake mode — where a model answers in microseconds — were cancelling every live
+model call in the incident loop. The descriptors carry the measurements.
+
+---
+
+## Spin-up
+
+**Locally, no credentials:**
+
+```bash
+make setup        # Python 3.12 via uv, plus the console toolchain
+make demo         # API on :8000, console on :3000
+```
+
+Every port has a credential-free implementation with the same authorization
+rules, idempotency behaviour, event ordering and failure modes as the
+Google-backed one, so the whole fleet runs on a laptop.
+
+**Against real Google Cloud:**
+
+```bash
+gcloud auth application-default login
+cp .env.live.example .env.live                 # project, models, Model Armor template
+make live-demo                                 # real Gemini, real feeds, real Firestore
+```
+
+**Deploy:**
+
+```bash
+./infra/bootstrap.sh                           # one-time: Terraform state bucket
+make infra-plan                                # read the plan before applying
+PROJECT_ID=your-project make deploy-staging
+STAGING_BASE_URL=<incident url> make smoke-staging
+python scripts/publish_agent_registry.py --project your-project
+```
+
+`deploy-staging` builds both images **by digest** — a rollback has to name the
+exact image that was running, and `:latest` cannot — and hands them to OpenTofu.
+Secret *values* are added out of band; Terraform creates only the containers.
+
+---
+
 ## Verification
 
-1,796 backend tests and 575 console tests. Strict mypy across 206 source files.
+1,807 backend tests and 577 console tests. Strict mypy across 206 source files.
 A contract suite that holds the in-memory and Firestore backends to one set of
 behaviours, an infrastructure suite that holds Terraform to the agent
 descriptors, and an observability suite that asserts telemetry carries no

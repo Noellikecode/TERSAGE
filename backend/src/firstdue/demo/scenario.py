@@ -560,12 +560,55 @@ async def _run_one_pass(
     _PASSES[correlation_id] = current
     runs: list[FleetRun] = []
     try:
-        for agent_id in (
-            "records-watcher",
-            "geometry-watcher",
-            "hazard-watcher",
-            "structure-watch",
+        # The three watchers run **together**; `structure-watch` waits for them.
+        #
+        # They are independent by construction and the catalog says so: they
+        # read disjoint sources and write disjoint canonical keys, and
+        # `wake_all`'s own docstring records that they are not each other's
+        # prerequisites. Run one after another they were also *invisible* --
+        # the pass is what the console scopes its fleet column to, so for the
+        # first two minutes of every pass three of the four slow agents had
+        # recorded nothing and were drawn idle. Measured before this change:
+        # records-watcher first recorded at t+5s, geometry-watcher at t+34s,
+        # hazard-watcher at t+52s.
+        #
+        # `structure-watch` is genuinely downstream -- it runs the conflict
+        # rules and the ranking over what the three of them filed -- so it
+        # stays after them. That is a data dependency, not an ordering habit.
+        #
+        # Safe to run together only because contention is now handled rather
+        # than avoided: `ProfileMaterializer` waits for a held per-address lock
+        # instead of skipping, and re-derives after losing a version check
+        # instead of dropping the write. Both previously assumed a contending
+        # writer would compute the same answer, which is true of a duplicate
+        # pass and false of a different agent.
+        watchers = await asyncio.gather(
+            *(
+                fleet.run(
+                    agent_id,
+                    correlation_id=correlation_id,
+                    parameters={"district_id": district},
+                )
+                for agent_id in ("records-watcher", "geometry-watcher", "hazard-watcher")
+            ),
+            return_exceptions=True,
+        )
+        for agent_id, outcome in zip(
+            ("records-watcher", "geometry-watcher", "hazard-watcher"), watchers, strict=True
         ):
+            if isinstance(outcome, BaseException):
+                # One watcher failing never takes the pass with it: the others
+                # filed what they filed, and `structure-watch` should still
+                # rank what is on the record.
+                logger.warning(
+                    "slow_loop_watcher_failed",
+                    extra={"agent_id": agent_id, "error": type(outcome).__name__},
+                )
+                continue
+            runs.append(outcome)
+            await _record_unfinished(container, outcome, district_id=district)
+
+        for agent_id in ("structure-watch",):
             run = await fleet.run(
                 agent_id,
                 correlation_id=correlation_id,

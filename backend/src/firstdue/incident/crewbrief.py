@@ -269,18 +269,51 @@ def _structure_claims(snapshot: ProfileSnapshot) -> list[BriefClaim]:
 
 
 def _thermal_claims(coverage: Sequence[FaceCoverage]) -> list[BriefClaim]:
-    return [
+    """One line per wall, plus the caveat once.
+
+    This used to hand back `report.render` verbatim, on the reasoning that the
+    coverage report already words itself and a second wording would be a second
+    version of one reading. That was right about the *reading* and wrong about
+    the page: `render` ends with `THERMAL_CAVEAT`, so four walls printed the
+    same two sentences about what thermal imaging can and cannot see four
+    times, around an ISO timestamp to the microsecond. What a crew got was
+    ~600 characters saying, somewhere inside it, "Bravo is hot".
+
+    So the numbers lead and the caveat is stated once, as its own claim. It is
+    not dropped: "a hot surface has many causes" is the sentence that stops a
+    reading being taken for a diagnosis, and it has to be on the page. It has
+    to be on it once.
+    """
+    claims = [
         BriefClaim(
             claim_id=f"thermal.{report.face}",
             section="THERMAL",
-            # The coverage report's own rendering, which already says UNSCANNED
-            # where nobody flew and carries the caveat. Rewriting it here would
-            # be a second wording of a reading that has one.
-            text=f"Face {report.face}: {report.render}",
+            text=(
+                f"{report.face}: {report.peak_c:.0f} C peak, "
+                f"{report.coverage * 100:.0f}% of the wall read"
+                if report.scanned and report.peak_c is not None
+                else f"{report.face}: not flown — treat as unknown, never as cool"
+            ),
             refs=(str(report.face),),
         )
         for report in coverage
     ]
+    if any(report.scanned for report in coverage):
+        claims.append(
+            BriefClaim(
+                claim_id="thermal.caveat",
+                # CAVEATS, not THERMAL. The invariant the suite enforces is
+                # that a claim carrying no refs asserts nothing -- and this one
+                # does not: it is what the instrument cannot tell you, which is
+                # true of every reading above it and of none of them
+                # particularly. Filing it under THERMAL would have made it look
+                # like a fifth wall.
+                section="CAVEATS",
+                text=THERMAL_CAVEAT,
+                refs=(),
+            )
+        )
+    return claims
 
 
 def _route_claims(plan: EntryPathPlan) -> list[BriefClaim]:

@@ -21,7 +21,9 @@ the durable stores, which are not. Four things happen here and nowhere else:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -61,6 +63,20 @@ class MaterializationOutcome(BaseModel):
     #: Set when the version moved under us. The other writer computed the same
     #: result, because the engine is deterministic -- so this is informational.
     contended: bool = False
+
+
+#: How many times a derivation may be re-attempted after losing a version
+#: check. Small: each attempt re-reads the winner's profile and re-derives from
+#: it, so the work left shrinks every round, and a profile contended more than
+#: this is one under sustained write pressure the slow loop is not designed for.
+MAX_MATERIALIZE_ATTEMPTS: Final[int] = 4
+
+#: How long to wait for another worker's derivation of the same address, and
+#: how many times. One derivation is milliseconds of compute plus a write, so
+#: this is generous; it exists so a concurrent agent queues behind a peer
+#: instead of dropping its work.
+LOCK_WAIT_SECONDS: Final[float] = 0.25
+LOCK_WAIT_ATTEMPTS: Final[int] = 12
 
 
 class ProfileMaterializer:
@@ -112,8 +128,31 @@ class ProfileMaterializer:
             self.lock_id(address_id), owner=owner, now=now, lease=self._lease
         )
         if lease is None:
-            # Another instance holds it. Doing nothing is the correct response:
-            # its pass will produce the same result ours would have.
+            # Waited for, not skipped.
+            #
+            # "Its pass will produce the same result ours would have" holds for
+            # a duplicate pass and fails for a concurrent *different* agent:
+            # `records-watcher` and `hazard-watcher` derive from disjoint
+            # canonical keys on the same profile, so skipping threw away
+            # whichever one arrived second. That was safe only while the fleet
+            # ran strictly serially and nothing ever contended.
+            #
+            # The lock is held for one derivation, so the wait is short and
+            # bounded. A lock still held after that is a worker that died
+            # holding it, and its lease will expire; giving up here is right
+            # then, and the caller records an unfinished pass rather than a
+            # silent nothing.
+            for _ in range(LOCK_WAIT_ATTEMPTS):
+                await asyncio.sleep(LOCK_WAIT_SECONDS)
+                lease = await self._locks.acquire(
+                    self.lock_id(address_id),
+                    owner=owner,
+                    now=self._clock.now(),
+                    lease=self._lease,
+                )
+                if lease is not None:
+                    break
+        if lease is None:
             logger.info("materialize_skipped_locked", extra={"address_id": address_id})
             return MaterializationOutcome(address_id=address_id, ran=False)
 
@@ -125,6 +164,39 @@ class ProfileMaterializer:
             await self._locks.release(self.lock_id(address_id), owner=owner)
 
     async def _materialize(
+        self, address_id: str, *, correlation_id: str, causation_id: str | None
+    ) -> MaterializationOutcome:
+        """Derive and persist, re-deriving if somebody else got there first.
+
+        The retry is what makes concurrent writers safe. Losing the version
+        check used to end the attempt: the outcome came back ``contended`` and
+        the derivation was dropped, on the stated reasoning that "another
+        writer got there first with the same deterministic result". That is
+        true of two *duplicate* passes and false of two different agents --
+        `records-watcher` and `hazard-watcher` write disjoint canonical keys to
+        the same profile, so whoever lost the race had their facts silently
+        thrown away rather than merged.
+
+        Re-reading and re-deriving fixes it, and cannot loop for long:
+        `materialize` is a pure function of the profile it is handed, so the
+        second attempt starts from the winner's version and derives what is
+        still missing. A profile nobody else is touching takes the first
+        attempt and pays nothing.
+        """
+        for attempt in range(MAX_MATERIALIZE_ATTEMPTS):
+            outcome = await self._materialize_once(
+                address_id, correlation_id=correlation_id, causation_id=causation_id
+            )
+            if not outcome.contended:
+                return outcome
+            logger.info(
+                "materialize_retry",
+                extra={"address_id": address_id, "attempt": attempt + 1},
+            )
+        logger.warning("materialize_gave_up", extra={"address_id": address_id})
+        return outcome
+
+    async def _materialize_once(
         self, address_id: str, *, correlation_id: str, causation_id: str | None
     ) -> MaterializationOutcome:
         profile = await self._profiles.get(address_id)

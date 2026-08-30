@@ -62,7 +62,10 @@ from firstdue.errors import NotFoundError
 #: bumps for one number in one afternoon is the catalog doing its job: each one
 #: is a promise that changed, and a pin that survived the change would have
 #: been a lie about what the agent is allowed to take.
-FLEET_VERSION: Final[str] = "1.3.0"
+#:
+#: ``1.4.0`` cuts ``records-watcher`` from 120 s to 40 s so the serial pass
+#: reaches the other four agents while somebody is still looking at the screen.
+FLEET_VERSION: Final[str] = "1.4.0"
 #: The department that runs the fleet and subscribes to all eight.
 HOME_DEPARTMENT: Final[Department] = Department.FIRE
 #: Fixed publication timestamp, so seeding is byte-identical on every run.
@@ -132,7 +135,35 @@ RECORDS_WATCHER = _agent(
     capabilities={Capability.READ},
     scopes={Scope.READ_PUBLIC_RECORDS, Scope.WRITE_PROFILE},
     classifications={Classification.PUBLIC},
-    latency_ms=120_000,
+    # 40 s, down from 120 s, and the reason is the *shape* of the pass rather
+    # than anything this agent does wrong.
+    #
+    # `_run_one_pass` runs the fleet serially -- records, geometry, hazard,
+    # structure-watch, then the clerk -- and this agent is first. It also uses
+    # every second it is given: `_RETRIEVAL_SHARE` spends 35 % paging live
+    # municipal feeds (measured: `$offset` walking 650, 700 ... 1200 at ~0.5 s
+    # a page) and hands the rest to extraction, which is model calls. So a
+    # 120 s budget here is 120 s in which *no other slow agent has run*, and a
+    # console loaded during it correctly draws four idle agents beside one
+    # working -- which reads as a broken fleet and is really a queue.
+    #
+    # Measured, one live pass: 261 s total, of which this agent held the first
+    # ~120 s. The other three emitted 4, 17 and 146 events once they finally
+    # got to run.
+    #
+    # What 40 s costs is records per pass, and that is the cheap side of the
+    # trade: the slow loop is cumulative and the choreography starts a pass
+    # every 25 s, so the district fills in over several short passes instead of
+    # one long one. What it buys is every agent visibly working within about a
+    # minute of a page load, which is the thing the loop exists to show.
+    #
+    # The real fix is running the three independent watchers concurrently --
+    # they read disjoint sources and write disjoint keys. That needs
+    # `ProfileMaterializer` to stop skipping on a held lock and stop dropping
+    # writes on `StaleVersionError` first; both assume a contending pass would
+    # compute the same result, which is true of a duplicate pass and false of a
+    # different agent. Until then this is the honest lever.
+    latency_ms=40_000,
     input_schema="SourcePollRequest",
     output_schema="FactBatch",
 )

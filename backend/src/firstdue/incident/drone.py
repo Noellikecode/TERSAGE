@@ -244,6 +244,28 @@ def synthetic_frame(*, address_id: str, face: FaceLabel) -> bytes:
     hides a decode bug until the day it matters.
     """
     seed = hashlib.sha256(f"{address_id}:{face}".encode()).digest()
+
+    # A fire has a seat. Every face used to burn.
+    #
+    # The amplitude was `0.55 + seed/255 * 0.45` on all four walls, and three
+    # overlapping hotspots saturate that to 1.0 -- the top of the scale, 340 C.
+    # `THERMAL_BARRIER_C` is 300, and `_thermal_terms` builds *no door edge*
+    # through a face at or above it, correctly: a wall that hot is not a way
+    # in. So the sweep read 340 C on Alpha, Bravo, Charlie and Delta, all four
+    # doors became barriers, and the A* solve refused every route -- "no leg of
+    # the navigable graph connects the start to the goal". The path was not
+    # broken; the synthetic fire was, and only once the sweep started landing
+    # frames at all did it show.
+    #
+    # One seat, picked off the *address* so it is the same wall for every face
+    # of one building, and the other three run cooler. The barrier rule is
+    # untouched: a crew still gets no door through the seat, and still gets one
+    # through the walls that are merely warm, which is the decision this whole
+    # graph exists to support.
+    seat = hashlib.sha256(address_id.encode()).digest()[0] % len(SWEEP_ORDER)
+    is_seat = SWEEP_ORDER[seat] == face
+    floor, span = (0.55, 0.45) if is_seat else (0.16, 0.24)
+
     # Three hot regions, placed and sized off the digest. Read four bytes each
     # so that two faces of one building are not near neighbours in the digest.
     hotspots = [
@@ -251,7 +273,7 @@ def synthetic_frame(*, address_id: str, face: FaceLabel) -> bytes:
             seed[index] / 255.0 * 0.7 + 0.1,
             seed[index + 1] / 255.0 * 0.7 + 0.1,
             0.05 + seed[index + 2] / 255.0 * 0.08,
-            0.55 + seed[index + 3] / 255.0 * 0.45,
+            floor + seed[index + 3] / 255.0 * span,
         )
         for index in (0, 4, 8)
     ]

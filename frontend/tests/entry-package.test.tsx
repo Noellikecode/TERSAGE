@@ -354,7 +354,11 @@ describe('the card is the interceptor asking', () => {
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     const title = document.getElementById('entry-package-title');
     expect(title).toHaveTextContent('incident-interceptor');
-    expect(title).toHaveTextContent(/asks for approval to send an entry package/i);
+    // The wording moved when the brief card became the masthead: the dialog's
+    // own heading is now one line rather than a display headline competing
+    // with the card under it. What it still has to carry is the agent and the
+    // ask, because that pair is the dialog's accessible name.
+    expect(title).toHaveTextContent(/asks for approval to send this to the crew/i);
   });
 
   it('says how the loop decided to compose it rather than leaving it implied', () => {
@@ -370,33 +374,34 @@ describe('the card is the interceptor asking', () => {
   });
 
   /**
-   * A caveat printed before the thing it qualifies reads as a refusal.
+   * The dialog is the brief, and the verdict rides in the footer.
    *
-   * The dialog opened on the readiness verdict, so a commander met the words
-   * "Not ready" before a single line of the plan. The verdict does not block a
-   * send and the copy says so at length -- it belongs after the brief and the
-   * route, as a note on them. This pins the order, because it is the kind of
-   * thing a later edit reshuffles without noticing what it costs.
+   * The readiness table, the route legs and the citation list are off this
+   * surface -- they are on the package, on the printed sheet and in the log.
+   * What could not move is the *verdict*: this is where a human authorises a
+   * send, and a commander approving a NOT READY package has to be told so
+   * without opening anything.
    */
-  it('leads with the plan and puts the record check after it', () => {
+  it('shows the brief, and states the verdict where the decision is made', () => {
     renderModal(entryPackage());
-    const modal = screen.getByTestId('entry-package-modal');
-    const brief = screen.getByTestId('crew-brief');
-    const readiness = screen.getByTestId('readiness-verdict');
-    // `compareDocumentPosition` is the honest check: it asks the DOM which
-    // comes first rather than trusting a query order.
-    expect(brief.compareDocumentPosition(readiness) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(modal).toContainElement(brief);
-    expect(modal).toContainElement(readiness);
+    // No emission has reached the console in this harness, so the card is in
+    // its waiting state -- which is the honest thing to draw. The interceptor
+    // composes the brief; the dialog does not invent one to fill the space.
+    expect(screen.getByTestId('fireground-brief-pending')).toBeInTheDocument();
+    // The provenance surfaces are gone from the dialog, not from the system.
+    expect(screen.queryByTestId('crew-brief')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('readiness-verdict')).not.toBeInTheDocument();
+    expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
   });
 
   it('does not paint an incomplete record in the colour reserved for faults', () => {
     renderModal(entryPackage());
     // `alarm` is for something that has gone wrong. An unconfirmed record has
-    // not gone wrong, and the banner's own sentence says so.
+    // not gone wrong. It is a line in the footer now rather than a bordered
+    // block, so the colour is on the text.
     const banner = screen.getByTestId('readiness-banner');
-    expect(banner.className).toContain('border-disputed');
-    expect(banner.className).not.toContain('border-alarm');
+    expect(banner.className).toContain('text-disputed');
+    expect(banner.className).not.toContain('alarm');
   });
 
   it('closes on Escape', () => {
@@ -1314,7 +1319,12 @@ describe('the console, from the composed package to standby', () => {
     // There is nothing to watch, so there is nothing to wait through: the
     // refusal is the finding and it goes to a human immediately.
     expect(screen.getByTestId('entry-package-modal')).toBeInTheDocument();
-    expect(screen.getByTestId('path-refused')).toHaveTextContent(/never measured this address/);
+    // The raw `refusal_reason` is written for whoever is debugging the solver
+    // and is kept on the package and the printed sheet. What the dialog states
+    // is the fact and what follows from it, which is what a crew at a door can
+    // act on.
+    expect(screen.getByTestId('path-refused')).toHaveTextContent(/No route computed/);
+    expect(screen.getByTestId('path-refused')).toHaveTextContent(/Crew chooses the way in/);
     expect(screen.queryByTestId('route-caption')).not.toBeInTheDocument();
   });
 
@@ -1378,8 +1388,13 @@ describe('the console, from the composed package to standby', () => {
     await waitFor(() => expect(screen.queryByTestId('resolve-sheet')).not.toBeInTheDocument(), {
       timeout: 4000,
     });
-    // Standby is back: the dispatch panel is on screen again.
-    expect(screen.getByTestId('dispatch-button')).toBeInTheDocument();
+    // Standby is back, on the slow loop rather than on the building that just
+    // burned. Closing used to reopen that structure's profile, which left a
+    // commander reading one record while the fleet worked behind it; the
+    // dispatch panel lives inside that profile, so it is correctly absent
+    // until somebody picks a structure out of the queue again.
+    expect(screen.getByTestId('records-disagree')).toBeInTheDocument();
+    expect(screen.queryByTestId('dispatch-button')).not.toBeInTheDocument();
   });
 
   it('stays on the fireground when the send is refused', async () => {
@@ -1474,10 +1489,12 @@ describe('the console, from the composed package to standby', () => {
         // The whole document, not the summary: the card states six criteria and
         // the list endpoint has never carried them.
         expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
-        expect(screen.getByText(/CHARLIE is UNSCANNED and lapsed/)).toBeInTheDocument();
+        // The six-criterion table is off the dialog; the verdict it produced
+        // is not. That is what a commander is told before authorising a send.
+        expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
         // No frame said how the loop decided, so nothing claims it did. The
         // trigger is a property of the log entry and the poll never saw one.
-        expect(screen.getByText(/is holding it for a human decision/i)).toBeInTheDocument();
+        expect(screen.getByText(/holding this for a human decision/i)).toBeInTheDocument();
         expect(screen.queryByText(/compose deadline ran out/i)).not.toBeInTheDocument();
       },
       CARD_BUDGET_MS + 10000,

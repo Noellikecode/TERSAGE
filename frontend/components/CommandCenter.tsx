@@ -232,6 +232,9 @@ const AUTO_PASS_INCIDENT_MS = 60000;
 const AUTO_CALL_MS = 50000;
 const CALL_WARNING_MS = 6000;
 
+/** The only value `callIn` takes. Named so the banner reads as a state. */
+const CALL_INCOMING = 'incoming' as const;
+
 /**
  * How often to look again when the call is due and the queue is not loaded.
  *
@@ -789,7 +792,14 @@ export function CommandCenter({
   //: one has, because "no pass yet" and "a pass just now" are different claims.
   const [passAt, setPassAt] = useState<number | null>(null);
   //: Seconds until the demo dispatches, or null when nothing is scheduled.
-  const [callIn, setCallIn] = useState<number | null>(null);
+  /**
+   * Whether the simulated call has been announced. A flag, not a countdown.
+   *
+   * It was a seconds-remaining number, rendered as "arriving in 4s". Nothing
+   * acts on the number and nothing is waiting for zero, so it was a clock over
+   * a screen where being early buys nothing -- see the banner below.
+   */
+  const [callIn, setCallIn] = useState<typeof CALL_INCOMING | null>(null);
   /**
    * The sample the incident was opened from, when it was opened from one.
    *
@@ -1554,13 +1564,16 @@ export function CommandCenter({
       return stopTimers;
     }
 
+    // Announced, not counted down.
+    //
+    // The banner used to tick 6, 5, 4 ... and a number falling toward zero
+    // reads as a deadline the viewer is being asked to beat. There is nothing
+    // to beat: the call arrives, the console switches, and the only decision
+    // on offer is the "stay in standby" beside it. Counting made a demo
+    // affordance look like a clock somebody was racing.
     const warn = setTimeout(
-      () => setCallIn(Math.round(CALL_WARNING_MS / 1000)),
+      () => setCallIn(CALL_INCOMING),
       Math.max(0, AUTO_CALL_MS - CALL_WARNING_MS),
-    );
-    const tick = setInterval(
-      () => setCallIn((left) => (left === null || left <= 0 ? left : left - 1)),
-      1000,
     );
     // Retried, not fired once.
     //
@@ -1601,7 +1614,6 @@ export function CommandCenter({
 
     return () => {
       stopTimers();
-      clearInterval(tick);
       clearTimeout(warn);
       clearTimeout(callTimer);
     };
@@ -1766,7 +1778,29 @@ export function CommandCenter({
     );
     setInFlight(null);
     if (!result.ok) {
-      setNotice(`Could not close the incident: ${result.error.message}`);
+      // The close failed and the screen still leaves the fireground.
+      //
+      // This used to `return` here, which stranded the console on the incident
+      // view -- the package had been sent, the crew had it, and the only way
+      // back to the fleet was a reload. The two facts are separate: whether
+      // the *record* was sealed, and what the operator is looking at. Refusing
+      // to navigate did not keep the incident open any more than navigating
+      // closes it; it just hid the fleet behind a fire that was already
+      // handled. So the notice states plainly that the incident is still open
+      // server-side, and the screen goes back to the loop that is still
+      // running.
+      setNotice(
+        `The incident could not be closed: ${result.error.message}. It is still open on the ` +
+          'backend and its grant has not been revoked — close it from the incident banner.',
+      );
+      setIncident(null);
+      setCallOnScreen(false);
+      setSelected(null);
+      setProfile(null);
+      setTimeline([]);
+      setGeometry(null);
+      setGeometryState('idle');
+      await refreshStandby();
       return;
     }
     setNotice(
@@ -1775,10 +1809,23 @@ export function CommandCenter({
     sweepRef.current.stop = true;
     setIncident(null);
     setCallOnScreen(false);
-    // Back to standby, updated: the resolution and the survey both landed.
+    // Back to the slow loop, not to the building that just burned.
+    //
+    // This used to end on `openProfile(incident.address_id)`, which opened the
+    // structure's profile in the middle column -- so closing an incident left
+    // a commander looking at one building's record rather than at the fleet.
+    // The fire is out; what is running is the slow loop, and that is what the
+    // screen should return to. The profile is one click away in the queue for
+    // anyone who wants it.
+    setSelected(null);
+    setProfile(null);
+    setTimeline([]);
+    setGeometry(null);
+    setGeometryState('idle');
+    // Read the district back so the standby columns show what the incident
+    // just changed: the resolution and the survey both landed.
     await refreshStandby();
-    await openProfile(incident.address_id);
-  }, [incident, openProfile, refreshStandby]);
+  }, [incident, refreshStandby]);
 
   // ------------------------------------------------------- entry packages --
 
@@ -2427,8 +2474,7 @@ export function CommandCenter({
           className="shrink-0 border-b border-disputed bg-raised px-4 py-2 text-micro text-disputed"
         >
           <span className="font-mono">
-            Simulated 911 call arriving in {callIn}s — the console will switch to the
-            incident view.
+            Simulated 911 call incoming — the console will switch to the incident view.
           </span>
           <button
             type="button"
@@ -2758,6 +2804,8 @@ export function CommandCenter({
             setReviewing(null);
             setLegSelection(null);
           }}
+          emission={latest}
+          addressDisplay={incident.address_display || null}
           onDispatched={(held) => void resolveAfterDispatch(held)}
           onSelectLeg={setLegSelection}
         />
@@ -2772,6 +2820,19 @@ export function CommandCenter({
           data-testid="resolve-sheet"
           className="resolve-sheet fixed inset-0 z-50 flex flex-col items-center justify-center gap-2 bg-ground px-6 text-center"
         >
+          {/* Three dots over the heading, because this sheet is a wait.
+              The grant is being revoked and the log sealed while it is up, and
+              a still screen during a round trip reads as a screen that has
+              stopped rather than one that is working. */}
+          <span aria-hidden="true" className="flex gap-1.5">
+            {[0, 1, 2].map((index) => (
+              <span
+                key={index}
+                className="h-2 w-2 animate-pulse rounded-full bg-live"
+                style={{ animationDelay: `${index * 160}ms`, animationDuration: '1.1s' }}
+              />
+            ))}
+          </span>
           <p className="font-mono text-title uppercase tracking-widest text-live">
             Package released to live dispatch units
           </p>

@@ -114,6 +114,12 @@ class InMemoryFactRepository:
         self._by_address: dict[str, list[str]] = {}
         self._lock = asyncio.Lock()
 
+    async def append_many(self, facts: Sequence[StructuralFact]) -> int:
+        """See :meth:`FactRepository.append_many`. Seed path only."""
+        for fact in facts:
+            await self.append(fact)
+        return len(facts)
+
     async def append(self, fact: StructuralFact) -> StructuralFact:
         async with self._lock:
             if fact.fact_id in self._by_id:

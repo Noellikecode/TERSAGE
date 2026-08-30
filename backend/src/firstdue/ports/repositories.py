@@ -82,6 +82,22 @@ class FactRepository(Protocol):
 
     async def append(self, fact: StructuralFact) -> StructuralFact: ...
 
+    async def append_many(self, facts: Sequence[StructuralFact]) -> int:
+        """Append facts the caller already knows are absent. **Seed path only.**
+
+        :meth:`append` is the append-only enforcement and every writer in the
+        product uses it: it reports whether the fact was already there, which
+        is the question the guard exists to answer. A batched commit cannot --
+        it fails whole rather than per document -- so this is correct only
+        where absence is already established.
+
+        It exists because seeding a fresh namespace writes every seeded fact
+        inside the API's lifespan hook, and one round trip each took long
+        enough that Firestore returned ``504 Deadline Exceeded`` and the
+        service never became ready.
+        """
+        ...
+
     async def get(self, fact_id: str) -> StructuralFact | None: ...
 
     async def list_for_address(self, address_id: str) -> Sequence[StructuralFact]: ...

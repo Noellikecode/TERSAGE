@@ -253,8 +253,8 @@ live-demo: ## Live mode WITH the console: real models, real sources, real Firest
 	   CENTRAL_DATABASE_ENABLED=false \
 	   DEMO_SYNTHETIC_SWEEP=true \
 	   PORT=$(API_PORT) $(UV) run firstdue serve ) & \
-	 echo "==> waiting for the API (it checks every seeded profile against Firestore)"; \
-	 for i in $$(seq 1 60); do \
+	 echo "==> waiting for the API (seeding a fresh district into Firestore, ~2 min)"; \
+	 for i in $$(seq 1 180); do \
 	   curl -sf http://localhost:$(API_PORT)/readyz >/dev/null 2>&1 && break; \
 	   sleep 2; \
 	 done; \

@@ -234,15 +234,34 @@ export function BriefPanel({
         </section>
       ))}
 
-      <section className="border border-line bg-raised p-3">
+      {/* The one part of the brief that is *written* rather than read.
+          Everything above it is a field with a fact behind it; this is prose a
+          model composed, arriving a token at a time. So it is the one block
+          that looks like a terminal -- rounded hard, translucent over whatever
+          is behind it, and set in mono. The glass is not decoration: it is the
+          signal that this pane is a different kind of claim from the columns
+          above, and the caret at the end of it is a live one. */}
+      <section className="rounded-3xl border border-line/60 bg-raised/40 px-5 py-4 shadow-lg backdrop-blur-md">
         <h3 className="text-micro uppercase tracking-widest text-muted">Narrative</h3>
+        {/* Set like the reasoning terminals under each agent, and for the same
+            reason they are: this is a machine writing, live, and the reader
+            should be able to tell that at a glance. It was rendered as a plain
+            paragraph, which made model-composed prose look like the fixed
+            fields above it -- the one distinction on this panel that has to
+            survive. Mono on a dark ground, scrolled rather than grown, with
+            the caret at the end of what has arrived so far. */}
         {emission.narrative_available && emission.narrative ? (
           // The persisted prose. Once this exists it wins: it is what the
           // record holds, and the draft above it was only ever a preview.
-          <p className="mt-2 whitespace-pre-wrap text-ink">{emission.narrative}</p>
+          <p className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-line bg-ground/70 p-3 font-mono text-micro leading-5 text-ink">
+            {emission.narrative}
+          </p>
         ) : draftNarrative ? (
           <>
-            <p className="mt-2 whitespace-pre-wrap text-ink" data-testid="brief-narrative-draft">
+            <p
+              className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-line bg-ground/70 p-3 font-mono text-micro leading-5 text-ink"
+              data-testid="brief-narrative-draft"
+            >
               {draftNarrative}
               {writing && (
                 <span aria-hidden="true" className="brief-caret ml-0.5 text-live">
@@ -260,9 +279,9 @@ export function BriefPanel({
             </p>
           </>
         ) : (
-          <p className="mt-2 text-micro leading-5 text-muted">
+          <p className="mt-2 rounded-lg border border-line bg-ground/70 p-3 font-mono text-micro leading-5 text-muted">
             {writing
-              ? 'Composing…'
+              ? 'composing…'
               : emission.stage === 'INSTANT'
                 ? 'The instant stage contains no model call. Everything above was read from stored state.'
                 : 'UNAVAILABLE — the model did not return usable prose. The facts above are unchanged and complete.'}

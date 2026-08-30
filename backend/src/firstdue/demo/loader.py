@@ -53,8 +53,13 @@ async def load_demo_state(container: Container) -> int:
             continue
         await container.profiles.create(profile)
         loaded += 1
-        for fact in profile.all_facts():
-            await container.facts.append(fact)
+        # Batched, not one await per fact. This runs inside the API's lifespan
+        # hook, and against a fresh namespace the individual writes took long
+        # enough that Firestore answered `504 Deadline Exceeded` and the
+        # service never became ready. The profile was created a line ago, so
+        # every fact under it is known absent -- which is the precondition
+        # `append_many` requires.
+        await container.facts.append_many(list(profile.all_facts()))
         if seed_conflicts:
             for conflict in profile.conflicts:
                 await container.conflicts.add(conflict)

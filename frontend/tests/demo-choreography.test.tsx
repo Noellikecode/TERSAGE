@@ -219,9 +219,13 @@ describe('auto-dispatch is gated on the backend calling itself fake', () => {
   it('warns before it dispatches, so the transition is never a snap', async () => {
     renderAt('fake');
     await vi.advanceTimersByTimeAsync(45_000);
+    // Announced, not counted down: the banner says a call is incoming and
+    // offers the way out, rather than ticking a number toward zero over a
+    // screen where arriving early buys the viewer nothing.
     await waitFor(() =>
-      expect(screen.getByText(/Simulated 911 call arriving/)).toBeInTheDocument(),
+      expect(screen.getByText(/Simulated 911 call incoming/)).toBeInTheDocument(),
     );
+    expect(screen.getByRole('button', { name: /Stay in standby/ })).toBeInTheDocument();
   });
 
   it('stands down for the rest of the session when the viewer says so', async () => {

@@ -259,6 +259,23 @@ class FirestoreSnapshotRepository(_Repository):
 class FirestoreFactRepository(_Repository):
     """Append-only fact store. ``create`` is the enforcement, not a guard."""
 
+    async def append_many(self, facts: Sequence[StructuralFact]) -> int:
+        """See :meth:`FactRepository.append_many`. Seed path only."""
+        return await self._store("facts").create_many(
+            [
+                (
+                    fact.fact_id,
+                    encode(
+                        fact,
+                        fact_id=fact.fact_id,
+                        address_id=fact.address_id,
+                        canonical_key=fact.canonical_key,
+                    ),
+                )
+                for fact in facts
+            ]
+        )
+
     async def append(self, fact: StructuralFact) -> StructuralFact:
         created = await self._store("facts").create(
             fact.fact_id,

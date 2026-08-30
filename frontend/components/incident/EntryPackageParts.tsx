@@ -114,11 +114,11 @@ export function ReadinessVerdict({ assessment }: { assessment: ReadinessAssessme
             <p className={`mt-1 text-micro leading-5 ${criterion.passed ? 'text-muted' : 'text-ink'}`}>
               {criterion.reason}
             </p>
-            {criterion.refs.length > 0 && (
-              <p className="mt-1 font-mono text-micro text-muted">
-                checked: {criterion.refs.join(', ')}
-              </p>
-            )}
+            {/* The ids this criterion cites are the audit trail and they are
+                still on the package and still in the log. They are not what a
+                commander reads to decide, and a column of
+                `snap_e9d43b378c0d…` under every line is what made this card
+                unreadable. */}
           </li>
         ))}
       </ul>
@@ -235,13 +235,9 @@ export function EntryPathSummary({
   if (path.refused) {
     return (
       <div className="border-l-4 border-alarm bg-surface p-3" data-testid="path-refused">
-        <p className="font-mono text-title uppercase tracking-wide text-alarm">No route</p>
+        <p className="text-title font-semibold text-alarm">The solver would not build a route</p>
         <p className="mt-1 text-body leading-6 text-ink">{path.refusal_reason}</p>
-        {path.refusal_refs.length > 0 && (
-          <p className="mt-1 font-mono text-micro text-muted">
-            checked: {path.refusal_refs.join(', ')}
-          </p>
-        )}
+
         <p className="mt-2 text-micro leading-5 text-muted">
           Nothing is drawn on the model for this package. There is no fallback route and no
           straight line — a refusal withholds the route, and a picture of one would be an
@@ -392,10 +388,17 @@ export function CrewBriefBody({ brief }: { brief: CrewBriefView }) {
               {line}
             </p>
           ))}
-        <p className="mt-3 border-t border-line pt-2 font-mono text-micro text-muted">
-          prose source: {brief.prose_source}
-          {brief.prose_rejection && ` · composition refused: ${brief.prose_rejection}`}
-          {brief.model_ref && ` · ${brief.model_ref}`}
+        {/* Who wrote the wording, in words.
+            This used to read `prose source: deterministic · composition
+            refused: UPSTREAM_TIMEOUT · projects/.../gemini-3.5-flash`, which
+            is three machine facts in a row and answers a question nobody at a
+            fire is asking. The distinction it protects is real and stays --
+            a model wrote this, or the template did -- but a reader should not
+            have to know what UPSTREAM_TIMEOUT means to learn it. */}
+        <p className="mt-3 border-t border-line pt-2 text-micro leading-5 text-muted">
+          {brief.prose_source === 'model'
+            ? 'Wording composed by the model from the facts above.'
+            : 'Wording assembled from the record. The model was not used for it.'}
         </p>
       </div>
 
@@ -416,9 +419,14 @@ export function CrewBriefBody({ brief }: { brief: CrewBriefView }) {
               {(bySection.get(section) ?? []).map((claim) => (
                 <li key={claim.claim_id} className="border border-line bg-surface p-2">
                   <p className="text-micro leading-5 text-ink">{claim.text}</p>
-                  <p className="mt-1 font-mono text-micro text-muted">
-                    {claim.refs.length > 0 ? claim.refs.join(', ') : 'no reference'}
-                  </p>
+                  {/* Ids only when there are ids. "no reference" was a line of
+                      text saying nothing, printed under a claim that already
+                      said everything it had. */}
+                  {claim.refs.length > 0 && (
+                    <p className="mt-1 font-mono text-micro text-muted">
+                      {claim.refs.join(', ')}
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>

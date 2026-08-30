@@ -72,11 +72,9 @@ Confidence = Literal["low", "nominal", "high", "unknown"]
 #: Ships with every available answer. This is the sentence that stops a zero
 #: from being read as a failure -- or, worse, as an all-clear.
 VIIRS_RESOLUTION_NOTE: Final[str] = (
-    "VIIRS pixels are about 375 m across and the instrument detects "
-    "wildfire-scale heat. A structure fire is too small and too brief to "
-    "register, so zero detections inside the city is the ordinary reading -- "
-    "it is not a dead feed, and it is not evidence that nothing is burning "
-    "here. Regional counts are what this feed is good for."
+    "VIIRS sees wildfire-scale heat at about 375 m. A structure fire is too "
+    "small to register, so an empty city is the ordinary reading -- not a "
+    "dead feed, and not an all-clear."
 )
 
 #: Ships with every available fire-weather block, for the same reason.

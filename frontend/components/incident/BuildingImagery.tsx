@@ -29,6 +29,8 @@
 
 import { useEffect, useState } from 'react';
 
+import { PanelLoading } from '@/components/PanelLoading';
+
 import { browserGet } from '@/lib/api/client';
 
 /**
@@ -115,9 +117,11 @@ export function BuildingImagery({
 
   if (state.kind === 'loading') {
     return (
-      <p className="border border-dashed border-line p-4 text-micro text-muted" role="status">
-        Requesting {view === 'aerial' ? 'an overhead view' : 'imagery'} for {addressId}.
-      </p>
+      <PanelLoading
+        testId="imagery-loading"
+        label={`Requesting ${view === 'aerial' ? 'an overhead view' : 'street imagery'}`}
+        detail={addressId}
+      />
     );
   }
 

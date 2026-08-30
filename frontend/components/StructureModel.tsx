@@ -36,6 +36,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import type * as ThreeNS from 'three-r128';
 
+import { PanelLoading } from '@/components/PanelLoading';
 import type { GeometryState } from '@/components/PhotorealisticModel';
 import type { FaceView, GeometryView, RouteView } from '@/lib/api/types';
 
@@ -1556,18 +1557,11 @@ export function StructureModel({
   if (!geometry) {
     if (geometryState === 'loading' || geometryState === 'idle') {
       return (
-        <div
-          className="border border-dashed border-line p-6 text-muted"
-          role="status"
-          aria-label="Reading the geometry on record for this structure"
-          data-testid="geometry-loading"
-        >
-          <p className="text-ink">Reading the record</p>
-          <p className="mt-1 text-micro leading-5">
-            The measurement has been asked for and has not come back. Nothing is
-            claimed about this structure until it does.
-          </p>
-        </div>
+        <PanelLoading
+          testId="geometry-loading"
+          label="Reading the measured geometry"
+          detail="Nothing is claimed about this structure until it comes back."
+        />
       );
     }
     if (geometryState === 'unavailable') {

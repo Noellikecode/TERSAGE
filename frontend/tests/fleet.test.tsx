@@ -370,12 +370,26 @@ describe('identity and state', () => {
   it('holds the selection after the pointer leaves, so it survives being talked over', () => {
     renderFleet();
     select('referral-clerk');
-    fireEvent.mouseEnter(screen.getByTestId('fleet-row-hazard-watcher'));
-    expect(screen.getByTestId('fleet-detail-hazard-watcher')).toBeInTheDocument();
 
-    // Pointer leaves the list: the pinned agent comes back, not an empty pane.
+    // A pin wins over a hover. Previously the pane followed the pointer, so
+    // the agent somebody had deliberately clicked was replaced the moment the
+    // cursor drifted across the column -- the only way to keep one on screen
+    // was to hold the mouse still. A click says "this is the one I am
+    // reading", and it holds until a different one is clicked.
+    fireEvent.mouseEnter(screen.getByTestId('fleet-row-hazard-watcher'));
+    expect(screen.getByTestId('fleet-detail-referral-clerk')).toBeInTheDocument();
+    expect(screen.queryByTestId('fleet-detail-hazard-watcher')).not.toBeInTheDocument();
+
     fireEvent.mouseLeave(screen.getByLabelText('Fleet'));
     expect(screen.getByTestId('fleet-detail-referral-clerk')).toBeInTheDocument();
+  });
+
+  it('previews on hover while nothing has been pinned', () => {
+    // Hover keeps the exploring it was there for, on a column nobody has
+    // committed to yet.
+    renderFleet();
+    fireEvent.mouseEnter(screen.getByTestId('fleet-row-hazard-watcher'));
+    expect(screen.getByTestId('fleet-detail-hazard-watcher')).toBeInTheDocument();
   });
 
   it('reaches every agent by keyboard, and previews on focus', () => {
@@ -681,7 +695,7 @@ describe('incident counters read this fire, not the session', () => {
   });
 });
 
-describe('slow-loop counters read this pass, not the session', () => {
+describe('slow-loop counters accumulate across the session', () => {
   const CLERK = 'referral-clerk';
   const WATCHER = 'records-watcher';
 
@@ -707,11 +721,20 @@ describe('slow-loop counters read this pass, not the session', () => {
     passEvent({ occurred_at: '2026-08-28T09:00:03Z', actor: CLERK, kind: 'agent_pass' }),
   ];
 
-  it('opens at what this pass has recorded, not at what the session has', () => {
-    // The user's report: "249 for structure watch" before the pass in flight
-    // had done anything. The console accumulates the audit log all session, so
-    // an unscoped counter starts at whatever earlier passes left behind and
-    // then barely moves while the fleet works.
+  /**
+   * Counters keep what the session has watched, across passes and across a fire.
+   *
+   * They used to narrow to the pass in flight, which fixed the report this
+   * block was written for -- "249 for structure watch" before the current pass
+   * had done anything -- but `sessionFloor` fixes that properly, by cutting
+   * everything older than this console's first read. Narrowing a second time
+   * threw the rest away, and the cost landed either side of an incident: slow
+   * passes keep running during a fire, so returning to standby re-anchored on
+   * whichever pass was newest and every agent dropped back to a handful of
+   * events. Somebody who watched the fleet work all morning came back from one
+   * call to a column reading as though it had just started.
+   */
+  it('keeps earlier passes in the count rather than resetting each pass', () => {
     render(
       <FleetPanel
         agents={FLEET}
@@ -724,19 +747,19 @@ describe('slow-loop counters read this pass, not the session', () => {
       />,
     );
 
+    // The clerk's two events are from the finished pass and they still count:
+    // it did that work, and this session watched it.
     const clerk = screen.getByTestId(`fleet-row-${CLERK}`);
-    // The clerk's two events belong to the finished pass, so this pass has
-    // nothing of its own for it yet.
-    expect(clerk).toHaveTextContent('0 recorded');
-    expect(clerk).toHaveTextContent('idle');
-    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('1 recorded');
+    expect(clerk).toHaveTextContent('2 recorded');
+    expect(clerk).toHaveTextContent('active');
+    // Two from the old pass plus the new one.
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('3 recorded');
   });
 
-  it('counts an event the pass minted its own correlation for', () => {
+  it('counts an event that stands alone under its own correlation', () => {
     // A work order, a blocked injection and a rejected draft each stand alone
-    // in the log under a fresh correlation. Filtering on the pass's own id
-    // would drop them out of the pass that produced them, so the window is a
-    // timestamp instead.
+    // in the log under a fresh correlation. Nothing keys on a correlation id,
+    // so they are counted like any other work their agent did.
     render(
       <FleetPanel
         agents={FLEET}
@@ -754,7 +777,7 @@ describe('slow-loop counters read this pass, not the session', () => {
       />,
     );
 
-    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('2 recorded');
+    expect(screen.getByTestId(`fleet-row-${WATCHER}`)).toHaveTextContent('4 recorded');
   });
 
   it('holds the last pass’s total between passes rather than falling to zero', () => {

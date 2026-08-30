@@ -312,7 +312,11 @@ def test_fire_activity_is_regional_and_reports_the_city_separately(
     assert body["city"]["west"] == -122.55
     assert "none inside the city" in body["summary"]
     assert "375 m" in body["resolution_note"]
-    assert "not evidence that nothing is burning" in body["resolution_note"]
+    # The note is shorter now -- it was three sentences of justification
+    # under a map -- but it still carries both halves of the reading a zero
+    # invites: not a broken feed, and not an all-clear.
+    assert "not a dead feed" in body["resolution_note"]
+    assert "not an all-clear" in body["resolution_note"]
 
 
 def test_fake_mode_fire_activity_admits_in_the_data_that_it_is_synthetic(

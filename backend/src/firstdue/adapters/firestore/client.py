@@ -19,6 +19,11 @@ from typing import Any, Final
 
 from firstdue.errors import ConfigurationError
 
+#: Documents per batched commit. Firestore's ceiling is 500 writes per commit;
+#: this stays under it rather than on it, so a batch that grows a field fails
+#: on review rather than at the boundary.
+MAX_BATCH_WRITES: Final[int] = 400
+
 #: Every collection the system writes. Named here so the set is greppable and so
 #: Terraform's index definitions have one source to follow.
 COLLECTION_NAMES: Final[tuple[str, ...]] = (
@@ -181,6 +186,31 @@ class DocumentStore:
         except AlreadyExists:
             return False
         return True
+
+    async def create_many(self, documents: Sequence[tuple[str, Mapping[str, Any]]]) -> int:
+        """Create many documents in batched commits. Returns how many were sent.
+
+        One round trip per :data:`MAX_BATCH_WRITES` documents instead of one
+        per document, and that ratio is the point: seeding a fresh namespace
+        writes every profile's facts inside the API's lifespan hook, and
+        awaiting them individually took long enough that Firestore answered
+        ``504 Deadline Exceeded`` and the service never became ready.
+
+        **Not a drop-in for :meth:`create`.** A batch cannot report per-document
+        ``AlreadyExists`` -- it raises and fails the whole commit -- so this is
+        for documents the caller already knows are absent, and never for the
+        append-only guards, where "was this already here" *is* the answer being
+        asked for.
+        """
+        written = 0
+        for start in range(0, len(documents), MAX_BATCH_WRITES):
+            chunk = documents[start : start + MAX_BATCH_WRITES]
+            batch = self._client.batch()
+            for document_id, data in chunk:
+                batch.create(self.ref(document_id), dict(data))
+            await batch.commit()
+            written += len(chunk)
+        return written
 
     async def put(self, document_id: str, data: Mapping[str, Any]) -> None:
         await self.ref(document_id).set(dict(data))

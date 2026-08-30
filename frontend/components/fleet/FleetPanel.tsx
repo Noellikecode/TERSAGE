@@ -41,8 +41,6 @@ import { FleetRow, type FleetState } from '@/components/fleet/FleetRow';
 import {
   agentDecisions,
   attributableEvents,
-  compareAt,
-  currentPass,
   decisionsSince,
   eventsSince,
 } from '@/components/fleet/derive';
@@ -220,17 +218,27 @@ export function FleetPanel({
           (!event.incident_id && event.target === incident.incident_id),
       );
     }
-    // Both the id and the versioned ref: an event is attributed by either.
-    const actors = new Set(
-      agents.filter((agent) => agent.loop === scope).flatMap((a) => [a.agent_id, a.ref]),
-    );
-    // Over `sessionEvents`, so the pass this anchors on is one this session
-    // watched run. Reading it out of the whole log is how a restarted console
-    // ended up displaying the totals of a pass that finished hours ago.
-    const pass = currentPass(sessionEvents, actors);
-    if (!pass) return sessionEvents;
-    return sessionEvents.filter((event) => compareAt(event.occurred_at, pass.since) >= 0);
-  }, [sessionEvents, scope, incident, agents]);
+    // **The whole session, not the pass in flight.**
+    //
+    // This used to narrow to `currentPass`, and the reasoning was sound when
+    // it was written: a counter over the whole audit log opens at whatever
+    // earlier runs left behind -- "249 recorded" before this pass has read a
+    // record -- and then barely moves.
+    //
+    // `sessionFloor` already solves that. It cuts everything older than this
+    // console's first read, so the counters start at zero for the person
+    // looking at them whatever Firestore holds. Narrowing *again* to the
+    // current pass threw away the rest, and the cost showed up either side of
+    // an incident: slow passes keep running while a fire is on screen, so
+    // returning to standby re-anchored the column on whichever pass happened
+    // to be newest and every agent dropped back to a handful of events. An
+    // officer who watched the fleet build a district all morning came back
+    // from one call to a column that read as though it had just started.
+    //
+    // Session-scoped, the count is cumulative for as long as the page is
+    // open, which is what "progress" means to somebody watching it.
+    return sessionEvents;
+  }, [sessionEvents, scope, incident]);
 
   const context: FleetContext = useMemo(
     () => ({
@@ -284,12 +292,20 @@ export function FleetPanel({
     rows[0]?.agent.agent_id ??
     (superseded.length > 0 ? SUPERSEDED_KEY : null);
 
-  // Click pins; hover and focus only preview. The pinned one is what the pane
-  // falls back to when the pointer leaves, which is what lets somebody talk
-  // over this without the pane emptying under them.
+  // Click pins, and a pin **wins**. Hover only previews while nothing is
+  // pinned.
+  //
+  // This was `preview ?? held ?? opening`, so a hover anywhere in the column
+  // overrode the agent somebody had deliberately clicked -- the pane changed
+  // under them the moment the pointer drifted, and the only way to keep an
+  // agent on screen was to keep the cursor still. A click is a statement that
+  // this is the agent being read; it holds until a different one is clicked.
+  //
+  // Hover still does the exploring it was there for, on a column nobody has
+  // committed to yet.
   const [held, setHeld] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const shown = preview ?? held ?? opening;
+  const shown = held ?? preview ?? opening;
 
   const clearPreview = useCallback(() => setPreview(null), []);
 

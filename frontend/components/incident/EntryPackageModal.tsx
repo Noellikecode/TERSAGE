@@ -33,12 +33,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { identityFor } from '@/components/incident/AgentActivity';
-import {
-  CrewBriefBody,
-  EntryPathSummary,
-  ReadinessVerdict,
-  type LegSelection,
-} from '@/components/incident/EntryPackageParts';
+import { FiregroundBrief, FiregroundBriefPending } from '@/components/incident/FiregroundBrief';
+import type { LegSelection } from '@/components/incident/EntryPackageParts';
 import { StatusPill } from '@/components/StatusPill';
 import {
   approveCrewBrief,
@@ -46,7 +42,7 @@ import {
   dispatchEntryPackage,
   downloadEntryPackagePdf,
 } from '@/lib/api/entry-packages';
-import type { EntryPackageView } from '@/lib/api/types';
+import type { BriefEmissionView, EntryPackageView } from '@/lib/api/types';
 
 /** The agent that composes packages. Named, not inferred from the log. */
 export const COMPOSING_AGENT = 'incident-interceptor';
@@ -75,8 +71,26 @@ export interface EntryPackageModalProps {
   onClose: () => void;
   /** Called only after the send returned ok, with the sent package. */
   onDispatched: (sent: EntryPackageView) => void;
-  /** Which leg the model should be drawing brighter than the rest. */
+  /**
+   * Which leg the model should draw brighter than the rest.
+   *
+   * Accepted and unused. The route summary this was driven from is no longer
+   * on the dialog -- the card is the brief alone -- and the route is still
+   * drawn on the model behind it. Kept on the interface because the caller
+   * passes it and a leg surface may come back; a dialog that quietly dropped
+   * the prop would look like it still worked.
+   */
   onSelectLeg?: (selection: LegSelection | null) => void;
+  /**
+   * The interceptor's latest brief emission, rendered as the size-up card.
+   *
+   * Optional because the package is the subject of this dialog and the card is
+   * a better way of reading one part of it -- a package whose emission has not
+   * reached the console yet still shows its brief, its path and its verdict.
+   */
+  emission?: BriefEmissionView | null;
+  /** The street address the city gave, when it could place the id. */
+  addressDisplay?: string | null;
 }
 
 export function EntryPackageModal({
@@ -86,26 +100,19 @@ export function EntryPackageModal({
   onUpdated,
   onClose,
   onDispatched,
-  onSelectLeg,
+  emission = null,
+  addressDisplay = null,
 }: EntryPackageModalProps) {
   const dialog = useRef<HTMLDivElement | null>(null);
   /** Where focus was before this took it, so it goes back there on close. */
   const returnFocus = useRef<Element | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [selection, setSelection] = useState<LegSelection | null>(null);
 
   const outstanding = entryPackage.outstanding_halves;
+  const openChecks = entryPackage.assessment.criteria.filter((c) => !c.passed).length;
   const sent = entryPackage.status === 'SENT';
   const identity = identityFor(COMPOSING_AGENT);
-
-  const select = useCallback(
-    (next: LegSelection | null) => {
-      setSelection(next);
-      onSelectLeg?.(next);
-    },
-    [onSelectLeg],
-  );
 
   // Focus in, focus back out. A modal that leaves focus on the page behind it
   // is a modal a keyboard user can tab straight past without ever knowing an
@@ -225,31 +232,32 @@ export function EntryPackageModal({
           // text that then has to be contrast-checked against four hues.
           style={{ borderTopColor: identity.color, borderTopWidth: 3 }}
         >
-          {/* Kicker, headline, lede -- in that order, and sized so they read
-              as three different things. The agent's name is *attribution*: it
-              belongs above the headline in the small voice a byline uses, not
-              beside it competing at the same size. What the dialog is asking
-              is the headline, because that is the sentence a commander has to
-              answer. Both stay inside the `h2` so the accessible name still
-              carries the agent and the ask together. */}
-          <h2 id="entry-package-title">
-            <span
-              className="flex items-center gap-2 font-mono text-label uppercase tracking-widest"
-              style={{ color: identity.color }}
-            >
-              <span aria-hidden="true">{identity.glyph}</span>
+          {/* One line, because the brief is the masthead now.
+              This used to be a display-sized headline over a paragraph of
+              lede, and it competed with the card underneath it -- two things
+              claiming to be the top of the same dialog. What the dialog is
+              *asking* still has to be unmissable and still has to carry the
+              agent's name for the accessible title, so it stays; it is simply
+              no longer the biggest thing on screen. The brief is. */}
+          <h2
+            id="entry-package-title"
+            className="flex flex-wrap items-center gap-x-2 gap-y-1 text-title text-ink"
+          >
+            <span aria-hidden="true" style={{ color: identity.color }}>
+              {identity.glyph}
+            </span>
+            <span className="font-mono" style={{ color: identity.color }}>
               {COMPOSING_AGENT}
-              <span className="text-muted">@{entryPackage.brief.composed_by_version}</span>
             </span>
-            <span className="mt-1 block text-display text-ink">
-              Asks for approval to send an entry package
+            <span className="font-mono text-micro text-muted">
+              @{entryPackage.brief.composed_by_version}
             </span>
+            <span>asks for approval to send this to the crew.</span>
           </h2>
-          <p id="entry-package-lede" className="mt-2 max-w-prose text-body leading-6 text-muted">
-            {identity.role}. It composed this package and{' '}
-            {TRIGGER_WORDS[autonomyTrigger] ?? 'is holding it for a human decision.'} Approving it
-            releases the crew brief <em className="not-italic text-ink">and</em> the entry path to
-            live dispatch units. Nothing has been sent.
+          <p id="entry-package-lede" className="mt-1 max-w-prose text-micro leading-5 text-muted">
+            {TRIGGER_WORDS[autonomyTrigger] ?? 'It is holding this for a human decision.'} Approving
+            releases the brief <em className="not-italic text-ink">and</em> the entry path to live
+            dispatch units. Nothing has been sent.
           </p>
           {/* The readiness pill is deliberately *not* here any more.
               It used to be the first coloured thing on the dialog, in alarm
@@ -257,14 +265,13 @@ export function EntryPackageModal({
               problem before it had said what the plan was. The verdict has not
               been softened or moved out of sight: it is stated in full, in its
               own section, under the plan it qualifies. See `ReadinessVerdict`. */}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <StatusPill
               tone={sent ? 'confirmed' : outstanding.length === 0 ? 'live' : 'disputed'}
               label={entryPackage.status.toLowerCase().replace(/_/g, ' ')}
             />
             <span className="font-mono text-micro text-muted">
-              {entryPackage.address_id} · {entryPackage.package_id} · composed{' '}
-              {entryPackage.created_at}
+              {entryPackage.package_id}
             </span>
           </div>
         </div>
@@ -277,63 +284,24 @@ export function EntryPackageModal({
             route, then what the record could not confirm about either. Nothing
             is hidden and nothing is reordered inside a section; only the three
             sections are ranked the way they are actually used. */}
-        <div className="min-h-0 flex-1 space-y-6 overflow-y-auto p-4">
-          <div>
-            <SectionHeading
-              step={1}
-              title="Crew brief"
-              note="what the record says about this building"
-            />
-            <CrewBriefBody brief={entryPackage.brief} />
-            <HalfSignature
-              testId="approve-crew-brief"
-              label="Sign the crew brief"
-              question="This is an accurate account of what we know."
-              approved={entryPackage.brief_approved}
-              approvedBy={entryPackage.brief_approved_by}
-              approvedAt={entryPackage.brief_approved_at}
-              approvalId={entryPackage.brief_approval_id}
-              busy={busy !== null}
-              onSign={() => void grant('crew-brief')}
-            />
-          </div>
-
-          <div>
-            <SectionHeading
-              step={2}
-              title="Entry path"
-              note="the route, and what each leg was weighed against"
-            />
-            <EntryPathSummary
+        {/* The brief, and nothing else.
+            The readiness table, the route legs and the citation list were all
+            on this surface and all pushed the brief off the top of it. They
+            are not gone: the verdict rides on the package and on the printed
+            sheet, the route is drawn on the model behind this dialog, and the
+            claims are in the incident log. What a crew reads before going
+            through a door is the size-up, so that is what the card is. */}
+        <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {emission ? (
+            <FiregroundBrief
+              emission={emission}
+              addressDisplay={addressDisplay}
+              agentVersion={entryPackage.brief.composed_by_version}
               path={entryPackage.path}
-              selection={selection}
-              onSelect={select}
             />
-            <HalfSignature
-              testId="approve-entry-path"
-              label="Sign the entry path"
-              question="This is a route I would send a crew down."
-              approved={entryPackage.path_approved}
-              approvedBy={entryPackage.path_approved_by}
-              approvedAt={entryPackage.path_approved_at}
-              approvalId={entryPackage.path_approval_id}
-              busy={busy !== null}
-              onSign={() => void grant('entry-path')}
-            />
-          </div>
-
-          <div>
-            <SectionHeading
-              step={3}
-              title="What the record could not confirm"
-              note="six checks, and how each one answered"
-            />
-            <ReadinessVerdict assessment={entryPackage.assessment} />
-          </div>
-
-          <p className="border border-line bg-surface p-3 text-micro leading-5 text-muted">
-            {entryPackage.disclaimer}
-          </p>
+          ) : (
+            <FiregroundBriefPending />
+          )}
         </div>
 
         <div className="shrink-0 space-y-2 border-t border-line p-4">
@@ -349,6 +317,112 @@ export function EntryPackageModal({
                 ? 'Both halves are signed. Releasing hands this package to live dispatch units.'
                 : `Outstanding: ${outstanding.join(', ')}. One approval covers both — they stay two records because they are two judgements, and the send is refused until both are granted.`}
           </p>
+          {/* A refused solve, said outright.
+              "No route" is not a quieter version of a route -- it means the
+              cost model would not build one, and an officer approving this
+              package is approving a document with no path in it. That cannot
+              be inferred from the brief above, so it is stated here. */}
+          {/* Said as a finding, not as a failure.
+              The raw reason is written for whoever is debugging the solver --
+              "no leg of the navigable graph connects the start to the goal;
+              the cost model refused every route that would have..." -- and it
+              is neither readable nor actionable at a door. What a commander
+              needs is the fact and what follows from it: there is no computed
+              path, so the crew picks the way in. The full reason stays on the
+              package and on the printed sheet. */}
+          {entryPackage.path.refused && (
+            <p className="text-body font-semibold text-disputed" data-testid="path-refused">
+              No route computed — the graph could not connect the street to the target floor. Crew
+              chooses the way in.
+            </p>
+          )}
+
+          {/* The verdict, at the point of decision.
+              The full six-criterion table is off this dialog -- it is on the
+              package and on the printed sheet, and it is not what a crew reads
+              at a door. The *verdict* is different: this is the moment a human
+              authorises a send, and a commander approving a NOT READY package
+              has to be told so here, in one line, without opening anything.
+              Leaving it off would have turned "the gaps are always stated"
+              into "the gaps are stated somewhere else". */}
+          {/* The verdict in words, not in criterion ids.
+              It read "Not ready — NOT READY - 3 of 6 criteria pass;
+              outstanding: hazard.resolved, conflicts.load-bearing,
+              intake.access-bound" -- the verdict twice, then three internal
+              identifiers, at the moment somebody is deciding whether to send a
+              crew. The count is the part that means anything to a human, and
+              the criteria themselves are on the package and the printed sheet
+              where an officer can read them at leisure. Nothing is hidden by
+              saying it shorter. */}
+          <p
+            className={`text-body font-semibold ${
+              entryPackage.assessment.ready ? 'text-confirmed' : 'text-disputed'
+            }`}
+            data-testid="readiness-banner"
+            data-ready={entryPackage.assessment.ready ? 'true' : 'false'}
+          >
+            {entryPackage.assessment.ready
+              ? 'Every check passed against the record.'
+              : `${openChecks} of ${entryPackage.assessment.criteria.length} checks could not be ` +
+                'confirmed from the record. Sending is still yours.'}
+          </p>
+
+          {/* What has been signed, and by whom. Each half says so on its own
+              line: an officer who signed the path and not the brief has to be
+              able to see that from the dialog, and "one of two" is not a state
+              a single combined message can express honestly. */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {entryPackage.path_approved && (
+              <p className="text-micro text-confirmed" data-testid="approve-entry-path-granted">
+                Entry path signed by {entryPackage.path_approved_by ?? 'an unnamed caller'} at{' '}
+                {entryPackage.path_approved_at ?? 'an unrecorded time'}.
+              </p>
+            )}
+            {entryPackage.brief_approved && (
+              <p className="text-micro text-confirmed" data-testid="approve-crew-brief-granted">
+                Crew brief signed by {entryPackage.brief_approved_by ?? 'an unnamed caller'} at{' '}
+                {entryPackage.brief_approved_at ?? 'an unrecorded time'}.
+              </p>
+            )}
+          </div>
+
+          {/* The two judgements, kept as two taps -- in the footer, not on the
+              card.
+              The card is the brief and only the brief, which is what an
+              officer reads. Signing is a different act, and it is still two
+              acts: "this is a route I would send a crew down" and "this is an
+              accurate account of what we know" are separate questions with
+              separate records, and the backend refuses the send until both are
+              granted. `Approve brief` covers both in one tap for the ordinary
+              case; these stay for the officer who wants to sign one and not
+              the other. Removing them would have collapsed a safety control
+              into a layout decision. */}
+          {!sent && outstanding.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {outstanding.includes('entry-path') && (
+                <button
+                  type="button"
+                  data-testid="approve-entry-path"
+                  disabled={busy !== null}
+                  onClick={() => void grant('entry-path')}
+                  className="rounded border border-confirmed px-3 py-1.5 text-micro text-confirmed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+                >
+                  Sign the entry path only
+                </button>
+              )}
+              {outstanding.includes('crew-brief') && (
+                <button
+                  type="button"
+                  data-testid="approve-crew-brief"
+                  disabled={busy !== null}
+                  onClick={() => void grant('crew-brief')}
+                  className="rounded border border-confirmed px-3 py-1.5 text-micro text-confirmed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+                >
+                  Sign the crew brief only
+                </button>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             {!sent && outstanding.length > 0 && (
               <button
@@ -356,9 +430,9 @@ export function EntryPackageModal({
                 data-testid="approve-both"
                 disabled={busy !== null}
                 onClick={() => void approveBoth()}
-                className="border border-confirmed px-3 py-1.5 text-body uppercase tracking-wide text-confirmed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+                className="rounded bg-alarm px-5 py-2.5 text-body font-semibold text-ground disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
               >
-                Approve the path and the brief
+                Approve brief
               </button>
             )}
             <button
@@ -366,16 +440,16 @@ export function EntryPackageModal({
               data-testid="entry-package-release"
               disabled={busy !== null || sent || outstanding.length > 0}
               onClick={() => void release()}
-              className="border border-live px-3 py-1.5 text-body uppercase tracking-wide text-live disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+              className="rounded border border-live px-5 py-2.5 text-body font-semibold text-live disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
             >
-              {busy === 'dispatch' ? 'Sending…' : 'Release to live dispatch units'}
+              {busy === 'dispatch' ? 'Sending…' : 'Release to dispatch'}
             </button>
             <button
               type="button"
               data-testid="modal-download-pdf"
               disabled={busy !== null}
               onClick={() => void download()}
-              className="border border-line px-3 py-1.5 text-body text-muted hover:text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+              className="rounded border border-line px-4 py-2.5 text-body text-muted hover:text-ink disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
             >
               Download PDF
             </button>
@@ -383,91 +457,13 @@ export function EntryPackageModal({
               type="button"
               data-testid="entry-package-dismiss"
               onClick={onClose}
-              className="ml-auto border border-line px-3 py-1.5 text-body text-muted hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
+              className="ml-auto rounded border border-line px-4 py-2.5 text-body text-muted hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
             >
               Not now
             </button>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-/**
- * A numbered section heading, so the dialog reads as a document with an order.
- *
- * The three sections used to be introduced by identical small grey all-caps
- * lines, which made them look like three captions rather than three parts of
- * one thing an officer works through. The number is the whole trick: it says
- * there are three, says which one this is, and says they are meant to be taken
- * in order -- brief, route, caveats -- without a word of instruction.
- */
-function SectionHeading({ step, title, note }: { step: number; title: string; note: string }) {
-  return (
-    <div className="mb-3 flex items-baseline gap-3 border-b border-line pb-2">
-      <span
-        aria-hidden="true"
-        className="font-mono text-label tabular-nums text-muted"
-      >
-        {String(step).padStart(2, '0')}
-      </span>
-      <h3 className="text-title text-ink">{title}</h3>
-      <span className="text-micro leading-5 text-muted">{note}</span>
-    </div>
-  );
-}
-
-/**
- * One half's signature block: the question it answers, and who answered it.
- *
- * The question is printed on the control rather than in a heading above it,
- * because what is being signed is a sentence and an officer should be reading
- * that sentence at the moment they tap.
- */
-function HalfSignature({
-  testId,
-  label,
-  question,
-  approved,
-  approvedBy,
-  approvedAt,
-  approvalId,
-  busy,
-  onSign,
-}: {
-  testId: string;
-  label: string;
-  question: string;
-  approved: boolean;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  approvalId: string;
-  busy: boolean;
-  onSign: () => void;
-}) {
-  return (
-    <div
-      className={`mt-3 border p-3 ${approved ? 'border-confirmed bg-surface' : 'border-disputed bg-surface'}`}
-      data-testid={`${testId}-block`}
-    >
-      <p className="text-body leading-6 text-ink">“{question}”</p>
-      <p className="mt-1 font-mono text-micro text-muted">{approvalId}</p>
-      {approved ? (
-        <p className="mt-1.5 text-body text-confirmed" data-testid={`${testId}-granted`}>
-          Signed by {approvedBy ?? 'an unnamed caller'} at {approvedAt ?? 'an unrecorded time'}.
-        </p>
-      ) : (
-        <button
-          type="button"
-          data-testid={testId}
-          disabled={busy}
-          onClick={onSign}
-          className="mt-1.5 border border-confirmed px-3 py-1 text-body uppercase tracking-wide text-confirmed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-live"
-        >
-          {label}
-        </button>
-      )}
     </div>
   );
 }
