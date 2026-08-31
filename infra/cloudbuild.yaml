@@ -20,9 +20,21 @@ steps:
       - build
       - -f
       - frontend/Dockerfile
+      # Next inlines NEXT_PUBLIC_* at build time, so the browser key cannot be
+      # supplied as a Cloud Run env var later. Defaults to empty, which builds
+      # exactly the image this file built before and renders the view's
+      # UNCONFIGURED state rather than failing.
+      - --build-arg
+      - NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${_MAPS_BROWSER_KEY}
       - -t
       - ${_REGISTRY}/console:${_TAG}
       - .
+
+substitutions:
+  # A referrer-restricted browser key, scoped to tile.googleapis.com. It ends up
+  # in the client bundle and in this build's logs, which is why it must never be
+  # the server key the backend uses for the Solar API.
+  _MAPS_BROWSER_KEY: ""
 
 images:
   - ${_REGISTRY}/backend:${_TAG}
@@ -30,3 +42,5 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  # _MAPS_BROWSER_KEY is optional; without this a build that omits it fails.
+  substitution_option: ALLOW_LOOSE

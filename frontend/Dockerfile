@@ -8,6 +8,15 @@ RUN npm ci --no-audit --no-fund
 FROM node:20-slim AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+# Next inlines NEXT_PUBLIC_* into the client bundle at `next build`, so the
+# browser key has to arrive here -- setting it on Cloud Run at runtime is too
+# late and leaves the photorealistic view reporting UNCONFIGURED. Empty by
+# default: a build without it behaves exactly as before, and the view says so.
+# This key reaches every visitor's browser by design, so it must be a
+# referrer-restricted browser key scoped to tile.googleapis.com -- never the
+# server key the backend uses for the Solar API.
+ARG NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=""
+ENV NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=$NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
 COPY --from=deps /app/node_modules ./node_modules
 COPY frontend/ ./
 RUN npm run build
