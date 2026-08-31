@@ -27,7 +27,7 @@ call comes in.
 No credentials, no cloud account, no API keys.
 
 ```bash
-git clone https://github.com/Noellikecode/TERSAGE.git
+git clone https://github.com/noelthomas-dev/TERSAGE.git
 cd TERSAGE
 make setup        # Python 3.12 via uv, plus the console toolchain
 make demo         # API on :8000, console on :3000
