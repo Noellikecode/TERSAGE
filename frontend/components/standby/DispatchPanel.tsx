@@ -56,8 +56,7 @@ export const SAMPLE_CALLS: SampleCall[] = [
       "The third floor is full of smoke. It's coming out the windows. " +
       'There are people still inside. The couple on the third floor never came out. ' +
       "There's a delivery truck blocking the driveway. You can't get in that way. " +
-      'And there are propane tanks by the back door. Four of them. ' +
-      'How fast can you get here?',
+      'We need a hazmat team too. I can smell gas leakage.',
   },
   {
     id: 'access',

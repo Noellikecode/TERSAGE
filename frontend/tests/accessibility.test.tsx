@@ -137,10 +137,12 @@ describe('landmarks and structure', () => {
     // stumbling into it.
     const bar = screen.getByRole('region', { name: 'District readiness' });
     expect(screen.getByRole('main')).toContainElement(bar);
-    // Its meters are decoration over numbers that are already text.
-    for (const meter of screen.getAllByTestId('meter')) {
-      expect(meter).toHaveAttribute('aria-hidden', 'true');
-    }
+    // The strip carries no figures on screen any more, so the one thing it
+    // does show has to be announced rather than merely drawn -- otherwise
+    // taking the numbers off took them off for everybody.
+    const progress = within(bar).getByRole('progressbar', { name: 'District analysed' });
+    expect(progress).toHaveAttribute('aria-valuenow');
+    expect(progress).toHaveAttribute('aria-valuetext');
   });
 
   it('names the structure region once a structure is selected', async () => {

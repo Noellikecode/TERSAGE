@@ -65,7 +65,11 @@ from firstdue.errors import NotFoundError
 #:
 #: ``1.4.0`` cuts ``records-watcher`` from 120 s to 40 s so the serial pass
 #: reaches the other four agents while somebody is still looking at the screen.
-FLEET_VERSION: Final[str] = "1.4.0"
+#:
+#: ``1.5.0`` raises ``structure-watch`` from 60 s to 120 s: it was landing one
+#: second inside its cap on a live district, and an overrun there silently
+#: skips ``referral-clerk``.
+FLEET_VERSION: Final[str] = "1.5.0"
 #: The department that runs the fleet and subscribes to all eight.
 HOME_DEPARTMENT: Final[Department] = Department.FIRE
 #: Fixed publication timestamp, so seeding is byte-identical on every run.
@@ -268,7 +272,22 @@ STRUCTURE_WATCH = _agent(
     # department's own morning, and the department's own agent may do that.
     # The referral, which accuses a property owner, still needs a captain.
     approval=ApprovalThreshold.NONE,
-    latency_ms=60_000,
+    # 120 s, up from 60.
+    #
+    # Detection is a profile read, a rule sweep and a versioned write per
+    # structure. Measured on a live district of 134: the pass ran 59 s against
+    # a 60-second cap -- one second inside it. A cap a pass lands *on* is a cap
+    # it fails on the next slightly slower day, and the failure is not local to
+    # this agent. When it is cancelled mid-district it records no pass and
+    # `current.queue` stays `None`, so `_run_one_pass` substitutes an empty
+    # queue and never dispatches `referral-clerk` at all -- which is why the
+    # console drew two agents idle through work one of them was doing and the
+    # other was never asked to do.
+    #
+    # This is the same defect the comment in `demo/scenario.py` records being
+    # fixed once by passing the deadline through. The deadline was the missing
+    # argument; this is the missing headroom.
+    latency_ms=120_000,
     input_schema="MaterializeRequest",
     output_schema="SurveyQueue",
 )

@@ -84,8 +84,15 @@ _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     (
         IntakeKeys.HAZMAT_REPORTED,
         re.compile(
+            # `gas leak`/`gas leakage` and a caller asking for hazmat by name are
+            # both here because a caller reports a *smell* and a *need*, not an
+            # inventory. The demo recording says "we need a hazmat team too, I
+            # can smell gas leakage" -- a pattern listing only substances read
+            # that as no hazmat reported at all, in fake mode, on the one call
+            # the whole hazmat beat is built on.
             r"\b(propane cylinders|propane tanks?|propane|acetylene|gasoline|diesel|"
-            r"natural gas|chlorine|ammonia|pool chemicals|paint thinner)\b",
+            r"natural gas|gas leakage|gas leak|hazmat|chlorine|ammonia|"
+            r"pool chemicals|paint thinner)\b",
             re.IGNORECASE,
         ),
     ),

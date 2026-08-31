@@ -110,7 +110,6 @@ export function EntryPackageModal({
   const [notice, setNotice] = useState<string | null>(null);
 
   const outstanding = entryPackage.outstanding_halves;
-  const openChecks = entryPackage.assessment.criteria.filter((c) => !c.passed).length;
   const sent = entryPackage.status === 'SENT';
   const identity = identityFor(COMPOSING_AGENT);
 
@@ -345,27 +344,16 @@ export function EntryPackageModal({
               has to be told so here, in one line, without opening anything.
               Leaving it off would have turned "the gaps are always stated"
               into "the gaps are stated somewhere else". */}
-          {/* The verdict in words, not in criterion ids.
-              It read "Not ready — NOT READY - 3 of 6 criteria pass;
-              outstanding: hazard.resolved, conflicts.load-bearing,
-              intake.access-bound" -- the verdict twice, then three internal
-              identifiers, at the moment somebody is deciding whether to send a
-              crew. The count is the part that means anything to a human, and
-              the criteria themselves are on the package and the printed sheet
-              where an officer can read them at leisure. Nothing is hidden by
-              saying it shorter. */}
-          <p
-            className={`text-body font-semibold ${
-              entryPackage.assessment.ready ? 'text-confirmed' : 'text-disputed'
-            }`}
-            data-testid="readiness-banner"
-            data-ready={entryPackage.assessment.ready ? 'true' : 'false'}
-          >
-            {entryPackage.assessment.ready
-              ? 'Every check passed against the record.'
-              : `${openChecks} of ${entryPackage.assessment.criteria.length} checks could not be ` +
-                'confirmed from the record. Sending is still yours.'}
-          </p>
+          {/* No readiness line on this dialog.
+              It read "3 of 6 checks could not be confirmed from the record" at
+              the moment somebody decides whether to send a crew -- a count of
+              internal checks, which is not what that decision turns on. The
+              brief above already names every gap in the words the gap is
+              actually in: "not flown - unknown, never treat as cool", "N
+              further attributes have no record", "Confirm storeys on arrival".
+              The assessment is unchanged, still rides on the package, and is
+              still printed on the sheet handed to the crew. What is gone is a
+              second, vaguer telling of it over the top of the first. */}
 
           {/* What has been signed, and by whom. Each half says so on its own
               line: an officer who signed the path and not the brief has to be

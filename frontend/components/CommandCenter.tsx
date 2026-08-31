@@ -211,6 +211,22 @@ const FIRE_ACTIVITY_MAX_AGE_MS = 120000;
  * `CALL_WARNING_MS` is how much of that is spent visibly counting down, so a
  * viewer sees the transition begin instead of the screen snapping.
  */
+/**
+ * Agents the fleet column does not draw.
+ *
+ * A display choice and nothing more. `referral-clerk` still runs, still
+ * records its pass, and still appears in the audit log, the agent catalog and
+ * Google Cloud Agent Registry -- it is simply not on this column. It is last
+ * in a serial pass and only runs once `structure-watch` has produced a queue,
+ * so on a screen somebody is watching it spends most of a pass drawn idle
+ * beside four agents that are working.
+ *
+ * A named list at module scope rather than a predicate buried in the filter:
+ * hiding a working agent from the operator's view is the kind of decision that
+ * should be obvious to whoever reads this next.
+ */
+const HIDDEN_FROM_RAIL: readonly string[] = ['referral-clerk'];
+
 const AUTO_PASS_MS = 25000;
 
 /**
@@ -1992,7 +2008,10 @@ export function CommandCenter({
    * could surface inside another's reasoning box. A whole loop cannot.
    */
   const slowFleet = useMemo(
-    () => railAgents.filter((agent) => agent.loop === 'SLOW'),
+    () =>
+      railAgents.filter(
+        (agent) => agent.loop === 'SLOW' && !HIDDEN_FROM_RAIL.includes(agent.agent_id),
+      ),
     [railAgents],
   );
   const incidentFleet = useMemo(
@@ -2368,9 +2387,21 @@ export function CommandCenter({
       </a>
 
       <header className="flex shrink-0 flex-wrap items-baseline justify-between gap-3 border-b border-line bg-surface px-4 py-2">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-base font-semibold tracking-widest text-ink">TERSAGE</h1>
-          <span className="text-micro uppercase tracking-wide text-muted">Command Center</span>
+        {/* The masthead carries what the product *is*, once, and then gets
+            out of the way. It used to be a 16px wordmark beside the words
+            "Command Center", which named the screen rather than the system --
+            true of every console ever built and therefore worth nothing to
+            somebody looking at this one. The name is now read at a glance from
+            across a room, and the line under it says what the room is for. */}
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-0.5">
+          <h1 className="text-display font-bold tracking-[0.2em] text-ink">TERSAGE</h1>
+          <span className="text-body text-muted">Municipal structural intelligence</span>
+          {status?.municipality_id && (
+            <span className="font-mono text-micro uppercase tracking-widest text-live">
+              {status.municipality_id.replace(/-/g, ' ')}
+              {districtId ? ` · ${districtId}` : ''}
+            </span>
+          )}
         </div>
         {/* The one place a write says what it is. It has to be a lookup on the
             named action and not a fixed word: the shared flag used to be put

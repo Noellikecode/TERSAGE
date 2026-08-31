@@ -672,14 +672,20 @@ async def test_a_second_pass_is_countable_on_its_own(container: Container) -> No
 # ------------------------------------------------ a pass that ran out of budget
 
 
-#: A clock that burns ten seconds a reading.
+#: A clock that burns twenty seconds a reading.
 #:
-#: The five slow-loop budgets are sixty to three hundred seconds, so a pass on
+#: The five slow-loop budgets are forty to three hundred seconds, so a pass on
 #: this clock is past its allowance within a handful of reads and every agent
 #: takes its truncation path. That is the point: the deadline arithmetic reads
 #: the *injected* clock everywhere, so a coarse ``SteppingClock`` reproduces a
 #: district too big for its budget without a district too big for its budget.
-TRUNCATING_STEP: Final[timedelta] = timedelta(seconds=10)
+#:
+#: Ten seconds was tuned to a 60 s `structure-watch`. That agent now has 120 s
+#: -- it was landing one second inside the old cap on a live district, and an
+#: overrun there silently skips `referral-clerk` -- so at ten seconds a read it
+#: no longer runs out of budget and this test stopped truncating the thing it
+#: exists to truncate. The step tracks the budget it is meant to exhaust.
+TRUNCATING_STEP: Final[timedelta] = timedelta(seconds=20)
 
 
 async def test_a_pass_truncated_by_its_deadline_still_records_every_agent(

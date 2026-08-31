@@ -217,27 +217,32 @@ describe('standby', () => {
   it('shows the district metric strip with real counts', () => {
     renderConsole();
     const bar = screen.getByTestId('district-bar');
-    // Four numbers, no captions. The bar carried six metrics and a caption
-    // under each, all at eleven pixels -- twelve pieces of text for six
-    // numbers, and the most important figure on the page set at the size of
-    // its own footnote. `Facts` and `Dispatched` left: a count of records is a
-    // vanity number, and companies-out belongs to the incident view.
-    expect(within(bar).getByText('Structures')).toBeInTheDocument();
-    expect(within(bar).getByText('Open conflicts')).toBeInTheDocument();
-    expect(within(bar).getByText('Queued')).toBeInTheDocument();
-    expect(within(bar).getByText('Never surveyed')).toBeInTheDocument();
-    expect(within(bar).queryByText('Facts')).not.toBeInTheDocument();
+    // A bar that fills, and the two counts that still move.
+    //
+    // The four static counters were the same four numbers all demo -- a
+    // district's structure count does not change, and "never surveyed" equals
+    // it until somebody physically walks a building -- so the strip read as
+    // furniture on a screen whose whole claim is that work is happening. What
+    // moves is how much of the district the loop has ranked, and that is now
+    // the bar. The counts are still on it, just no longer the loudest thing.
+    expect(within(bar).getByTestId('district-progress')).toBeInTheDocument();
+    expect(within(bar).getByText(/District analysed/)).toBeInTheDocument();
+    // No figures on the strip at all. The counters were the same numbers all
+    // session and reading them off in words beside the bar was the same
+    // problem in smaller type. Anyone who wants them has the survey queue, the
+    // conflict panel and the profile -- all of which carry them with their
+    // provenance attached, which a masthead strip cannot.
+    expect(within(bar).queryByText('Open conflicts')).not.toBeInTheDocument();
+    expect(within(bar).queryByText('Never surveyed')).not.toBeInTheDocument();
+    expect(within(bar).queryByText(/facts filed/)).not.toBeInTheDocument();
   });
 
   it('draws a meter only where the backend reports both halves of the ratio', () => {
     renderConsole();
     const bar = screen.getByTestId('district-bar');
-    // Every remaining count has an honest denominator on this payload, so all
-    // four fill. The dashed track is still the answer for a ratio nobody
-    // measured -- see the empty-district case below, which is the one that
-    // exercises it now.
-    expect(within(bar).getAllByTestId('meter')).toHaveLength(4);
-    expect(within(bar).queryAllByTestId('meter-unscaled')).toHaveLength(0);
+    // The per-tile meters are gone with the tiles. What draws a proportion now
+    // is the strip's own bar, and the source ring beside it.
+    expect(within(bar).getByTestId('district-progress')).toBeInTheDocument();
     expect(within(bar).getByTestId('source-ring')).toBeInTheDocument();
   });
 
@@ -257,8 +262,12 @@ describe('standby', () => {
       },
     });
     const bar = screen.getByTestId('district-bar');
-    expect(within(bar).queryAllByTestId('meter')).toHaveLength(0);
-    expect(within(bar).getAllByTestId('meter-unscaled')).toHaveLength(4);
+    // The rule under test is unchanged and is still the point: a ratio with a
+    // zero denominator is not drawn as a proportion, because drawing one would
+    // be inventing a scale. `share` returns null on a zero denominator and the
+    // bar falls to an empty track rather than a full or arbitrary one.
+    const fill = within(bar).getByTestId('district-progress');
+    expect(fill).toHaveStyle({ width: '0%' });
   });
 
   it('does not call a source with no endpoint an outage', () => {
@@ -336,7 +345,7 @@ describe('the layout', () => {
     const main = screen.getByRole('main');
     expect(main).toContainElement(bar);
     expect(within(main).getAllByRole('region')[0]).toBe(bar);
-    expect(within(bar).getByText('Structures')).toBeInTheDocument();
+    expect(within(bar).getByTestId('district-progress')).toBeInTheDocument();
   });
 
   it('gives standby the same shape an incident uses: fleet, then the region', () => {

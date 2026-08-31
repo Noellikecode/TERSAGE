@@ -30,47 +30,6 @@ import type { DistrictStatsView } from '@/lib/api/types';
 
 type Tone = 'ink' | 'disputed' | 'muted' | 'live' | 'alarm';
 
-const TONE_TEXT: Record<Tone, string> = {
-  ink: 'text-ink',
-  disputed: 'text-disputed',
-  muted: 'text-muted',
-  live: 'text-live',
-  alarm: 'text-alarm',
-};
-
-const TONE_BAR: Record<Tone, string> = {
-  ink: 'bg-ink',
-  disputed: 'bg-disputed',
-  muted: 'bg-muted',
-  live: 'bg-live',
-  alarm: 'bg-alarm',
-};
-
-/**
- * The meter under the number.
- *
- * `fraction === null` means the backend reports a count with nothing to divide
- * it by. That draws a dashed, unfilled track: the tile keeps the rhythm of the
- * bar without asserting a proportion nobody measured.
- */
-function Meter({ fraction, tone }: { fraction: number | null; tone: Tone }) {
-  if (fraction === null) {
-    return (
-      <div
-        aria-hidden="true"
-        className="mt-3 h-1 w-full border-t border-dashed border-line"
-        data-testid="meter-unscaled"
-      />
-    );
-  }
-  const pct = Math.max(0, Math.min(1, fraction)) * 100;
-  return (
-    <div aria-hidden="true" className="mt-3 h-1 w-full bg-line" data-testid="meter">
-      <div className={`h-full ${TONE_BAR[tone]}`} style={{ width: `${pct}%` }} />
-    </div>
-  );
-}
-
 /** A ring for the source read. Same arithmetic as a meter, different shape. */
 function Ring({ fraction, tone }: { fraction: number; tone: Tone }) {
   const r = 7;
@@ -98,34 +57,6 @@ function Ring({ fraction, tone }: { fraction: number; tone: Tone }) {
         transform="rotate(-90 9 9)"
       />
     </svg>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  fraction,
-  tone = 'ink',
-  live = false,
-}: {
-  label: string;
-  value: number;
-  fraction: number | null;
-  tone?: Tone;
-  live?: boolean;
-}) {
-  return (
-    <div className="min-w-0 border border-line bg-surface px-4 py-3">
-      <dt className="flex items-center gap-2 text-label uppercase text-muted">
-        {label}
-        {/* A dot, not a sentence: something is out right now. */}
-        {live && <span aria-hidden="true" className="h-2 w-2 rounded-full bg-live pulse-live" />}
-      </dt>
-      <dd className="mt-2">
-        <span className={`font-mono text-hero ${TONE_TEXT[tone]}`}>{value}</span>
-        <Meter fraction={fraction} tone={tone} />
-      </dd>
-    </div>
   );
 }
 
@@ -164,6 +95,11 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
    * belongs. What stays here is an outage: something that should have answered
    * and did not.
    */
+  // Ranked, not surveyed: `structure-watch` puts every structure it has read
+  // into the queue, so this climbs as the loop works through the district. A
+  // survey is a person walking a building and is not something the fleet can
+  // move on its own.
+  const analysed = share(stats.queued_for_survey + stats.dispatched, stats.profiles) ?? 0;
   const unavailable = stats.sources.filter((s) => !s.available && s.mode !== 'UNCONFIGURED');
   const fixtures = stats.sources.filter((s) => s.mode === 'FIXTURE');
   const sourceTone: Tone = unavailable.length > 0 ? 'alarm' : fixtures.length > 0 ? 'disputed' : 'ink';
@@ -173,32 +109,48 @@ export function DistrictStrip({ stats }: { stats: DistrictStatsView | null }) {
       <h2 id="district-heading" className="sr-only">
         District readiness
       </h2>
-      <dl className="grid grid-cols-2 gap-2 lg:grid-cols-4">
-        <Metric
-          label="Structures"
-          value={stats.profiles}
-          fraction={share(stats.surveyed, stats.profiles)}
-        />
-        <Metric
-          label="Open conflicts"
-          value={stats.open_conflicts}
-          fraction={share(stats.high_severity_conflicts, stats.open_conflicts)}
-          tone={stats.open_conflicts > 0 ? 'disputed' : 'muted'}
-        />
-        <Metric
-          label="Queued"
-          value={stats.queued_for_survey}
-          fraction={share(stats.queued_for_survey, stats.profiles)}
-          tone={stats.queued_for_survey > 0 ? 'ink' : 'muted'}
-          live={stats.dispatched > 0}
-        />
-        <Metric
-          label="Never surveyed"
-          value={stats.profiles_never_surveyed}
-          fraction={share(stats.profiles_never_surveyed, stats.profiles)}
-          tone={stats.profiles_never_surveyed > 0 ? 'disputed' : 'muted'}
-        />
-      </dl>
+      {/* One thin bar, and no numbers on it at all.
+          The counters were the same figures all session -- a district's
+          structure count does not move, and "never surveyed" equals it until a
+          crew physically walks a building -- so the strip read as furniture on
+          a screen whose whole claim is that work is happening. Reading them off
+          again in words beside the bar was the same problem in smaller type.
+
+          What is left is the one thing that genuinely changes: how much of the
+          district the loop has ranked. It is a shape, not a readout. Anyone
+          who wants the figures has the survey queue, the conflict panel and
+          the profile, all of which carry them with their provenance attached;
+          a masthead strip is for knowing at a glance that the fleet is moving.
+
+          The fill is a gradient with a lit leading edge, and it eases over
+          700ms so a pass landing is something you *see* rather than something
+          you catch by comparing two numbers. */}
+      <div className="flex items-center gap-3">
+        <span className="shrink-0 text-label uppercase tracking-widest text-muted">
+          District analysed
+        </span>
+        {/* A real progressbar, not a decorated div.
+            Taking the figures off the strip took them off it for *everybody*,
+            and a bar with no text conveys nothing to a screen reader. The
+            proportion is announced through ARIA instead: sighted readers get
+            the shape, everyone else gets the number, and neither is a
+            second-class rendering of the other. */}
+        <div
+          role="progressbar"
+          aria-label="District analysed"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(analysed * 100)}
+          aria-valuetext={`${Math.round(analysed * 100)}% of the district ranked`}
+          className="h-1.5 min-w-[8rem] flex-1 overflow-hidden rounded-full bg-raised"
+        >
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-live/40 via-live to-confirmed shadow-[0_0_8px_rgba(56,189,248,0.7)] transition-[width] duration-700 ease-out"
+            style={{ width: `${Math.round(analysed * 100)}%` }}
+            data-testid="district-progress"
+          />
+        </div>
+      </div>
 
       {/* Source health. Counts and names only: which source is unreachable is
           the part an officer has to be able to act on -- an absent record from

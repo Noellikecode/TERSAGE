@@ -368,21 +368,27 @@ describe('the card is the interceptor asking', () => {
     expect(screen.getByText(/compose deadline ran out/i)).toBeInTheDocument();
   });
 
-  it('carries the NOT READY verdict onto the card, unsoftened', () => {
+  it('carries the NOT READY verdict on the package, not as a count on the dialog', () => {
+    // The verdict is not softened -- it is not *restated*. The dialog used to
+    // read "3 of 6 checks could not be confirmed" at the moment somebody
+    // decides whether to send a crew, which is a count of internal checks and
+    // not what that decision turns on. The brief names each gap in the words
+    // the gap is actually in, and the assessment still rides on the package
+    // and onto the printed sheet.
     renderModal(entryPackage());
-    expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
+    expect(screen.queryByTestId('readiness-banner')).not.toBeInTheDocument();
+    expect(entryPackage().assessment.ready).toBe(false);
   });
 
   /**
-   * The dialog is the brief, and the verdict rides in the footer.
+   * The dialog is the brief, and only the brief.
    *
-   * The readiness table, the route legs and the citation list are off this
-   * surface -- they are on the package, on the printed sheet and in the log.
-   * What could not move is the *verdict*: this is where a human authorises a
-   * send, and a commander approving a NOT READY package has to be told so
-   * without opening anything.
+   * The readiness table, the route legs, the citation list and the verdict
+   * count are all off this surface -- they are on the package, on the printed
+   * sheet and in the log. What a crew reads before going through a door is the
+   * size-up, so that is what the card is.
    */
-  it('shows the brief, and states the verdict where the decision is made', () => {
+  it('shows the brief and nothing else', () => {
     renderModal(entryPackage());
     // No emission has reached the console in this harness, so the card is in
     // its waiting state -- which is the honest thing to draw. The interceptor
@@ -391,17 +397,7 @@ describe('the card is the interceptor asking', () => {
     // The provenance surfaces are gone from the dialog, not from the system.
     expect(screen.queryByTestId('crew-brief')).not.toBeInTheDocument();
     expect(screen.queryByTestId('readiness-verdict')).not.toBeInTheDocument();
-    expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
-  });
-
-  it('does not paint an incomplete record in the colour reserved for faults', () => {
-    renderModal(entryPackage());
-    // `alarm` is for something that has gone wrong. An unconfirmed record has
-    // not gone wrong. It is a line in the footer now rather than a bordered
-    // block, so the colour is on the text.
-    const banner = screen.getByTestId('readiness-banner');
-    expect(banner.className).toContain('text-disputed');
-    expect(banner.className).not.toContain('alarm');
+    expect(screen.queryByTestId('readiness-banner')).not.toBeInTheDocument();
   });
 
   it('closes on Escape', () => {
@@ -1486,12 +1482,15 @@ describe('the console, from the composed package to standby', () => {
             timeout: CARD_BUDGET_MS,
           }),
         ).toBeInTheDocument();
-        // The whole document, not the summary: the card states six criteria and
-        // the list endpoint has never carried them.
-        expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
-        // The six-criterion table is off the dialog; the verdict it produced
-        // is not. That is what a commander is told before authorising a send.
-        expect(screen.getByTestId('readiness-banner')).toHaveAttribute('data-ready', 'false');
+        // The whole document, not the summary.
+        //
+        // Asserted on the approval halves: `outstanding_halves` only exists on
+        // the full package and the list endpoint has never carried it. The
+        // readiness verdict used to serve as this proxy and no longer can --
+        // it is off the dialog entirely, because a count of internal checks is
+        // not what the send decision turns on.
+        expect(screen.getByTestId('approve-both')).toBeInTheDocument();
+        expect(screen.getByTestId('approve-entry-path')).toBeInTheDocument();
         // No frame said how the loop decided, so nothing claims it did. The
         // trigger is a property of the log entry and the poll never saw one.
         expect(screen.getByText(/holding this for a human decision/i)).toBeInTheDocument();
