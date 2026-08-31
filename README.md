@@ -5,7 +5,8 @@
 Municipal structural intelligence for a fire department, built as an
 institutional agent fleet. **Nine scheduled agents across three publishing
 departments, two loops, one governance layer** — cataloged in Google Cloud
-Agent Registry, running on Cloud Run, reasoning on Gemini 3.5 Flash.
+Agent Registry, running on Cloud Run, and reasoning on Gemini 3.5 Flash through
+the Google Gen AI SDK against Vertex AI.
 
 *Submitted to the Fortified Enterprise Fleet track.*
 
